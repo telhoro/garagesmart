@@ -14035,7 +14035,7 @@ function scannerDocument(input, type){
     imgReader.onload = function(ev){
       var img = new Image();
       img.onload = function(){
-        var MAX_LARGEUR = 1600;
+        var MAX_LARGEUR = 2000;
         var largeur = img.width, hauteur = img.height;
         if(largeur>MAX_LARGEUR){
           hauteur = Math.round(hauteur*(MAX_LARGEUR/largeur));
@@ -14045,7 +14045,7 @@ function scannerDocument(input, type){
         canvas.width = largeur; canvas.height = hauteur;
         var ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, largeur, hauteur);
-        var dataUrlCompresse = canvas.toDataURL('image/jpeg', 0.75);
+        var dataUrlCompresse = canvas.toDataURL('image/jpeg', 0.85);
         callback(dataUrlCompresse);
       };
       img.onerror = function(){ callback(ev.target.result); }; // fallback : image brute si le decodage echoue
