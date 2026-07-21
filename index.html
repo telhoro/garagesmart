@@ -1481,11 +1481,34 @@ var EQUIPES = ['Equipe A','Equipe B','Equipe C'];
 
 var FOURNISSEURS = [];
 var BANQUES = [];
+// Factures forfait generees (statut a_emettre/emise/deposee/payee par mois).
+// Synchronisee via Firebase, comme FORFAITS_CLIENTS/CHARGES_FIXES : sans
+// cela, un appareil qui n'a jamais vu une facture emise depuis un autre
+// appareil la recalcule a tort comme "non deposee" / "a emettre".
 var FORFAIT_FACTURES = []; // factures forfait generees
-function saveForfaitFactures(){ localStorage.setItem('gos_forfait_factures', JSON.stringify(FORFAIT_FACTURES)); }
+function saveForfaitFactures(){
+  localStorage.setItem('gos_forfait_factures', JSON.stringify(FORFAIT_FACTURES));
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_forfait_factures').set(JSON.stringify(FORFAIT_FACTURES)).catch(function(e){
+      console.error('Firebase forfait factures save error:', e);
+    });
+  }
+}
 function loadForfaitFactures(){
   try{ FORFAIT_FACTURES = JSON.parse(localStorage.getItem('gos_forfait_factures'))||[]; }
   catch(e){ FORFAIT_FACTURES=[]; }
+}
+function syncForfaitFacturesFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_forfait_factures').once('value').then(function(snap){
+    var val = snap.val();
+    if(val){
+      try{ FORFAIT_FACTURES = JSON.parse(val)||[]; localStorage.setItem('gos_forfait_factures', val); }catch(e){}
+    } else if(FORFAIT_FACTURES.length && fbConnected){
+      fbDb.ref('gos_forfait_factures').set(JSON.stringify(FORFAIT_FACTURES));
+    }
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
 }
 var SAMPLE_BANQUES = [
   {id:'b1', nom:'Banque Atlantique', solde:0, actif:true},
@@ -18276,6 +18299,9 @@ function tryInitFirebase(){
       syncStockFromFirebase();
       syncChargesFixesFromFirebase();
       syncEngagementsBancairesFromFirebase();
+      syncForfaitFacturesFromFirebase(function(){
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      });
       syncForfaitsClientsFromFirebase(function(){
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       });
@@ -18394,6 +18420,16 @@ function initFirebase(){
       try{
         CHARGES_FIXES = JSON.parse(val)||[];
         localStorage.setItem('gos_charges_fixes', val);
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
+    }
+  });
+  fbDb.ref('gos_forfait_factures').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        FORFAIT_FACTURES = JSON.parse(val)||[];
+        localStorage.setItem('gos_forfait_factures', val);
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       }catch(e){}
     }
