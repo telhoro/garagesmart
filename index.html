@@ -3183,6 +3183,7 @@ function validerFusionClients(){
 
   // Recalculer la cle pour chaque vehicule et rattacher au cible
   var count = 0;
+  var anciensNoms = {};
   vehicles.forEach(function(v){
     if(v.isProspect===true && false) return;
     var tel = (v.tel||'').trim().replace(/\s/g,'');
@@ -3190,12 +3191,33 @@ function validerFusionClients(){
     var key = nomK+'_'+(tel||'no_tel');
     if(sourceKeys.indexOf(key)>=0){
       var oldClient = v.client, oldTel = v.tel;
+      if(oldClient!==cible.nom) anciensNoms[oldClient] = true;
       v.client = cible.nom;
       v.tel = cible.tel;
       count++;
       ajouterCommentaireSysteme(v, '\u1F517 Fusion client : '+oldClient+' ('+(oldTel||'-')+') -> '+cible.nom+' ('+(cible.tel||'-')+')', currentUser ? currentUser.login : 'Direction');
     }
   });
+
+  // Transferer/nettoyer les enregistrements forfait des anciens noms
+  // fusionnes, s'ils ne sont plus utilises par aucun vehicule (evite les
+  // clients "fantomes" visibles en Facturation sans vehicule associe).
+  Object.keys(anciensNoms).forEach(function(oldNom){
+    var oldNomEncoreUtilise = vehicles.some(function(v){return v.client===oldNom;});
+    if(!oldNomEncoreUtilise){
+      var cibleDejaConfiguree = FORFAITS_CLIENTS.some(function(fc){return fc.client===cible.nom;});
+      FORFAITS_CLIENTS.forEach(function(fc){
+        if(fc.client===oldNom){
+          if(!cibleDejaConfiguree){ fc.client = cible.nom; cibleDejaConfiguree = true; }
+        }
+      });
+      FORFAIT_FACTURES.forEach(function(f){
+        if(f.client===oldNom){ f.client = cible.nom; }
+      });
+    }
+  });
+  saveForfaitsClients();
+  saveForfaitFactures();
 
   saveV();
   document.getElementById('modalFusionClients').style.display = 'none';
@@ -3254,6 +3276,27 @@ function validerModifClient(){
       }
     }
   });
+
+  // Si plus aucun vehicule ne porte l'ancien nom, transferer/nettoyer les
+  // enregistrements forfait qui referencent encore ce nom (sinon ils
+  // restent "fantomes" : visibles en Facturation sans vehicule associe).
+  if(oldNom!==newNom){
+    var oldNomEncoreUtilise = vehicles.some(function(v){return v.client===oldNom;});
+    if(!oldNomEncoreUtilise){
+      var nouveauNomDejaUtilise = FORFAITS_CLIENTS.some(function(fc){return fc.client===newNom;});
+      FORFAITS_CLIENTS.forEach(function(fc){
+        if(fc.client===oldNom){
+          if(!nouveauNomDejaUtilise){ fc.client = newNom; nouveauNomDejaUtilise = true; }
+          // sinon : laisse le doublon a fc.client===oldNom, sera purge par nettoyerClientsForfaitFantomes()
+        }
+      });
+      FORFAIT_FACTURES.forEach(function(f){
+        if(f.client===oldNom){ f.client = newNom; }
+      });
+      saveForfaitsClients();
+      saveForfaitFactures();
+    }
+  }
 
   saveV();
   document.getElementById('modalModifClient').style.display = 'none';
@@ -6293,6 +6336,19 @@ function pageFacturationForfait(){
   });
   var clients = Object.values ? Object.values(clientsMap) : Object.keys(clientsMap).map(function(k){return clientsMap[k];});
 
+  // Detection des enregistrements "fantomes" : un client present dans
+  // FORFAITS_CLIENTS ou FORFAIT_FACTURES mais qui n'a plus AUCUN vehicule
+  // (ex: suite a un changement de client mal nettoye, ou une erreur de
+  // saisie corrigee autrement). Ces noms ne peuvent pas apparaitre dans
+  // `clients` (derive de vehicles), donc on les detecte separement pour
+  // permettre un nettoyage manuel cible.
+  var nomsClientsActifs = {};
+  clients.forEach(function(c){ nomsClientsActifs[c.client] = true; });
+  var nomsFantomes = {};
+  FORFAITS_CLIENTS.forEach(function(fc){ if(!nomsClientsActifs[fc.client]) nomsFantomes[fc.client] = true; });
+  FORFAIT_FACTURES.forEach(function(f){ if(!nomsClientsActifs[f.client]) nomsFantomes[f.client] = true; });
+  var listeFantomes = Object.keys(nomsFantomes);
+
   // Si un forfait annuel client est configure (FORFAITS_CLIENTS), il
   // remplace la somme par vehicule pour le montant a facturer et le jour
   // de depot. Sinon, comportement inchange (somme des forfaits vehicule).
@@ -6407,6 +6463,24 @@ function pageFacturationForfait(){
   html += '<button class="btn btn-sm" onclick="forfaitMoisNext()">&#x203A;</button>';
   html += '<span class="xs muted" style="margin-left:8px">Factures a deposer pour ce mois</span>';
   html += '</div>';
+
+  // Alerte clients forfait "fantomes" : plus aucun vehicule associe, mais
+  // encore presents dans FORFAITS_CLIENTS/FORFAIT_FACTURES (typiquement
+  // suite a un changement de client mal nettoye). Nettoyage manuel cible.
+  if(listeFantomes.length){
+    html += '<div class="card" style="margin-bottom:16px;border:2px solid #854F0B;padding:12px 16px">';
+    html += '<div style="font-weight:700;color:#854F0B;margin-bottom:8px">&#9888; '+listeFantomes.length+' client(s) forfait sans vehicule associe</div>';
+    html += '<div class="xs muted" style="margin-bottom:10px">Ces noms apparaissent encore dans la configuration forfait ou les factures generees, mais aucun vehicule ne leur est rattache actuellement (souvent suite a un changement de client). Vous pouvez les supprimer si ce sont des erreurs.</div>';
+    listeFantomes.forEach(function(nom){
+      var aForfaitConfigure = FORFAITS_CLIENTS.some(function(fc){return fc.client===nom;});
+      var nbFactures = FORFAIT_FACTURES.filter(function(f){return f.client===nom;}).length;
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid #f0ede8">';
+      html += '<span class="xs"><strong>'+nom+'</strong>'+(aForfaitConfigure?' — forfait configure':'')+(nbFactures?' — '+nbFactures+' facture(s) generee(s)':'')+'</span>';
+      html += '<button class="btn btn-sm" style="font-size:10px;padding:3px 8px;color:#A32D2D;border-color:#E0A0A0" data-fantome="'+encodeURIComponent(nom)+'" onclick="supprimerClientForfaitFantomeByEl(this)">&#x1F5D1; Supprimer</button>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
 
   // KPI — meme presentation que la page Devis : bloc montant, puis ligne de statuts
   html += '<div class="card" style="margin-bottom:16px;border:2px solid #A32D2D;padding:12px 16px">';
@@ -6555,6 +6629,29 @@ function pageFacturationForfait(){
 
 function forfaitMoisPrev(){ forfaitMois--; if(forfaitMois<0){forfaitMois=11;forfaitAnnee--;} renderPage(); }
 function forfaitMoisNext(){ forfaitMois++; if(forfaitMois>11){forfaitMois=0;forfaitAnnee++;} renderPage(); }
+
+// Supprime un client forfait "fantome" (sans vehicule associe) de
+// FORFAITS_CLIENTS et FORFAIT_FACTURES. Verifie a nouveau au moment du
+// clic qu'aucun vehicule ne porte ce nom, par securite (donnee vivante,
+// peut changer entre l'affichage et le clic).
+function supprimerClientForfaitFantomeByEl(btn){
+  if(currentRole!=='direction') return;
+  var nom = decodeURIComponent(btn.getAttribute('data-fantome'));
+  var encoreUtilise = vehicles.some(function(v){return v.client===nom;});
+  if(encoreUtilise){
+    alert('Ce client a de nouveau un vehicule associe — actualisez la page avant de le supprimer.');
+    renderPage();
+    return;
+  }
+  var nbFactures = FORFAIT_FACTURES.filter(function(f){return f.client===nom;}).length;
+  var msg = 'Supprimer definitivement "'+nom+'" de la configuration forfait'+(nbFactures?' et de ses '+nbFactures+' facture(s) generee(s)':'')+' ?\nCette action est irreversible.';
+  if(!confirm(msg)) return;
+  FORFAITS_CLIENTS = FORFAITS_CLIENTS.filter(function(fc){return fc.client!==nom;});
+  FORFAIT_FACTURES = FORFAIT_FACTURES.filter(function(f){return f.client!==nom;});
+  saveForfaitsClients();
+  saveForfaitFactures();
+  renderPage();
+}
 
 function emettreFactureForfaitByEl(btn){
   var pk      = btn.getAttribute('data-pk');
