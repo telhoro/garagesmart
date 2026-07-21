@@ -1502,31 +1502,92 @@ function initBanques(){
   }
 }
 // ── Charges fixes (loyer, salaires, etc.) ────────────────────────────────
-// Donnees independantes de vehicles : persistees uniquement en localStorage,
-// aucun impact sur la synchro Firebase des dossiers vehicules.
+// Synchronisees via Firebase (gos_charges_fixes), comme STOCK/FOURNISSEURS :
+// visibles et modifiables depuis n'importe quel appareil connecte au meme
+// compte, avec mise a jour en temps reel entre appareils.
 var CHARGES_FIXES = [];
-function saveChargesFixes(){ localStorage.setItem('gos_charges_fixes', JSON.stringify(CHARGES_FIXES)); }
+function saveChargesFixes(){
+  localStorage.setItem('gos_charges_fixes', JSON.stringify(CHARGES_FIXES));
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_charges_fixes').set(JSON.stringify(CHARGES_FIXES)).catch(function(e){
+      console.error('Firebase charges fixes save error:', e);
+    });
+  }
+}
 function loadChargesFixes(){
   try{ CHARGES_FIXES = JSON.parse(localStorage.getItem('gos_charges_fixes'))||[]; }catch(e){ CHARGES_FIXES=[]; }
+}
+function syncChargesFixesFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_charges_fixes').once('value').then(function(snap){
+    var val = snap.val();
+    if(val){
+      try{ CHARGES_FIXES = JSON.parse(val)||[]; localStorage.setItem('gos_charges_fixes', val); }catch(e){}
+    } else if(CHARGES_FIXES.length && fbConnected){
+      fbDb.ref('gos_charges_fixes').set(JSON.stringify(CHARGES_FIXES));
+    }
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
 }
 
 // ── Engagements bancaires (prets, echeanciers) ───────────────────────────
 // Suivi des echeances uniquement (montant + date), pas de capital restant du.
+// Synchronise via Firebase, meme principe que les charges fixes ci-dessus.
 var ENGAGEMENTS_BANCAIRES = [];
-function saveEngagementsBancaires(){ localStorage.setItem('gos_engagements_bancaires', JSON.stringify(ENGAGEMENTS_BANCAIRES)); }
+function saveEngagementsBancaires(){
+  localStorage.setItem('gos_engagements_bancaires', JSON.stringify(ENGAGEMENTS_BANCAIRES));
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_engagements_bancaires').set(JSON.stringify(ENGAGEMENTS_BANCAIRES)).catch(function(e){
+      console.error('Firebase engagements bancaires save error:', e);
+    });
+  }
+}
 function loadEngagementsBancaires(){
   try{ ENGAGEMENTS_BANCAIRES = JSON.parse(localStorage.getItem('gos_engagements_bancaires'))||[]; }catch(e){ ENGAGEMENTS_BANCAIRES=[]; }
+}
+function syncEngagementsBancairesFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_engagements_bancaires').once('value').then(function(snap){
+    var val = snap.val();
+    if(val){
+      try{ ENGAGEMENTS_BANCAIRES = JSON.parse(val)||[]; localStorage.setItem('gos_engagements_bancaires', val); }catch(e){}
+    } else if(ENGAGEMENTS_BANCAIRES.length && fbConnected){
+      fbDb.ref('gos_engagements_bancaires').set(JSON.stringify(ENGAGEMENTS_BANCAIRES));
+    }
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
 }
 
 // ── Forfaits clients (montant annuel, divise en mensuel) ────────────────
 // Un forfait annuel negocie par client, couvre tous ses vehicules au fur
 // et a mesure qu'ils passent a l'atelier. Si un client n'a pas d'entree
 // ici, l'ancien calcul par vehicule (somme des v.forfaitMensuel) reste
-// utilise : aucune rupture pour les forfaits deja en cours.
+// utilise : aucune rupture pour les forfaits deja en cours. Synchronise
+// via Firebase pour etre visible sur tous les appareils (ordinateur,
+// telephone...), meme principe que les charges fixes ci-dessus.
 var FORFAITS_CLIENTS = []; // {client, montantAnnuel, montantMensuel, jourDepot}
-function saveForfaitsClients(){ localStorage.setItem('gos_forfaits_clients', JSON.stringify(FORFAITS_CLIENTS)); }
+function saveForfaitsClients(){
+  localStorage.setItem('gos_forfaits_clients', JSON.stringify(FORFAITS_CLIENTS));
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_forfaits_clients').set(JSON.stringify(FORFAITS_CLIENTS)).catch(function(e){
+      console.error('Firebase forfaits clients save error:', e);
+    });
+  }
+}
 function loadForfaitsClients(){
   try{ FORFAITS_CLIENTS = JSON.parse(localStorage.getItem('gos_forfaits_clients'))||[]; }catch(e){ FORFAITS_CLIENTS=[]; }
+}
+function syncForfaitsClientsFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_forfaits_clients').once('value').then(function(snap){
+    var val = snap.val();
+    if(val){
+      try{ FORFAITS_CLIENTS = JSON.parse(val)||[]; localStorage.setItem('gos_forfaits_clients', val); }catch(e){}
+    } else if(FORFAITS_CLIENTS.length && fbConnected){
+      fbDb.ref('gos_forfaits_clients').set(JSON.stringify(FORFAITS_CLIENTS));
+    }
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
 }
 
 var SAMPLE_FOURNISSEURS = [
@@ -18209,6 +18270,11 @@ function tryInitFirebase(){
     // Sync personnel et comptes depuis Firebase après connexion
     setTimeout(function(){
       syncStockFromFirebase();
+      syncChargesFixesFromFirebase();
+      syncEngagementsBancairesFromFirebase();
+      syncForfaitsClientsFromFirebase(function(){
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      });
       syncPersonnelFromFirebase(function(){
         syncComptesFromFirebase(function(comptes){
           syncApiKeyFromFirebase(function(){
@@ -18310,6 +18376,39 @@ function initFirebase(){
         FOURNISSEURS.length = 0;
         saved.forEach(function(f){ FOURNISSEURS.push(f); });
         // Rafraichir la page pour tous les profils (sauf si une modale est ouverte)
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
+    }
+  });
+
+  // Listeners temps reel pour charges fixes / engagements bancaires /
+  // forfaits clients (sync multi-appareils, meme principe que fournisseurs).
+  fbDb.ref('gos_charges_fixes').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        CHARGES_FIXES = JSON.parse(val)||[];
+        localStorage.setItem('gos_charges_fixes', val);
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
+    }
+  });
+  fbDb.ref('gos_engagements_bancaires').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        ENGAGEMENTS_BANCAIRES = JSON.parse(val)||[];
+        localStorage.setItem('gos_engagements_bancaires', val);
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
+    }
+  });
+  fbDb.ref('gos_forfaits_clients').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        FORFAITS_CLIENTS = JSON.parse(val)||[];
+        localStorage.setItem('gos_forfaits_clients', val);
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       }catch(e){}
     }
