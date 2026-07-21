@@ -728,7 +728,7 @@ tr:hover td{background:#faf9f7}
 
 <!-- MODAL DETAIL -->
 <div class="overlay" id="modalDet" style="display:none" onclick="if(event.target===this)confirmerFermetureDet()">
-<div class="modal modal-lg">
+<div class="modal modal-xl">
   <div class="mhead"><h2 id="detTitle">Detail</h2><div class="flex gap6"><button class="btn btn-sm" id="btnPhotos" style="color:#185FA5;border-color:#B5D4F4" onclick="photosVisible=!photosVisible;openDetKeepEdit(detCurrentVid)">&#x1F4F7; Photos</button><button class="btn btn-sm" onclick="imprimerDetCourant()" title="Imprimer devis/facture">&#x1F5A8;</button><button class="btn btn-sm" onclick="imprimerFicheEntree(detCurrentVid)" title="Fiche d'entree" style="color:#3B6D11;border-color:#3B6D11">&#x1F4CB; Fiche</button><button class="btn btn-sm" id="btnCommentaires" onclick="ouvrirCommentaires(detCurrentVid)" title="Commentaires" style="color:#854F0B;border-color:#E8A44A">&#x1F4AC;</button><button class="btn btn-sm" onclick="closeDet()">X</button></div></div>
   <div class="mbody" id="detBody"></div>
   <div class="mfoot" id="detFoot"></div>
@@ -2054,7 +2054,15 @@ function niveauTempsMort(v){
   return heuresSurEtape(v) >= SEUIL_CRITIQUE_H ? 'critique' : 'alerte';
 }
 
-function elapsed(ms){var s=Math.floor((Date.now()-ms)/1000),h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h+'h '+('0'+m).slice(-2)+'m';}
+function elapsed(ms){
+  var s=Math.floor((Date.now()-ms)/1000);
+  var h=Math.floor(s/3600), m=Math.floor((s%3600)/60);
+  if(h>=24){
+    var j=Math.floor(h/24), hr=h%24;
+    return j+'j '+('0'+hr).slice(-2)+'h';
+  }
+  return h+'h '+('0'+m).slice(-2)+'m';
+}
 function remaining(ts){var d=ts-Date.now();if(d<0){var s=Math.abs(Math.floor(d/1000)),h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return{t:'-'+h+'h'+('0'+m).slice(-2)+'m',over:true};}var s=Math.floor(d/1000),dy=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60);return{t:(dy>0?dy+'j ':'')+h+'h'+('0'+m).slice(-2)+'m',over:false};}
 function chronoHtml(v){
   var dEntree = v.entree ? new Date(v.entree).toLocaleDateString('fr-FR') : '';
@@ -10572,7 +10580,7 @@ function renderChiffrageSection(v){
       }
       // Source : toujours modifiable (choisir un article stock la met sur "Stock", mais on peut revenir)
       var srcVerrou = (cl.source==='stock' && cl.stockArticleId);
-      s += '<td><select class="inp" style="font-size:11px'+(srcVerrou?';background:#EAF1FA;color:#185FA5;font-weight:600':'')+'" data-clid="'+lineId+'" data-cfield="source" onchange="updateChiffrageLigneByEl(this)"'+(srcVerrou?' title="Article pris dans le stock — changez la source pour le retirer"':'')+'><option value="commande"'+((!cl.source||cl.source==='commande')?' selected':'')+'>Commande</option><option value="local"'+(cl.source==='local'?' selected':'')+'>Local</option><option value="stock"'+(cl.source==='stock'?' selected':'')+'>Stock</option></select></td>';
+      s += '<td><select class="inp" style="font-size:11px'+(srcVerrou?';background:#EAF1FA;color:#185FA5;font-weight:600':'')+'" data-clid="'+lineId+'" data-cfield="source" onchange="updateChiffrageLigneByEl(this)"'+(srcVerrou?' title="Article pris dans le stock — changez la source pour le retirer"':'')+'><option value="local"'+((!cl.source||cl.source==='local')?' selected':'')+'>Local</option><option value="commande"'+(cl.source==='commande'?' selected':'')+'>Commande</option><option value="stock"'+(cl.source==='stock'?' selected':'')+'>Stock</option></select></td>';
       if(!cl.paiement) cl.paiement = 'cash'; // initialiser la valeur par defaut
       // Paiement : verrouille "Stock" si la piece vient du stock (deja payee a l'entree)
       if(srcVerrou){
@@ -10764,7 +10772,7 @@ function renderChiffrageProspect(v){
       s += '<td style="border:1px solid #e8e5e0;padding:3px;width:90px"><input type="number" class="inp" data-lid="'+lid+'" data-field="prixAchat" style="font-size:11px;text-align:right;width:100%" value="'+(cl.prixAchat||'')+'" placeholder="0" onchange="updateProspectLigne(this)"></td>';
       s += '<td style="border:1px solid #e8e5e0;padding:3px;width:90px"><input type="number" class="inp" data-lid="'+lid+'" data-field="prixVente" style="font-size:11px;text-align:right;width:100%" value="'+(cl.prixVente||'')+'" placeholder="0" onchange="updateProspectLigne(this)"></td>';
       s += '<td style="border:1px solid #e8e5e0;padding:3px"><select class="inp" data-lid="'+lid+'" data-field="fournisseurId" style="font-size:11px;width:100%" onchange="updateProspectLigne(this)">'+fournOpts2+'</select></td>';
-      s += '<td style="border:1px solid #e8e5e0;padding:3px"><select class="inp" data-lid="'+lid+'" data-field="source" style="font-size:11px" onchange="updateProspectLigne(this)"><option value="commande"'+(cl.source==='commande'?' selected':'')+'>Commande</option><option value="local"'+(cl.source==='local'?' selected':'')+'>Local</option><option value="stock"'+(cl.source==='stock'?' selected':'')+'>Stock</option></select></td>';
+      s += '<td style="border:1px solid #e8e5e0;padding:3px"><select class="inp" data-lid="'+lid+'" data-field="source" style="font-size:11px" onchange="updateProspectLigne(this)"><option value="local"'+((!cl.source||cl.source==='local')?' selected':'')+'>Local</option><option value="commande"'+(cl.source==='commande'?' selected':'')+'>Commande</option><option value="stock"'+(cl.source==='stock'?' selected':'')+'>Stock</option></select></td>';
       s += '<td style="border:1px solid #e8e5e0;padding:3px"><select class="inp" data-lid="'+lid+'" data-field="paiement" style="font-size:11px" onchange="updateProspectLigne(this)"><option value="cash"'+(cl.paiement==='cash'?' selected':'')+'>Cash</option><option value="credit"'+(cl.paiement==='credit'?' selected':'')+'>Credit</option></select></td>';
       s += '<td style="border:1px solid #e8e5e0;padding:3px;text-align:center"><button class="btn btn-danger btn-sm" data-lid="'+lid+'" style="padding:2px 6px;font-size:11px" onclick="supprimerLigneProspectBtn(this)">&#x2716;</button></td>';
     }
@@ -11237,7 +11245,7 @@ function renderDevisComplSection(v){
       s += '<td><input type="number" min="0" class="inp" style="font-size:11px;width:90px" value="'+(l.prixAchat||'')+'" placeholder="Prix achat" onchange="updateDevisComplChiffrage(\''+l.id+'\',\'prixAchat\',this.value)"></td>';
 if(!isForfait) { s += '<td><input type="number" min="0" class="inp" style="font-size:11px;width:90px" value="'+(l.prixVente||'')+'" placeholder="Prix vente" onchange="updateDevisComplChiffrage(\''+l.id+'\',\'prixVente\',this.value)"></td>'; }
       s += '<td><select class="inp" style="font-size:11px" onchange="updateDevisComplChiffrage(\''+l.id+'\',\'fournisseurId\',this.value)">'+fournOpts+'</select></td>';
-      s += '<td><select class="inp" style="font-size:11px" onchange="updateDevisComplChiffrage(\''+l.id+'\',\'source\',this.value)"><option value="commande"'+( !l.source||l.source==='commande'?' selected':'')+'>Commande</option><option value="local"'+(l.source==='local'?' selected':'')+'>Local</option></select></td>';
+      s += '<td><select class="inp" style="font-size:11px" onchange="updateDevisComplChiffrage(\''+l.id+'\',\'source\',this.value)"><option value="local"'+((!l.source||l.source==='local')?' selected':'')+'>Local</option><option value="commande"'+(l.source==='commande'?' selected':'')+'>Commande</option></select></td>';
       s += '<td><select class="inp" style="font-size:11px" onchange="updateDevisComplChiffrage(\''+l.id+'\',\'paiement\',this.value)"><option value="cash"'+(l.paiement==='cash'?' selected':'')+'>Cash</option><option value="credit"'+(l.paiement==='credit'?' selected':'')+'>Credit</option></select></td>';
       s += '<td></td></tr>';
     } else {
