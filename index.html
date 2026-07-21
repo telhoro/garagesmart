@@ -18267,6 +18267,10 @@ function onFirebaseDatabaseLoaded(){
 function tryInitFirebase(){
   if(firebaseAppLoaded && firebaseDatabaseLoaded){
     initFirebase();
+    // Filet de securite : si la 1ere reponse Firebase (gos_data) n'arrive
+    // jamais (ex: vraiment hors ligne), debloquer quand meme la sauvegarde
+    // apres 8s pour ne pas bloquer indefiniment l'usage hors-ligne.
+    setTimeout(function(){ firstSyncReceived = true; }, 8000);
     // Sync personnel et comptes depuis Firebase après connexion
     setTimeout(function(){
       syncStockFromFirebase();
@@ -18328,6 +18332,7 @@ function initFirebase(){
 
     // Écouter les changements en temps réel
     fbDb.ref('gos_data').on('value', function(snapshot){
+      firstSyncReceived = true; // debloque saveVFirebase des la 1ere reponse recue, meme si data est vide
       var data = snapshot.val();
       if(!data || !data.vehicles){
         vehicles=[]; localStorage.setItem('gos_v10','[]');
@@ -18423,8 +18428,16 @@ function initFirebase(){
 
 var lastLocalTs = 0;
 
+// Protege contre l'ecrasement de donnees a jour par une version locale
+// perimee : tant que la 1ere reponse du listener Firebase n'est pas recue,
+// on ne sauvegarde pas — evite qu'un appareil qui vient de se rouvrir
+// (avec du localStorage potentiellement ancien) n'ecrase par megarde ce
+// qu'un autre appareil a deja enregistre entre-temps.
+var firstSyncReceived = false;
+
 function saveVFirebase(){
   if(!fbDb || !fbConnected) return;
+  if(!firstSyncReceived) return; // attend la confirmation de la 1ere synchro avant d'ecrire
   clearTimeout(fbSyncTimeout);
   fbSyncTimeout = setTimeout(function(){
     var ts = Date.now();
