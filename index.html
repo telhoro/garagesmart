@@ -10657,7 +10657,10 @@ function toggleDevisEdit(){
 
 // Genere le HTML de la rubrique Devis, integree dans la modale de visualisation standard
 function renderChiffrageSection(v){
-  var isForfait = (v.typeClient==='forfait' || estDossierAssurance(v));
+  // isForfait masque les colonnes Prix vente/Total vente (paiement forfaitaire
+  // fixe, pas au prix de vente par piece). Les dossiers assurance suivent
+  // desormais exactement le meme affichage qu'un devis classique.
+  var isForfait = (v.typeClient==='forfait');
   // Pour DC indépendant en attente_fin → afficher le chiffrage avec cases à cocher
   if(v.isDevisCompl && v.status==='attente_fin' && currentRole==='direction'){
     // Continuer normalement vers le tableau de chiffrage
@@ -11468,8 +11471,7 @@ function renderDevisComplSection(v){
   var isChef   = currentRole==='chef_atelier' || currentRole==='chef_equipe';
   var isAchats = currentRole==='achats';
   var isDir    = currentRole==='direction';
-  var isForfait = (v.typeClient==='forfait' || estDossierAssurance(v));
-  var isRec    = currentRole==='reception';
+  var isForfait = (v.typeClient==='forfait');
   var isEditing = devisComplEditMode && (isTech || isChef);
 
   var s = '<div style="margin-top:14px;border:2px solid #E8A44A;border-radius:8px;padding:12px">';
@@ -12095,7 +12097,7 @@ function nbPiecesNonValidees(v){
 }
 
 function htmlRecapValidation(v){
-  var isForfaitV = (v.typeClient==='forfait' || estDossierAssurance(v));
+  var isForfaitV = (v.typeClient==='forfait');
   var lignesVal = v.chiffrage.lignes.filter(function(cl){return cl.valideDir;});
   var mt = function(cl){ return (parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1); };
   // Decaissement A PREVOIR : cash et credit uniquement
@@ -13423,7 +13425,7 @@ function achatsTableau(title, list, badgeClass, type){
     }
     // Marge brute du devis (si chiffrage avec prix)
     if(v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length){
-      var vForfait = (v.typeClient==='forfait' || estDossierAssurance(v));
+      var vForfait = (v.typeClient==='forfait');
       var mAchat = v.chiffrage.lignes.reduce(function(sum,cl){return sum+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
       var mVente = v.chiffrage.lignes.reduce(function(sum,cl){return sum+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
       if(vForfait){
