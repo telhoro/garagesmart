@@ -6537,13 +6537,13 @@ function pageFacturationForfait(){
   if(listeFantomes.length){
     html += '<div class="card" style="margin-bottom:16px;border:2px solid #854F0B;padding:12px 16px">';
     html += '<div style="font-weight:700;color:#854F0B;margin-bottom:8px">&#9888; '+listeFantomes.length+' client(s) forfait sans vehicule associe</div>';
-    html += '<div class="xs muted" style="margin-bottom:10px">Ces noms apparaissent encore dans la configuration forfait ou les factures generees, mais aucun vehicule ne leur est rattache actuellement (souvent suite a un changement de client). Vous pouvez les supprimer si ce sont des erreurs.</div>';
+    html += '<div class="xs muted" style="margin-bottom:10px">Ces noms apparaissent encore dans la configuration forfait ou les factures generees, mais aucun vehicule ne leur est rattache actuellement (souvent suite a un changement de client). Utilisez le bouton Supprimer sur la ligne concernee ci-dessous, ou dans la liste principale.</div>';
     listeFantomes.forEach(function(nom){
       var aForfaitConfigure = FORFAITS_CLIENTS.some(function(fc){return fc.client===nom;});
       var nbFactures = FORFAIT_FACTURES.filter(function(f){return f.client===nom;}).length;
       html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid #f0ede8">';
       html += '<span class="xs"><strong>'+nom+'</strong>'+(aForfaitConfigure?' — forfait configure':'')+(nbFactures?' — '+nbFactures+' facture(s) generee(s)':'')+'</span>';
-      html += '<button class="btn btn-sm" style="font-size:10px;padding:3px 8px;color:#A32D2D;border-color:#E0A0A0" data-fantome="'+encodeURIComponent(nom)+'" onclick="supprimerClientForfaitFantomeByEl(this)">&#x1F5D1; Supprimer</button>';
+      html += '<button class="btn btn-sm" style="font-size:10px;padding:3px 8px;color:#A32D2D;border-color:#E0A0A0" data-client-supp="'+encodeURIComponent(nom)+'" onclick="supprimerClientForfaitByEl(this)">&#x1F5D1; Supprimer</button>';
       html += '</div>';
     });
     html += '</div>';
@@ -6663,8 +6663,7 @@ function pageFacturationForfait(){
     html += '<div class="flex gap6" style="margin-top:8px">';
     if(statut==='a_emettre'){
       html += '<button class="btn btn-primary btn-sm" data-pk="'+c.periodeKey+'" data-client="'+c.client+'" data-montant="'+c.montantTotal+'" onclick="emettreFactureForfaitByEl(this)">&#x1F4CB; Emettre la facture</button>';
-    }
-    if(statut==='emise'){
+    }    if(statut==='emise'){
       html += '<span class="badge b-amber">Facture emise</span>';
       html += '<button class="btn btn-success btn-sm" data-pk="'+c.periodeKey+'" onclick="deposerFactureForfaitByEl(this)">&#x2714; Marquer deposee</button>';
       html += '<button class="btn btn-sm" data-pk="'+c.periodeKey+'" onclick="imprimerFactureForfaitByEl(this)" title="Imprimer / PDF">&#x1F5A8;</button>';
@@ -6678,6 +6677,7 @@ function pageFacturationForfait(){
       html += '<span class="badge b-green">&#x2714; Payee</span>';
       html += '<button class="btn btn-sm" data-pk="'+c.periodeKey+'" onclick="imprimerFactureForfaitByEl(this)" title="Imprimer / PDF">&#x1F5A8;</button>';
     }
+    html += '<button class="btn btn-sm" style="color:#A32D2D;border-color:#E0A0A0;margin-left:auto" data-client-supp="'+encodeURIComponent(c.client)+'" onclick="supprimerClientForfaitByEl(this)">&#x1F5D1; Supprimer</button>';
     html += '</div>';
 
     // Autres mois (hors mois affiche) emis/deposes mais pas encore payes :
@@ -6712,35 +6712,55 @@ function pageFacturationForfait(){
 function forfaitMoisPrev(){ forfaitMois--; if(forfaitMois<0){forfaitMois=11;forfaitAnnee--;} renderPage(); }
 function forfaitMoisNext(){ forfaitMois++; if(forfaitMois>11){forfaitMois=0;forfaitAnnee++;} renderPage(); }
 
-// Supprime un client forfait "fantome" (sans vehicule associe) de
-// FORFAITS_CLIENTS et FORFAIT_FACTURES. Verifie a nouveau au moment du
-// clic qu'aucun vehicule ne porte ce nom, par securite (donnee vivante,
-// peut changer entre l'affichage et le clic).
-function supprimerClientForfaitFantomeByEl(btn){
-  console.log('DEBUG supprimerClientForfaitFantomeByEl appelee, currentRole=', currentRole);
-  if(currentRole!=='direction'){
-    alert('Cette action necessite le role Direction (role actuel detecte : '+currentRole+').');
-    return;
-  }
-  var nom = decodeURIComponent(btn.getAttribute('data-fantome'));
-  console.log('DEBUG nom decode=', nom);
-  var vehiculesDeCeNom = vehicles.filter(function(v){return v.client===nom;});
-  console.log('DEBUG vehicules trouves avec ce nom exact:', vehiculesDeCeNom.length, JSON.stringify(vehiculesDeCeNom.map(function(v){return {immat:v.immat, typeClient:v.typeClient};})));
-  // Bloque uniquement si un vehicule EN TYPE FORFAIT porte encore ce nom
-  // (vrai retour du client) — un vehicule existant mais passe en devis ne
-  // doit pas empecher de retirer la config forfait devenue obsolete.
-  var encoreUtiliseEnForfait = vehicles.some(function(v){return v.client===nom && v.typeClient==='forfait';});
-  console.log('DEBUG encoreUtiliseEnForfait=', encoreUtiliseEnForfait);
-  if(encoreUtiliseEnForfait){
-    alert('Ce client a de nouveau un vehicule en forfait — actualisez la page avant de le supprimer.');
+// Supprime un client de la configuration forfait, depuis un simple bouton
+// sur chaque ligne de la liste. Adapte l'avertissement a la situation
+// reelle du client : aucun avertissement particulier si vraiment aucun
+// vehicule, mais un choix explicite (config seule / tout supprimer) si le
+// client a des vehicules en cours ou de l'historique.
+function supprimerClientForfaitByEl(btn){
+  if(currentRole!=='direction') return;
+  var nom = decodeURIComponent(btn.getAttribute('data-client-supp'));
+
+  var vehiculesDuClient = vehicles.filter(function(v){return v.client===nom;});
+  var vehiculesEnCours = vehiculesDuClient.filter(function(v){
+    return LIV_ST.indexOf(v.status)<0 && v.status!=='dossier_cloture' && v.status!=='archive';
+  });
+  var aDeLHistorique = vehiculesDuClient.length>0;
+
+  var nbFactures = FORFAIT_FACTURES.filter(function(f){return f.client===nom;}).length;
+
+  if(!aDeLHistorique){
+    // Aucun vehicule du tout : suppression simple de la config forfait, sans ambiguite.
+    var msgSimple = 'Supprimer "'+nom+'" de la configuration forfait'+(nbFactures?' et de ses '+nbFactures+' facture(s) generee(s)':'')+' ?\nCette action est irreversible.';
+    if(!confirm(msgSimple)) return;
+    FORFAITS_CLIENTS = FORFAITS_CLIENTS.filter(function(fc){return fc.client!==nom;});
+    FORFAIT_FACTURES = FORFAIT_FACTURES.filter(function(f){return f.client!==nom;});
+    saveForfaitsClients();
+    saveForfaitFactures();
     renderPage();
     return;
   }
-  console.log('DEBUG sur le point d\'afficher confirm()');
-  var nbFactures = FORFAIT_FACTURES.filter(function(f){return f.client===nom;}).length;
-  var msg = 'Retirer "'+nom+'" de la configuration forfait'+(nbFactures?' et de ses '+nbFactures+' facture(s) generee(s)':'')+' ?\nCette action est irreversible.';
-  if(!confirm(msg)) return;
-  console.log('DEBUG confirme, suppression en cours');
+
+  // Le client a des vehicules et/ou de l'historique : avertir clairement,
+  // puis proposer le choix entre les deux options.
+  var avertissement = '\u26A0 Attention : "'+nom+'" a '+vehiculesDuClient.length+' vehicule(s) enregistre(s)'
+    + (vehiculesEnCours.length ? ', dont '+vehiculesEnCours.length+' EN COURS de traitement a l\'atelier' : '')
+    + '.\n\n'
+    + 'Que souhaitez-vous faire ?\n'
+    + '- OK = Supprimer uniquement la configuration forfait (montant annuel + factures generees). Les vehicules et leur historique restent intacts.\n'
+    + '- Annuler = ne rien faire pour l\'instant.';
+  if(!confirm(avertissement)) return;
+
+  var confirmTout = confirm('Voulez-vous AUSSI supprimer definitivement les '+vehiculesDuClient.length+' vehicule(s) et tout leur historique (dossiers, chiffrages) ?\n\nOK = tout supprimer (vehicules + historique + config forfait)\nAnnuler = supprimer seulement la configuration forfait, garder les vehicules');
+
+  if(confirmTout){
+    var confirmFinal = confirm('DERNIERE CONFIRMATION : ceci va supprimer definitivement '+vehiculesDuClient.length+' vehicule(s) et tout leur historique pour "'+nom+'". Cette action est IRREVERSIBLE. Continuer ?');
+    if(!confirmFinal) return;
+    var idsASupprimer = vehiculesDuClient.map(function(v){return v.id;});
+    vehicles = vehicles.filter(function(v){return idsASupprimer.indexOf(v.id)<0;});
+    saveV();
+  }
+
   FORFAITS_CLIENTS = FORFAITS_CLIENTS.filter(function(fc){return fc.client!==nom;});
   FORFAIT_FACTURES = FORFAIT_FACTURES.filter(function(f){return f.client!==nom;});
   saveForfaitsClients();
@@ -18543,9 +18563,19 @@ function initFirebase(){
     
     // Indicateur de connexion
     fbDb.ref('.info/connected').on('value', function(snap){
+      var etaitConnecte = fbConnected;
       fbConnected = snap.val() === true;
       console.log('Firebase connected:', fbConnected);
       showSyncStatus(fbConnected ? 'online' : 'offline');
+      // Reconnexion apres une coupure : si une sauvegarde avait ete tentee
+      // pendant la deconnexion (donc silencieusement abandonnee par
+      // saveVFirebase), on la rejoue maintenant pour ne jamais perdre une
+      // modification locale suite a une coupure furtive de la connexion.
+      if(fbConnected && !etaitConnecte && pendingVehiclesSave){
+        pendingVehiclesSave = false;
+        console.log('Reconnexion Firebase : rattrapage de la sauvegarde en attente');
+        saveVFirebase();
+      }
     });
 
     // Écouter les changements en temps réel
@@ -18663,8 +18693,10 @@ var lastLocalTs = 0;
 // qu'un autre appareil a deja enregistre entre-temps.
 var firstSyncReceived = false;
 
+var pendingVehiclesSave = false; // true si une sauvegarde a ete tentee hors-ligne, a rejouer a la reconnexion
+
 function saveVFirebase(){
-  if(!fbDb || !fbConnected) return;
+  if(!fbDb || !fbConnected){ pendingVehiclesSave = true; return; }
   if(!firstSyncReceived) return; // attend la confirmation de la 1ere synchro avant d'ecrire
   clearTimeout(fbSyncTimeout);
   fbSyncTimeout = setTimeout(function(){
@@ -18680,6 +18712,7 @@ function saveVFirebase(){
     }).catch(function(e){
       console.error('Firebase save error:', e);
       showSyncStatus('error');
+      pendingVehiclesSave = true; // echec d'ecriture : sera retente a la prochaine reconnexion
     });
   }, 200);
 }
