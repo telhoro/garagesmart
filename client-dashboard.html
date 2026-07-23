@@ -320,8 +320,35 @@ function renderDashboard(){
     html += kpiHtml('Immobilisation moyenne (flotte)', formaterDelai(delaiMoyenFlotteDevis)||'—');
     html += '</div>';
 
-    html += '<div class="section-title">Vos vehicules</div>';
-    vehiculesDevis.forEach(function(v){ html += renderVehiculeCardDevis(v); });
+    html += '<div class="section-title">Vehicules en cours</div>';
+    var enCoursDevis = vehiculesDevis.filter(function(g){return estEnCours(g.dernierPassage);});
+    var autresDevis = vehiculesDevis.filter(function(g){return !estEnCours(g.dernierPassage);});
+    if(enCoursDevis.length){
+      enCoursDevis.forEach(function(g){ html += renderVehiculeCardDevis(g); });
+    } else {
+      html += '<div class="empty">Aucun vehicule en cours actuellement.</div>';
+    }
+
+    if(autresDevis.length){
+      html += '<div class="section-title">Vos vehicules</div>';
+      html += '<table><thead><tr><th>Vehicule</th><th>Statut</th><th style="text-align:center">Visites</th><th style="text-align:right">Km</th><th style="text-align:right">Cout total</th><th></th></tr></thead><tbody>';
+      autresDevis.forEach(function(g){
+        var coutTotalImmat = 0;
+        g.passages.forEach(function(p){
+          if(p.chiffrage && p.chiffrage.lignes){
+            coutTotalImmat += p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();})
+              .reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+          }
+        });
+        html += '<tr><td><strong>'+g.immat+'</strong> <span class="xs muted">'+(g.marque||'')+' '+(g.modele||'')+'</span></td>';
+        html += '<td><span class="badge b-green">'+labelStatut(g.dernierPassage.status)+'</span></td>';
+        html += '<td style="text-align:center">'+g.nbVisites+'</td>';
+        html += '<td style="text-align:right">'+(g.dernierKm?g.dernierKm.toLocaleString('fr-FR'):'—')+'</td>';
+        html += '<td style="text-align:right;font-family:monospace">'+(coutTotalImmat?coutTotalImmat.toLocaleString('fr-FR')+' FCFA':'—')+'</td>';
+        html += '<td><button class="btn-detail" onclick="ouvrirHistoriqueVehicule(\''+g.immat+'\')">Historique</button></td></tr>';
+      });
+      html += '</tbody></table>';
+    }
 
     var facturesAAfficher = vehiculesFiltres.filter(function(v){
       return v.typeClient!=='forfait' && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.some(function(cl){return (cl.piece||'').trim();});
@@ -357,8 +384,27 @@ function renderDashboard(){
     html += kpiHtml('Immobilisation moyenne (flotte)', formaterDelai(delaiMoyenFlotteForfait)||'—');
     html += '</div>';
 
-    html += '<div class="section-title">Vos vehicules (forfait)</div>';
-    vehiculesForfait.forEach(function(v){ html += renderVehiculeCardForfait(v); });
+    html += '<div class="section-title">Vehicules en cours (forfait)</div>';
+    var enCoursForfait = vehiculesForfait.filter(function(g){return estEnCours(g.dernierPassage);});
+    var autresForfait = vehiculesForfait.filter(function(g){return !estEnCours(g.dernierPassage);});
+    if(enCoursForfait.length){
+      enCoursForfait.forEach(function(g){ html += renderVehiculeCardForfait(g); });
+    } else {
+      html += '<div class="empty">Aucun vehicule en cours actuellement.</div>';
+    }
+
+    if(autresForfait.length){
+      html += '<div class="section-title">Vos vehicules (forfait)</div>';
+      html += '<table><thead><tr><th>Vehicule</th><th>Statut</th><th style="text-align:center">Visites</th><th style="text-align:right">Km</th><th></th></tr></thead><tbody>';
+      autresForfait.forEach(function(g){
+        html += '<tr><td><strong>'+g.immat+'</strong> <span class="xs muted">'+(g.marque||'')+' '+(g.modele||'')+'</span></td>';
+        html += '<td><span class="badge b-green">'+labelStatut(g.dernierPassage.status)+'</span></td>';
+        html += '<td style="text-align:center">'+g.nbVisites+'</td>';
+        html += '<td style="text-align:right">'+(g.dernierKm?g.dernierKm.toLocaleString('fr-FR'):'—')+'</td>';
+        html += '<td><button class="btn-detail" onclick="ouvrirHistoriqueVehicule(\''+g.immat+'\')">Historique</button></td></tr>';
+      });
+      html += '</tbody></table>';
+    }
   }
 
   document.getElementById('mainContent').innerHTML = html;
