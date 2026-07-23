@@ -80,6 +80,7 @@ td{padding:8px;border-bottom:1px solid #f0ede8}
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script>
 var firebaseConfig = {
   apiKey: "AIzaSyDJncdc6aaiOO0Nl3_bGQ-8peSVa8gdmMU",
@@ -318,6 +319,7 @@ function renderDashboard(){
     html += '<button class="btn-filter" onclick="reinitialiserPeriode()">Reinitialiser</button>';
   }
   html += '<button class="btn-print-all" onclick="imprimerToutHistorique()">&#128424; Imprimer tout l\'historique</button>';
+  html += '<button class="btn-print-all" style="background:#185FA5" onclick="exporterToutHistoriqueExcel()">&#128202; Exporter tout en Excel</button>';
   html += '</div>';
 
   if(!vehiculesUniques.length){
@@ -569,15 +571,10 @@ function ouvrirHistoriqueVehicule(immat){
   var html = '<button class="detail-close" onclick="fermerDetail()">&#10005;</button>';
   html += '<h3>'+(g.immat||'—')+' — '+(g.marque||'')+' '+(g.modele||'')+'</h3>';
 
-  // Nombre total d'interventions (pieces posees, toutes visites confondues)
-  var nbInterventionsTotal = g.passages.reduce(function(s,p){
-    return s + ((p.chiffrage&&p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).length : 0);
-  },0);
   var tauxRetour = g.nbVisites ? Math.round((g.nbRetours/g.nbVisites)*100) : 0;
 
   html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px">';
   html += '<span class="badge b-gray">'+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+'</span>';
-  html += '<span class="badge b-gray">'+nbInterventionsTotal+' intervention'+(nbInterventionsTotal>1?'s':'')+'</span>';
   if(g.dernierKm) html += '<span class="badge b-gray">'+g.dernierKm.toLocaleString('fr-FR')+' km</span>';
   if(g.delaiMoyenJours!==null) html += '<span class="badge b-gray">Immobilisation moyenne : '+formaterDelai(g.delaiMoyenJours)+'</span>';
   html += '<span class="badge '+(g.nbRetours>0?'b-red':'b-green')+'">Taux de retour : '+tauxRetour+'%'+(g.nbRetours>0?' ('+g.nbRetours+'/'+g.nbVisites+')':'')+'</span>';
@@ -622,7 +619,10 @@ function ouvrirHistoriqueVehicule(immat){
     html += '</div>';
   });
 
-  html += '<div style="margin-top:10px;text-align:right"><button class="btn-detail" onclick="imprimerHistorique(\''+immat+'\')">&#128424; Imprimer tout l\'historique</button></div>';
+  html += '<div style="margin-top:10px;text-align:right;display:flex;gap:8px;justify-content:flex-end">';
+  html += '<button class="btn-detail" onclick="exporterHistoriqueExcel(\''+immat+'\')">&#128202; Exporter en Excel</button>';
+  html += '<button class="btn-detail" onclick="imprimerHistorique(\''+immat+'\')">&#128424; Imprimer</button>';
+  html += '</div>';
 
   document.getElementById('detailModal').innerHTML = html;
   document.getElementById('detailOverlay').style.display = 'flex';
@@ -630,6 +630,54 @@ function ouvrirHistoriqueVehicule(immat){
 
 // Ouvre une fenetre d'impression avec l'historique complet d'un vehicule
 // (toutes les visites, sans les prix pour un forfait).
+// Export Excel de l'historique d'un vehicule : une ligne par piece/
+// intervention, avec la visite (date, km, immobilisation, motif) repetee
+// sur chaque ligne pour rester exploitable en tri/filtre Excel. Jamais de
+// prix pour un vehicule forfait, coherent avec le reste du portail.
+function exporterHistoriqueExcel(immat){
+  var g = regrouperParImmatriculation(mesVehicules).find(function(x){return x.immat===immat;});
+  if(!g) return;
+  var estForfait = g.typeClient==='forfait';
+
+  var lignesExport = [];
+  g.passages.forEach(function(p){
+    var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '';
+    var dateSortie = (p.livraison && LIV_ST.indexOf(p.status)>=0) ? new Date(p.livraison).toLocaleDateString('fr-FR') : 'En cours';
+    var immobilisation = (p.entree && p.livraison && p.livraison>p.entree) ? formaterDelai((p.livraison-p.entree)/86400000) : '';
+    var lignes = (p.chiffrage && p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
+
+    if(!lignes.length){
+      var ligneVide = {
+        'Date entree': dateEntree, 'Date sortie': dateSortie, 'Km': p.km||'',
+        'Motif': p.motif||'', 'Retour client': p.nature==='Retour client'?'Oui':'Non',
+        'Immobilisation': immobilisation, 'Piece': '', 'Quantite': ''
+      };
+      if(!estForfait){ ligneVide['Prix unitaire (FCFA)']=''; ligneVide['Total (FCFA)']=''; }
+      lignesExport.push(ligneVide);
+      return;
+    }
+    lignes.forEach(function(cl){
+      var ligne = {
+        'Date entree': dateEntree, 'Date sortie': dateSortie, 'Km': p.km||'',
+        'Motif': p.motif||'', 'Retour client': p.nature==='Retour client'?'Oui':'Non',
+        'Immobilisation': immobilisation, 'Piece': cl.piece, 'Quantite': cl.qte||1
+      };
+      if(!estForfait){
+        var pu = parseFloat(cl.prixVente)||0;
+        ligne['Prix unitaire (FCFA)'] = pu;
+        ligne['Total (FCFA)'] = pu*(parseInt(cl.qte)||1);
+      }
+      lignesExport.push(ligne);
+    });
+  });
+
+  var ws = XLSX.utils.json_to_sheet(lignesExport);
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, g.immat.substring(0,31));
+  XLSX.writeFile(wb, 'Historique_'+g.immat+'.xlsx');
+}
+
+
 function imprimerHistorique(immat){
   var g = regrouperParImmatriculation(mesVehicules).find(function(x){return x.immat===immat;});
   if(!g) return;
@@ -641,15 +689,12 @@ function imprimerHistorique(immat){
   html += '<div>Client : '+compteClient.clientNom+(compteClient.departement?' — '+compteClient.departement:'')+'</div>';
   html += '<div>'+g.nbVisites+' visite(s) au total — Edite le '+new Date().toLocaleDateString('fr-FR')+'</div>';
 
-  var nbInterventionsTotal = g.passages.reduce(function(s,p){
-    return s + ((p.chiffrage&&p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).length : 0);
-  },0);
   var tauxRetour = g.nbVisites ? Math.round((g.nbRetours/g.nbVisites)*100) : 0;
-  html += '<div class="resume">'+nbInterventionsTotal+' intervention(s)'
-    + (g.dernierKm?' &middot; '+g.dernierKm.toLocaleString('fr-FR')+' km':'')
-    + (g.delaiMoyenJours!==null?' &middot; Immobilisation moyenne : '+formaterDelai(g.delaiMoyenJours):'')
-    + ' &middot; Taux de retour : '+tauxRetour+'%'+(g.nbRetours>0?' ('+g.nbRetours+'/'+g.nbVisites+')':'')
-    + '</div>';
+  var elementsResume = [];
+  if(g.dernierKm) elementsResume.push(g.dernierKm.toLocaleString('fr-FR')+' km');
+  if(g.delaiMoyenJours!==null) elementsResume.push('Immobilisation moyenne : '+formaterDelai(g.delaiMoyenJours));
+  elementsResume.push('Taux de retour : '+tauxRetour+'%'+(g.nbRetours>0?' ('+g.nbRetours+'/'+g.nbVisites+')':''));
+  html += '<div class="resume">'+elementsResume.join(' &middot; ')+'</div>';
 
   g.passages.forEach(function(p){
     var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '—';
@@ -688,6 +733,66 @@ function imprimerHistorique(immat){
 // (respecte la recherche/periode active), un vehicule par page pour la
 // lisibilite. Chaque page suit la meme regle prix/pas-prix que le detail
 // individuel (jamais de prix pour un forfait).
+// Export Excel de TOUTE la flotte visible (respecte recherche/periode
+// actives) dans un seul fichier, un onglet par vehicule pour rester lisible
+// (un onglet unique melangeant toutes les immatriculations serait moins
+// exploitable pour un client avec une grande flotte).
+function exporterToutHistoriqueExcel(){
+  var vehiculesFiltres = appliquerFiltres(mesVehicules);
+  var groupes = regrouperParImmatriculation(vehiculesFiltres);
+  if(!groupes.length){ alert('Aucun vehicule a exporter.'); return; }
+
+  var wb = XLSX.utils.book_new();
+  var nomsOnglets = {}; // evite les doublons de nom d'onglet (max 31 caracteres, unicite Excel)
+
+  groupes.forEach(function(g){
+    var estForfait = g.typeClient==='forfait';
+    var lignesExport = [];
+
+    g.passages.forEach(function(p){
+      var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '';
+      var dateSortie = (p.livraison && LIV_ST.indexOf(p.status)>=0) ? new Date(p.livraison).toLocaleDateString('fr-FR') : 'En cours';
+      var immobilisation = (p.entree && p.livraison && p.livraison>p.entree) ? formaterDelai((p.livraison-p.entree)/86400000) : '';
+      var lignes = (p.chiffrage && p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
+
+      if(!lignes.length){
+        var ligneVide = {
+          'Date entree': dateEntree, 'Date sortie': dateSortie, 'Km': p.km||'',
+          'Motif': p.motif||'', 'Retour client': p.nature==='Retour client'?'Oui':'Non',
+          'Immobilisation': immobilisation, 'Piece': '', 'Quantite': ''
+        };
+        if(!estForfait){ ligneVide['Prix unitaire (FCFA)']=''; ligneVide['Total (FCFA)']=''; }
+        lignesExport.push(ligneVide);
+        return;
+      }
+      lignes.forEach(function(cl){
+        var ligne = {
+          'Date entree': dateEntree, 'Date sortie': dateSortie, 'Km': p.km||'',
+          'Motif': p.motif||'', 'Retour client': p.nature==='Retour client'?'Oui':'Non',
+          'Immobilisation': immobilisation, 'Piece': cl.piece, 'Quantite': cl.qte||1
+        };
+        if(!estForfait){
+          var pu = parseFloat(cl.prixVente)||0;
+          ligne['Prix unitaire (FCFA)'] = pu;
+          ligne['Total (FCFA)'] = pu*(parseInt(cl.qte)||1);
+        }
+        lignesExport.push(ligne);
+      });
+    });
+
+    var ws = XLSX.utils.json_to_sheet(lignesExport);
+    var nomOnglet = (g.immat||'sans-immat').substring(0,31);
+    var suffixe = 1;
+    while(nomsOnglets[nomOnglet]){ nomOnglet = (g.immat||'sans-immat').substring(0,28)+'_'+(++suffixe); }
+    nomsOnglets[nomOnglet] = true;
+    XLSX.utils.book_append_sheet(wb, ws, nomOnglet);
+  });
+
+  var nomFichier = 'Historique_'+(compteClient.clientNom||'client').replace(/[^a-zA-Z0-9_-]/g,'_')+'.xlsx';
+  XLSX.writeFile(wb, nomFichier);
+}
+
+
 function imprimerToutHistorique(){
   var vehiculesFiltres = appliquerFiltres(mesVehicules);
   var groupes = regrouperParImmatriculation(vehiculesFiltres);
@@ -714,15 +819,12 @@ function imprimerToutHistorique(){
     html += '<div class="vehicule-bloc">';
     html += '<h2>'+g.immat+' — '+(g.marque||'')+' '+(g.modele||'')+' ('+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+')</h2>';
 
-    var nbInterventionsTotal = g.passages.reduce(function(s,p){
-      return s + ((p.chiffrage&&p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).length : 0);
-    },0);
     var tauxRetour = g.nbVisites ? Math.round((g.nbRetours/g.nbVisites)*100) : 0;
-    html += '<div style="font-size:12px;color:#444;margin-bottom:8px">'+nbInterventionsTotal+' intervention(s)'
-      + (g.dernierKm?' &middot; '+g.dernierKm.toLocaleString('fr-FR')+' km':'')
-      + (g.delaiMoyenJours!==null?' &middot; Immobilisation moyenne : '+formaterDelai(g.delaiMoyenJours):'')
-      + ' &middot; Taux de retour : '+tauxRetour+'%'+(g.nbRetours>0?' ('+g.nbRetours+'/'+g.nbVisites+')':'')
-      + '</div>';
+    var elementsResumeGroupe = [];
+    if(g.dernierKm) elementsResumeGroupe.push(g.dernierKm.toLocaleString('fr-FR')+' km');
+    if(g.delaiMoyenJours!==null) elementsResumeGroupe.push('Immobilisation moyenne : '+formaterDelai(g.delaiMoyenJours));
+    elementsResumeGroupe.push('Taux de retour : '+tauxRetour+'%'+(g.nbRetours>0?' ('+g.nbRetours+'/'+g.nbVisites+')':''));
+    html += '<div style="font-size:12px;color:#444;margin-bottom:8px">'+elementsResumeGroupe.join(' &middot; ')+'</div>';
 
     g.passages.forEach(function(p){
       var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '—';
