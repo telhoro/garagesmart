@@ -204,6 +204,26 @@ function regrouperParImmatriculation(liste){
     });
     var delaiMoyenJours = delais.length ? (delais.reduce(function(s,d){return s+d;},0)/delais.length) : null;
 
+    // Age du vehicule : base sur la date de mise en circulation (mec) si
+    // connue, sinon sur l'annee (v.annee) en repli. On cherche la premiere
+    // valeur non vide parmi tous les passages (l'info peut avoir ete
+    // saisie a un passage different du plus recent).
+    var ageAnnees = null;
+    for(var j=0;j<passages.length;j++){
+      var p = passages[j];
+      if(p.mec){
+        var dMec = new Date(p.mec);
+        if(!isNaN(dMec.getTime())){
+          ageAnnees = (Date.now()-dMec.getTime())/(365.25*86400000);
+          break;
+        }
+      }
+      if(p.annee && !isNaN(parseInt(p.annee,10))){
+        ageAnnees = new Date().getFullYear() - parseInt(p.annee,10);
+        break;
+      }
+    }
+
     return {
       immat: key==='sans-immat' ? '' : key,
       marque: passages[0].marque,
@@ -211,6 +231,7 @@ function regrouperParImmatriculation(liste){
       typeClient: passages[0].typeClient,
       passages: passages,
       dernierPassage: passages[0],
+      ageAnnees: ageAnnees,
       nbVisites: passages.length,
       dernierKm: dernierKm,
       delaiMoyenJours: delaiMoyenJours
@@ -320,6 +341,11 @@ function renderDashboard(){
     html += kpiHtml('Immobilisation moyenne (flotte)', formaterDelai(delaiMoyenFlotteDevis)||'—');
     html += '</div>';
 
+    html += '<div class="kgrid k2" style="margin-top:12px">';
+    html += kpiHtml('Age moyen de la flotte', formaterAgeMoyen(vehiculesDevis));
+    html += kpiHtml('Kilometrage moyen', formaterKmMoyen(vehiculesDevis));
+    html += '</div>';
+
     html += '<div class="section-title">Vehicules en cours</div>';
     var enCoursDevis = vehiculesDevis.filter(function(g){return estEnCours(g.dernierPassage);});
     var autresDevis = vehiculesDevis.filter(function(g){return !estEnCours(g.dernierPassage);});
@@ -384,6 +410,11 @@ function renderDashboard(){
     html += kpiHtml('Immobilisation moyenne (flotte)', formaterDelai(delaiMoyenFlotteForfait)||'—');
     html += '</div>';
 
+    html += '<div class="kgrid k2" style="margin-top:12px">';
+    html += kpiHtml('Age moyen de la flotte', formaterAgeMoyen(vehiculesForfait));
+    html += kpiHtml('Kilometrage moyen', formaterKmMoyen(vehiculesForfait));
+    html += '</div>';
+
     html += '<div class="section-title">Vehicules en cours (forfait)</div>';
     var enCoursForfait = vehiculesForfait.filter(function(g){return estEnCours(g.dernierPassage);});
     var autresForfait = vehiculesForfait.filter(function(g){return !estEnCours(g.dernierPassage);});
@@ -412,6 +443,24 @@ function renderDashboard(){
 
 function kpiHtml(label, val, color){
   return '<div class="kpi"><div class="kpi-lbl">'+label+'</div><div class="kpi-val"'+(color?' style="color:'+color+'"':'')+'>'+val+'</div></div>';
+}
+
+// Age moyen de la flotte : moyenne des ages connus (mec ou annee), en
+// ignorant les vehicules sans aucune de ces deux informations.
+function formaterAgeMoyen(groupes){
+  var ages = groupes.filter(function(g){return g.ageAnnees!==null;}).map(function(g){return g.ageAnnees;});
+  if(!ages.length) return '—';
+  var moyenne = ages.reduce(function(s,a){return s+a;},0)/ages.length;
+  return moyenne.toFixed(1)+' an'+(moyenne>=2?'s':'');
+}
+
+// Kilometrage moyen de la flotte : moyenne du dernier km connu de chaque
+// vehicule, en ignorant ceux dont le km n'a jamais ete saisi.
+function formaterKmMoyen(groupes){
+  var kms = groupes.filter(function(g){return g.dernierKm;}).map(function(g){return g.dernierKm;});
+  if(!kms.length) return '—';
+  var moyenne = Math.round(kms.reduce(function(s,k){return s+k;},0)/kms.length);
+  return moyenne.toLocaleString('fr-FR')+' km';
 }
 
 function renderVehiculeCardDevis(g){
