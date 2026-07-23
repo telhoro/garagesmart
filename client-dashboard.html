@@ -634,44 +634,58 @@ function ouvrirHistoriqueVehicule(immat){
 // intervention, avec la visite (date, km, immobilisation, motif) repetee
 // sur chaque ligne pour rester exploitable en tri/filtre Excel. Jamais de
 // prix pour un vehicule forfait, coherent avec le reste du portail.
+// Construit les lignes (tableau de tableaux) pour reproduire la mise en
+// page visuelle de l'historique (comme le document imprime) : titre
+// vehicule, taux de retour, puis pour chaque visite un mini-tableau
+// Piece/Qte avec motif, dates, km au-dessus. Reutilisee par l'export d'un
+// seul vehicule et par l'export de toute la flotte.
+function construireLignesExcelVehicule(g){
+  var estForfait = g.typeClient==='forfait';
+  var rows = [];
+
+  rows.push([g.immat+' — '+(g.marque||'')+' '+(g.modele||'')+' ('+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+')']);
+  var tauxRetour = g.nbVisites ? Math.round((g.nbRetours/g.nbVisites)*100) : 0;
+  var ligneInfos = 'Taux de retour : '+tauxRetour+'%'+(g.nbRetours>0?' ('+g.nbRetours+'/'+g.nbVisites+')':'');
+  if(g.dernierKm) ligneInfos = g.dernierKm.toLocaleString('fr-FR')+' km — '+ligneInfos;
+  rows.push([ligneInfos]);
+  rows.push([]);
+
+  g.passages.forEach(function(p){
+    var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '—';
+    var dateSortie = (p.livraison && LIV_ST.indexOf(p.status)>=0) ? new Date(p.livraison).toLocaleDateString('fr-FR') : 'En cours';
+    rows.push(['Visite du '+dateEntree+' au '+dateSortie]);
+    if(p.motif) rows.push(['Motif : '+p.motif+(p.km?' — '+p.km.toLocaleString('fr-FR')+' km':'')]);
+    else if(p.km) rows.push([p.km.toLocaleString('fr-FR')+' km']);
+
+    var lignes = (p.chiffrage && p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
+    if(lignes.length){
+      var entete = estForfait ? ['Piece','Qte'] : ['Piece','Qte','Prix unitaire (FCFA)','Total (FCFA)'];
+      rows.push(entete);
+      lignes.forEach(function(cl){
+        var ligneTab = [cl.piece, cl.qte||1];
+        if(!estForfait){
+          var pu = parseFloat(cl.prixVente)||0;
+          ligneTab.push(pu, pu*(parseInt(cl.qte)||1));
+        }
+        rows.push(ligneTab);
+      });
+    } else {
+      rows.push(['Aucune intervention enregistree.']);
+    }
+    rows.push([]);
+  });
+
+  rows.push([]);
+  return rows;
+}
+
 function exporterHistoriqueExcel(immat){
   var g = regrouperParImmatriculation(mesVehicules).find(function(x){return x.immat===immat;});
   if(!g) return;
-  var estForfait = g.typeClient==='forfait';
 
-  var lignesExport = [];
-  g.passages.forEach(function(p){
-    var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '';
-    var dateSortie = (p.livraison && LIV_ST.indexOf(p.status)>=0) ? new Date(p.livraison).toLocaleDateString('fr-FR') : 'En cours';
-    var immobilisation = (p.entree && p.livraison && p.livraison>p.entree) ? formaterDelai((p.livraison-p.entree)/86400000) : '';
-    var lignes = (p.chiffrage && p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
-
-    if(!lignes.length){
-      var ligneVide = {
-        'Date entree': dateEntree, 'Date sortie': dateSortie, 'Km': p.km||'',
-        'Motif': p.motif||'', 'Retour client': p.nature==='Retour client'?'Oui':'Non',
-        'Immobilisation': immobilisation, 'Piece': '', 'Quantite': ''
-      };
-      if(!estForfait){ ligneVide['Prix unitaire (FCFA)']=''; ligneVide['Total (FCFA)']=''; }
-      lignesExport.push(ligneVide);
-      return;
-    }
-    lignes.forEach(function(cl){
-      var ligne = {
-        'Date entree': dateEntree, 'Date sortie': dateSortie, 'Km': p.km||'',
-        'Motif': p.motif||'', 'Retour client': p.nature==='Retour client'?'Oui':'Non',
-        'Immobilisation': immobilisation, 'Piece': cl.piece, 'Quantite': cl.qte||1
-      };
-      if(!estForfait){
-        var pu = parseFloat(cl.prixVente)||0;
-        ligne['Prix unitaire (FCFA)'] = pu;
-        ligne['Total (FCFA)'] = pu*(parseInt(cl.qte)||1);
-      }
-      lignesExport.push(ligne);
-    });
-  });
-
-  var ws = XLSX.utils.json_to_sheet(lignesExport);
+  var rows = construireLignesExcelVehicule(g);
+  var ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{wch:32},{wch:10},{wch:18},{wch:16}];
   var wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, g.immat.substring(0,31));
   XLSX.writeFile(wb, 'Historique_'+g.immat+'.xlsx');
@@ -746,41 +760,9 @@ function exporterToutHistoriqueExcel(){
   var nomsOnglets = {}; // evite les doublons de nom d'onglet (max 31 caracteres, unicite Excel)
 
   groupes.forEach(function(g){
-    var estForfait = g.typeClient==='forfait';
-    var lignesExport = [];
-
-    g.passages.forEach(function(p){
-      var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '';
-      var dateSortie = (p.livraison && LIV_ST.indexOf(p.status)>=0) ? new Date(p.livraison).toLocaleDateString('fr-FR') : 'En cours';
-      var immobilisation = (p.entree && p.livraison && p.livraison>p.entree) ? formaterDelai((p.livraison-p.entree)/86400000) : '';
-      var lignes = (p.chiffrage && p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
-
-      if(!lignes.length){
-        var ligneVide = {
-          'Date entree': dateEntree, 'Date sortie': dateSortie, 'Km': p.km||'',
-          'Motif': p.motif||'', 'Retour client': p.nature==='Retour client'?'Oui':'Non',
-          'Immobilisation': immobilisation, 'Piece': '', 'Quantite': ''
-        };
-        if(!estForfait){ ligneVide['Prix unitaire (FCFA)']=''; ligneVide['Total (FCFA)']=''; }
-        lignesExport.push(ligneVide);
-        return;
-      }
-      lignes.forEach(function(cl){
-        var ligne = {
-          'Date entree': dateEntree, 'Date sortie': dateSortie, 'Km': p.km||'',
-          'Motif': p.motif||'', 'Retour client': p.nature==='Retour client'?'Oui':'Non',
-          'Immobilisation': immobilisation, 'Piece': cl.piece, 'Quantite': cl.qte||1
-        };
-        if(!estForfait){
-          var pu = parseFloat(cl.prixVente)||0;
-          ligne['Prix unitaire (FCFA)'] = pu;
-          ligne['Total (FCFA)'] = pu*(parseInt(cl.qte)||1);
-        }
-        lignesExport.push(ligne);
-      });
-    });
-
-    var ws = XLSX.utils.json_to_sheet(lignesExport);
+    var rows = construireLignesExcelVehicule(g);
+    var ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{wch:32},{wch:10},{wch:18},{wch:16}];
     var nomOnglet = (g.immat||'sans-immat').substring(0,31);
     var suffixe = 1;
     while(nomsOnglets[nomOnglet]){ nomOnglet = (g.immat||'sans-immat').substring(0,28)+'_'+(++suffixe); }
