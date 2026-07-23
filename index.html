@@ -4141,6 +4141,7 @@ function renderPage(){
   else if(p==='facturation_forfait') html=pageFacturationForfait();
   else if(p==='chiffrage') html=pageChiffrageAchats();
   else if(p==='testeur') html=pageDashTesteur();
+  else if((r==='direction' || r==='reception' || r==='chef_atelier' || r==='chef_equipe') && p==='messages_clients') html=pageMessagesClients();
   else if(r==='reception') html=pageDashReception();
   else if((r==='chef_atelier'||r==='chef_equipe') && agirCommeTech) html=pageDashTech();
   else if(r==='chef_atelier'||r==='chef_equipe') html=pageDashChefAtelier(r);
@@ -4148,7 +4149,6 @@ function renderPage(){
   else if(r==='achats') html=pageDashAchats();
   else if(r==='direction' && p==='comptes') html=pageComptes();
   else if(r==='direction' && p==='acces_clients') html=pageAccesClients();
-  else if((r==='direction' || r==='reception' || r==='chef_atelier' || r==='chef_equipe') && p==='messages_clients') html=pageMessagesClients();
   else if(r==='direction') html=pageDashDir();
   else if(r==='testeur') html=pageDashTesteur();
   else html='<div class="empty">Page non trouvee</div>';
