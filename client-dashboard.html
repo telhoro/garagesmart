@@ -204,6 +204,12 @@ function regrouperParImmatriculation(liste){
     });
     var delaiMoyenJours = delais.length ? (delais.reduce(function(s,d){return s+d;},0)/delais.length) : null;
 
+    // Nombre de retours : passages explicitement marques "Retour client"
+    // par le garage a l'accueil (champ v.nature), pas un calcul deduit —
+    // c'est une vraie information saisie indiquant qu'un vehicule revient
+    // suite a une panne deja traitee.
+    var nbRetours = passages.filter(function(p){return p.nature==='Retour client';}).length;
+
     // Age du vehicule : base sur la date de mise en circulation (mec) si
     // connue, sinon sur l'annee (v.annee) en repli. On cherche la premiere
     // valeur non vide parmi tous les passages (l'info peut avoir ete
@@ -234,7 +240,8 @@ function regrouperParImmatriculation(liste){
       ageAnnees: ageAnnees,
       nbVisites: passages.length,
       dernierKm: dernierKm,
-      delaiMoyenJours: delaiMoyenJours
+      delaiMoyenJours: delaiMoyenJours,
+      nbRetours: nbRetours
     };
   });
 }
@@ -341,9 +348,11 @@ function renderDashboard(){
     html += kpiHtml('Immobilisation moyenne (flotte)', formaterDelai(delaiMoyenFlotteDevis)||'—');
     html += '</div>';
 
-    html += '<div class="kgrid k2" style="margin-top:12px">';
+    html += '<div class="kgrid k3" style="margin-top:12px">';
     html += kpiHtml('Age moyen de la flotte', formaterAgeMoyen(vehiculesDevis));
     html += kpiHtml('Kilometrage moyen', formaterKmMoyen(vehiculesDevis));
+    var totalRetoursDevis = vehiculesDevis.reduce(function(s,g){return s+(g.nbRetours||0);},0);
+    html += kpiHtml('Nombre de retours', totalRetoursDevis, totalRetoursDevis>0?'#A32D2D':'#3B6D11');
     html += '</div>';
 
     html += '<div class="section-title">Vehicules en cours</div>';
@@ -357,7 +366,7 @@ function renderDashboard(){
 
     if(autresDevis.length){
       html += '<div class="section-title">Vos vehicules</div>';
-      html += '<table><thead><tr><th>Vehicule</th><th>Statut</th><th style="text-align:center">Visites</th><th style="text-align:right">Km</th><th style="text-align:right">Cout total</th><th></th></tr></thead><tbody>';
+      html += '<table><thead><tr><th>Vehicule</th><th>Statut</th><th style="text-align:center">Visites</th><th style="text-align:center">Retours</th><th style="text-align:right">Km</th><th style="text-align:right">Cout total</th><th></th></tr></thead><tbody>';
       autresDevis.forEach(function(g){
         var coutTotalImmat = 0;
         g.passages.forEach(function(p){
@@ -369,6 +378,7 @@ function renderDashboard(){
         html += '<tr><td><strong>'+g.immat+'</strong> <span class="xs muted">'+(g.marque||'')+' '+(g.modele||'')+'</span></td>';
         html += '<td><span class="badge b-green">'+labelStatut(g.dernierPassage.status)+'</span></td>';
         html += '<td style="text-align:center">'+g.nbVisites+'</td>';
+        html += '<td style="text-align:center">'+(g.nbRetours>0?'<span style="color:#A32D2D;font-weight:600">'+g.nbRetours+'</span>':'—')+'</td>';
         html += '<td style="text-align:right">'+(g.dernierKm?g.dernierKm.toLocaleString('fr-FR'):'—')+'</td>';
         html += '<td style="text-align:right;font-family:monospace">'+(coutTotalImmat?coutTotalImmat.toLocaleString('fr-FR')+' FCFA':'—')+'</td>';
         html += '<td><button class="btn-detail" onclick="ouvrirHistoriqueVehicule(\''+g.immat+'\')">Historique</button></td></tr>';
@@ -410,9 +420,11 @@ function renderDashboard(){
     html += kpiHtml('Immobilisation moyenne (flotte)', formaterDelai(delaiMoyenFlotteForfait)||'—');
     html += '</div>';
 
-    html += '<div class="kgrid k2" style="margin-top:12px">';
+    html += '<div class="kgrid k3" style="margin-top:12px">';
     html += kpiHtml('Age moyen de la flotte', formaterAgeMoyen(vehiculesForfait));
     html += kpiHtml('Kilometrage moyen', formaterKmMoyen(vehiculesForfait));
+    var totalRetoursForfait = vehiculesForfait.reduce(function(s,g){return s+(g.nbRetours||0);},0);
+    html += kpiHtml('Nombre de retours', totalRetoursForfait, totalRetoursForfait>0?'#A32D2D':'#3B6D11');
     html += '</div>';
 
     html += '<div class="section-title">Vehicules en cours (forfait)</div>';
@@ -426,11 +438,12 @@ function renderDashboard(){
 
     if(autresForfait.length){
       html += '<div class="section-title">Vos vehicules (forfait)</div>';
-      html += '<table><thead><tr><th>Vehicule</th><th>Statut</th><th style="text-align:center">Visites</th><th style="text-align:right">Km</th><th></th></tr></thead><tbody>';
+      html += '<table><thead><tr><th>Vehicule</th><th>Statut</th><th style="text-align:center">Visites</th><th style="text-align:center">Retours</th><th style="text-align:right">Km</th><th></th></tr></thead><tbody>';
       autresForfait.forEach(function(g){
         html += '<tr><td><strong>'+g.immat+'</strong> <span class="xs muted">'+(g.marque||'')+' '+(g.modele||'')+'</span></td>';
         html += '<td><span class="badge b-green">'+labelStatut(g.dernierPassage.status)+'</span></td>';
         html += '<td style="text-align:center">'+g.nbVisites+'</td>';
+        html += '<td style="text-align:center">'+(g.nbRetours>0?'<span style="color:#A32D2D;font-weight:600">'+g.nbRetours+'</span>':'—')+'</td>';
         html += '<td style="text-align:right">'+(g.dernierKm?g.dernierKm.toLocaleString('fr-FR'):'—')+'</td>';
         html += '<td><button class="btn-detail" onclick="ouvrirHistoriqueVehicule(\''+g.immat+'\')">Historique</button></td></tr>';
       });
@@ -479,6 +492,7 @@ function renderVehiculeCardDevis(g){
   html += '<div class="vcard-immat">'+(g.immat||'—')+' — '+(g.marque||'')+' '+(g.modele||'')+'</div>';
   html += '<div class="vcard-modele"><span class="badge '+statutClasse+'">'+labelStatut(v.status)+'</span> <span class="xs muted">&middot; '+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+' a l\'atelier</span></div>';
   html += renderInfosVehicule(g);
+  html += renderInfosEnCours(v);
   html += '</div><button class="btn-detail" onclick="ouvrirHistoriqueVehicule(\''+g.immat+'\')">Historique complet</button></div>';
   if(coutTotalImmat>0){
     html += '<div class="vcard-foot">Cout total (toutes visites) sur ce vehicule : <strong>'+coutTotalImmat.toLocaleString('fr-FR')+' FCFA</strong></div>';
@@ -492,8 +506,29 @@ function renderInfosVehicule(g){
   var parts = [];
   if(g.dernierKm) parts.push(g.dernierKm.toLocaleString('fr-FR')+' km');
   if(delaiFormate) parts.push('Immobilisation moyenne : '+delaiFormate);
+  if(g.nbRetours>0) parts.push('<span style="color:#A32D2D;font-weight:600">'+g.nbRetours+' retour'+(g.nbRetours>1?'s':'')+'</span>');
   if(!parts.length) return '';
   return '<div class="xs muted" style="margin-top:3px">'+parts.join(' &middot; ')+'</div>';
+}
+
+// Pour un vehicule EN COURS uniquement : temps d'immobilisation deja
+// ecoule depuis l'entree (pas la moyenne historique), et la date de
+// livraison prevue (v.livraison sert de date previsionnelle tant que le
+// vehicule n'est pas encore effectivement livre).
+function renderInfosEnCours(v){
+  if(!estEnCours(v)) return '';
+  var parts = [];
+  if(v.entree){
+    var joursEcoules = (Date.now()-v.entree)/86400000;
+    parts.push('Immobilise depuis : <strong>'+formaterDelai(joursEcoules)+'</strong>');
+  }
+  if(v.livraison){
+    var dPrevue = new Date(v.livraison);
+    var enRetard = v.livraison < Date.now();
+    parts.push('Livraison prevue : <strong'+(enRetard?' style="color:#A32D2D"':'')+'>'+dPrevue.toLocaleDateString('fr-FR')+(enRetard?' (en retard)':'')+'</strong>');
+  }
+  if(!parts.length) return '';
+  return '<div class="xs" style="margin-top:5px;background:#FAEEDA;border-radius:6px;padding:6px 10px;color:#854F0B">'+parts.join(' &middot; ')+'</div>';
 }
 
 function renderVehiculeCardForfait(g){
@@ -505,6 +540,7 @@ function renderVehiculeCardForfait(g){
   html += '<div class="vcard-immat">'+(g.immat||'—')+' — '+(g.marque||'')+' '+(g.modele||'')+'</div>';
   html += '<div class="vcard-modele"><span class="badge '+statutClasse+'">'+labelStatut(v.status)+'</span> <span class="xs muted">&middot; '+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+' a l\'atelier</span></div>';
   html += renderInfosVehicule(g);
+  html += renderInfosEnCours(v);
   html += '</div><button class="btn-detail" onclick="ouvrirHistoriqueVehicule(\''+g.immat+'\')">Historique complet</button></div>';
   if(v.chiffrage && v.chiffrage.lignes){
     var pieces = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
