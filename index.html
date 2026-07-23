@@ -1581,6 +1581,40 @@ function syncEngagementsBancairesFromFirebase(callback){
   }).catch(function(){ if(callback) callback(); });
 }
 
+// ── Comptes clients (acces distant, portail client.html) ────────────────
+// Chaque compte est stocke dans Firebase sous gos_client_accounts/{uid},
+// ou {uid} est l'identifiant Firebase Authentication du compte (email +
+// mot de passe). Indexe par UID plutot qu'en tableau JSON global, pour
+// que client.html puisse lire directement son propre profil sans jamais
+// charger la liste complete des autres clients — coherent avec le
+// principe d'isolation des donnees par les regles de securite Firebase.
+// Structure d'un compte : {clientNom, clientTel, departement, nomContact, email, creeLe}
+// departement vide/absent = vue globale (tous les vehicules du client).
+var CLIENT_ACCOUNTS = {}; // {uid: {...}}, charge en memoire pour affichage cote Direction uniquement
+function saveClientAccount(uid, data){
+  CLIENT_ACCOUNTS[uid] = data;
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_client_accounts/'+uid).set(data).catch(function(e){
+      console.error('Firebase client account save error:', e);
+    });
+  }
+}
+function deleteClientAccountData(uid){
+  delete CLIENT_ACCOUNTS[uid];
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_client_accounts/'+uid).remove().catch(function(e){
+      console.error('Firebase client account delete error:', e);
+    });
+  }
+}
+function syncClientAccountsFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_client_accounts').once('value').then(function(snap){
+    CLIENT_ACCOUNTS = snap.val() || {};
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
+}
+
 // ── Forfaits clients (montant annuel, divise en mensuel) ────────────────
 // Un forfait annuel negocie par client, couvre tous ses vehicules au fur
 // et a mesure qu'ils passent a l'atelier. Si un client n'a pas d'entree
@@ -1756,7 +1790,7 @@ function initFournisseurs(){
 
 var NAV = {
   direction:[
-    {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'}]},
+    {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'},{id:'acces_clients',e:'AC',l:'Acces clients'}]},
     {l:'Finances',items:[{id:'finances_dashboard',e:'FD',l:'Tableau de bord'},{id:'facturation',e:'F',l:'Facturation'},{id:'dettes_fournisseurs',e:'DF',l:'Dettes fournisseurs'},{id:'prevision_treso',e:'PT',l:'Prevision tresorerie'}]},
     {l:'Rentabilite',items:[{id:'rentabilite',e:'RD',l:'Clients Devis'},{id:'rentabilite_forfait',e:'RF',l:'Clients Forfait'},{id:'analyse_pieces',e:'AP',l:'Analyse pieces'}]},
     {l:'Gestion',items:[{id:'archives',e:'Ar',l:'Archives'},{id:'banques',e:'B',l:'Banques'},{id:'charges_fixes',e:'CF',l:'Charges fixes'},{id:'engagements_bancaires',e:'EB',l:'Engagements bancaires'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'stock',e:'St',l:'Gestion du stock'},{id:'travaux_prevoir',e:'TP',l:'Travaux a prevoir'},{id:'devis_differes',e:'DD',l:'Devis differes'},{id:'sinistres',e:'S',l:'Sinistres'},{id:'val_fin',e:'VF',l:'Validation financiere'},{id:'kpi',e:'K',l:'KPI'}]}
@@ -3230,6 +3264,169 @@ function validerFusionClients(){
 }
 
 
+// ── Gestion des departements (grands comptes) ────────────────────────────
+// Un vehicule peut appartenir a un ou plusieurs departements du meme client
+// (vehicules de pool partages). Stocke dans v.departements (tableau de
+// noms). Nouveau champ optionnel : aucun impact sur les vehicules
+// existants (tableau vide par defaut = pas encore classe).
+function ouvrirGestionDepartements(btn){
+  if(currentRole!=='direction') return;
+  var cnom = btn.getAttribute('data-cnom');
+  var ctel = btn.getAttribute('data-ctel');
+  document.getElementById('depClientNom').textContent = cnom;
+  document.getElementById('depClientKey').value = encodeURIComponent(cnom)+'|'+encodeURIComponent(ctel||'');
+  document.getElementById('depNouveauNom').value = '';
+  document.getElementById('depRapport').innerHTML = '';
+  renderListeDepartementsVehicules();
+  document.getElementById('modalDepartements').style.display = 'flex';
+}
+
+function getClientRefDepuisKey(){
+  var key = document.getElementById('depClientKey').value;
+  var parts = key.split('|');
+  return { nom: decodeURIComponent(parts[0]), tel: decodeURIComponent(parts[1]||'') };
+}
+
+function renderListeDepartementsVehicules(){
+  var ref = getClientRefDepuisKey();
+  var vehiculesDuClient = vehicles.filter(function(v){
+    return v.client===ref.nom && (v.tel||'')===ref.tel;
+  });
+
+  // Collecter tous les departements deja utilises pour ce client (par les
+  // vehicules eux-memes), pour construire les colonnes de cases a cocher.
+  var departementsExistants = {};
+  vehiculesDuClient.forEach(function(v){
+    (v.departements||[]).forEach(function(d){ departementsExistants[d]=true; });
+  });
+  var listeDepartements = Object.keys(departementsExistants).sort();
+
+  var html = '';
+  if(!vehiculesDuClient.length){
+    html = '<div class="empty">Aucun vehicule pour ce client.</div>';
+  } else if(!listeDepartements.length){
+    html = '<div class="xs muted" style="padding:12px 0">Aucun departement cree pour l\'instant. Ajoutez-en un ci-dessus pour commencer a classer les vehicules.</div>';
+  } else {
+    html += '<div class="tw"><table><thead><tr><th style="text-align:left">Vehicule</th>';
+    listeDepartements.forEach(function(d){
+      html += '<th style="text-align:center;font-size:11px"><a href="#" onclick="event.preventDefault();afficherRapportDepartement(\''+encodeURIComponent(d)+'\')" style="color:#185FA5;text-decoration:underline" title="Voir le rapport de ce departement">'+d+'</a></th>';
+    });
+    html += '</tr></thead><tbody>';
+    vehiculesDuClient.forEach(function(v){
+      var deps = v.departements || [];
+      html += '<tr><td><strong>'+(v.immat||'—')+'</strong> <span class="xs muted">'+(v.marque||'')+' '+(v.modele||'')+'</span></td>';
+      listeDepartements.forEach(function(d){
+        var checked = deps.indexOf(d)>=0;
+        html += '<td style="text-align:center"><input type="checkbox" data-vid="'+v.id+'" data-dep="'+encodeURIComponent(d)+'" '+(checked?'checked':'')+' onchange="toggleDepartementVehicule(this)"></td>';
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+  document.getElementById('depListeVehicules').innerHTML = html;
+}
+
+function ajouterDepartementClient(){
+  var nom = document.getElementById('depNouveauNom').value.trim();
+  if(!nom){ alert('Donnez un nom au departement.'); return; }
+  var ref = getClientRefDepuisKey();
+  // Un departement n'existe reellement qu'a partir du moment ou au moins
+  // un vehicule y est rattache. On cree donc une "colonne vide" en
+  // l'ajoutant temporairement a un vehicule fictif ? Non : on simule sa
+  // presence en l'ajoutant a la liste affichee directement, sans le
+  // rattacher a un vehicule tant qu'aucune case n'est cochee.
+  var vehiculesDuClient = vehicles.filter(function(v){
+    return v.client===ref.nom && (v.tel||'')===ref.tel;
+  });
+  if(!vehiculesDuClient.length){ alert('Aucun vehicule pour ce client.'); return; }
+  // Marquer ce departement comme "connu" meme sans vehicule coche, via un
+  // departement fantome stocke sur le premier vehicule avec un tableau
+  // vide special ne serait pas propre. Solution simple et robuste : on
+  // demande a l'utilisateur de cocher au moins un vehicule pour que le
+  // departement apparaisse (evite les departements vides fantomes).
+  var dejaExistant = vehiculesDuClient.some(function(v){ return (v.departements||[]).indexOf(nom)>=0; });
+  if(dejaExistant){ alert('Ce departement existe deja pour ce client.'); return; }
+  // Ajoute le departement au premier vehicule pour le faire apparaitre
+  // dans le tableau, l'utilisateur pourra ensuite cocher/decocher les
+  // autres vehicules librement (y compris decocher celui-ci).
+  var v0 = vehiculesDuClient[0];
+  v0.departements = v0.departements || [];
+  v0.departements.push(nom);
+  saveV();
+  document.getElementById('depNouveauNom').value = '';
+  renderListeDepartementsVehicules();
+}
+
+function toggleDepartementVehicule(checkbox){
+  var vid = checkbox.getAttribute('data-vid');
+  var dep = decodeURIComponent(checkbox.getAttribute('data-dep'));
+  var v = vehicles.find(function(x){return x.id===vid;});
+  if(!v) return;
+  v.departements = v.departements || [];
+  if(checkbox.checked){
+    if(v.departements.indexOf(dep)<0) v.departements.push(dep);
+  } else {
+    v.departements = v.departements.filter(function(d){return d!==dep;});
+  }
+  saveV();
+}
+
+// Rapport d'un departement : liste des vehicules + statistiques (nb
+// interventions, cout total, delai moyen d'immobilisation). Reutilise
+// delaiMoyenClient deja existant plutot que dupliquer ce calcul.
+function afficherRapportDepartement(depEncoded){
+  var dep = decodeURIComponent(depEncoded);
+  var ref = getClientRefDepuisKey();
+  var vehiculesDep = vehicles.filter(function(v){
+    return v.client===ref.nom && (v.tel||'')===ref.tel && (v.departements||[]).indexOf(dep)>=0;
+  });
+
+  var nbInterventions = vehiculesDep.reduce(function(s,v){return s+(v.interventions||[]).length;},0);
+  var coutTotal = vehiculesDep.reduce(function(s,v){
+    if(!v.chiffrage || !v.chiffrage.lignes) return s;
+    return s + v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();})
+      .reduce(function(ss,cl){return ss+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
+  },0);
+  var delaiMoyen = delaiMoyenClient(vehiculesDep);
+  var nbEnCours = vehiculesDep.filter(function(v){return LIV_ST.indexOf(v.status)<0;}).length;
+
+  var html = '<div class="card" style="border:2px solid #185FA5;padding:14px 16px">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">';
+  html += '<div style="font-weight:700;color:#185FA5">&#x1F3E2; Rapport — '+dep+'</div>';
+  html += '<button class="btn btn-sm" onclick="document.getElementById(\'depRapport\').innerHTML=\'\'">Fermer le rapport</button>';
+  html += '</div>';
+
+  html += '<div class="kgrid k4" style="margin-bottom:14px">';
+  html += kpi('Vehicules', vehiculesDep.length, '');
+  html += kpi('En cours', nbEnCours, nbEnCours>0?'amber':'green');
+  html += kpi('Interventions', nbInterventions, '');
+  html += kpi('Cout total', coutTotal?coutTotal.toLocaleString('fr-FR')+' FCFA':'—', 'blue');
+  html += '</div>';
+  if(delaiMoyen){
+    html += '<div class="xs muted" style="margin-bottom:10px">Delai moyen d\'immobilisation : <strong style="color:#185FA5">'+delaiMoyen+'</strong></div>';
+  }
+
+  if(!vehiculesDep.length){
+    html += '<div class="empty">Aucun vehicule dans ce departement.</div>';
+  } else {
+    html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:#888">';
+    html += '<th style="text-align:left;padding:4px 6px">Vehicule</th><th style="padding:4px 6px">Statut</th><th style="padding:4px 6px">Interventions</th><th style="padding:4px 6px"></th>';
+    html += '</tr></thead><tbody>';
+    vehiculesDep.forEach(function(v){
+      html += '<tr style="border-top:1px solid #f0ede8">';
+      html += '<td style="padding:4px 6px"><strong>'+(v.immat||'—')+'</strong> <span class="xs muted">'+(v.marque||'')+' '+(v.modele||'')+'</span></td>';
+      html += '<td style="padding:4px 6px" class="xs">'+(v.status||'—')+'</td>';
+      html += '<td style="padding:4px 6px;text-align:center">'+((v.interventions||[]).length)+'</td>';
+      html += '<td style="padding:4px 6px"><button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-vid="'+v.id+'" onclick="openDetById(this)">&#x1F441;</button></td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+  }
+  html += '</div>';
+  document.getElementById('depRapport').innerHTML = html;
+}
+
+
 function ouvrirModifClient(btn){
   if(currentRole!=='direction') return;
   var cnom = btn.getAttribute('data-cnom');
@@ -3938,6 +4135,7 @@ function renderPage(){
   else if(r==='technicien') html=pageDashTech();
   else if(r==='achats') html=pageDashAchats();
   else if(r==='direction' && p==='comptes') html=pageComptes();
+  else if(r==='direction' && p==='acces_clients') html=pageAccesClients();
   else if(r==='direction') html=pageDashDir();
   else if(r==='testeur') html=pageDashTesteur();
   else html='<div class="empty">Page non trouvee</div>';
@@ -13945,6 +14143,9 @@ function renderClientsListe(clients){
 
     if(dmClient)html+='<span class="badge b-teal" title="Delai moyen immobilisation">&#x23F1; '+dmClient+' moy.</span>';
     if(currentRole==='direction'){html+='<button class="btn btn-sm" title="Modifier le client" onclick="event.stopPropagation();ouvrirModifClient(this)" data-cnom="'+c.nom.replace(/"/g,'&quot;')+'" data-ctel="'+(c.tel||'')+'" style="padding:4px 8px;font-size:12px;color:#A32D2D;border-color:#E0A0A0">&#x270F;</button>';}
+    if(currentRole==='direction' && (c.entite||'').toLowerCase()!=='particulier'){
+      html+='<button class="btn btn-sm" title="Gerer les departements" onclick="event.stopPropagation();ouvrirGestionDepartements(this)" data-cnom="'+c.nom.replace(/"/g,'&quot;')+'" data-ctel="'+(c.tel||'')+'" style="padding:4px 8px;font-size:12px;color:#185FA5;border-color:#B5D4F4">&#x1F3E2; Departements</button>';
+    }
     html+='<button class="btn btn-sm" title="Rapport client" onclick="event.stopPropagation();ouvrirRapportCli(this)" data-ck="'+key+'" style="padding:4px 8px;font-size:12px">&#x1F4CB;</button>';
     if(currentRole==='direction'){
       html+='<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();confirmerSupprimerClient(this)" data-ck="'+key+'" style="font-size:11px">&#x1F5D1; Supprimer</button>';
@@ -18042,6 +18243,175 @@ function doLogout(){
 }
 
 // Gestion des comptes (direction uniquement)
+// ── Page Acces clients (portail distant) ─────────────────────────────────
+// Creation et gestion des comptes de connexion pour le portail client
+// (client.html). Chaque compte est cree dans Firebase Authentication
+// (email/mot de passe), puis associe a un client GarageOS et
+// eventuellement un departement precis (grand compte).
+function pageAccesClients(){
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+  html += '<h2 style="font-size:16px;font-weight:700;margin:0">Acces clients — Portail distant</h2>';
+  html += '<button class="btn btn-primary btn-sm" onclick="ouvrirCreationCompteClient()">+ Nouveau compte</button>';
+  html += '</div>';
+
+  html += '<div class="info-box" style="margin-bottom:16px">Ces comptes permettent a vos clients de consulter a distance le statut de leurs vehicules, leur historique et (selon le type) leurs factures, via une adresse separee : client.html</div>';
+
+  var uids = Object.keys(CLIENT_ACCOUNTS);
+  if(!uids.length){
+    html += '<div class="card"><div class="empty">Aucun compte client cree pour l\'instant.</div></div>';
+    return html;
+  }
+
+  html += '<div class="card"><div class="tw"><table><thead><tr>';
+  html += '<th>Client</th><th>Departement</th><th>Contact</th><th>Email</th><th>Cree le</th><th></th>';
+  html += '</tr></thead><tbody>';
+  uids.forEach(function(uid){
+    var c = CLIENT_ACCOUNTS[uid];
+    html += '<tr>';
+    html += '<td><strong>'+(c.clientNom||'—')+'</strong></td>';
+    html += '<td>'+(c.departement ? '<span class="badge b-blue">'+c.departement+'</span>' : '<span class="xs muted">Vue globale</span>')+'</td>';
+    html += '<td class="xs">'+(c.nomContact||'—')+'</td>';
+    html += '<td class="xs" style="font-family:monospace">'+(c.email||'—')+'</td>';
+    html += '<td class="xs muted">'+(c.creeLe ? new Date(c.creeLe).toLocaleDateString('fr-FR') : '—')+'</td>';
+    html += '<td><button class="btn btn-sm" style="color:#A32D2D;border-color:#E0A0A0" data-uid="'+uid+'" onclick="supprimerCompteClientByEl(this)">&#x1F5D1;</button></td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+
+  return html;
+}
+
+// Instance Firebase secondaire, dediee uniquement a la creation de comptes
+// clients. Necessaire car createUserWithEmailAndPassword connecte
+// automatiquement le compte nouvellement cree sur l'instance auth
+// utilisee — avec une app secondaire isolee, la session Direction en
+// cours (currentRole, deja purement locale) n'est jamais affectee.
+var fbSecondaryApp = null;
+function getFirebaseAuthSecondaire(){
+  if(!fbSecondaryApp){
+    fbSecondaryApp = firebase.initializeApp(firebaseConfig, 'secondary-'+Date.now());
+  }
+  return fbSecondaryApp.auth();
+}
+
+function ouvrirCreationCompteClient(){
+  if(currentRole!=='direction') return;
+  // Peupler la liste des clients (noms uniques, tous types confondus)
+  var sel = document.getElementById('cca_client');
+  var clientsUniques = {};
+  vehicles.forEach(function(v){ if(v.client) clientsUniques[v.client]=true; });
+  var htmlOpts = '<option value="">— Selectionner —</option>';
+  Object.keys(clientsUniques).sort().forEach(function(c){
+    htmlOpts += '<option value="'+c.replace(/"/g,'&quot;')+'">'+c+'</option>';
+  });
+  sel.innerHTML = htmlOpts;
+
+  document.getElementById('cca_departementWrap').style.display = 'none';
+  document.getElementById('cca_nomContact').value = '';
+  document.getElementById('cca_email').value = '';
+  document.getElementById('cca_password').value = '';
+  document.getElementById('cca_error').style.display = 'none';
+  document.getElementById('cca_btnCreer').disabled = false;
+  document.getElementById('cca_btnCreer').textContent = 'Creer le compte';
+  document.getElementById('modalCreationCompteClient').style.display = 'flex';
+}
+
+function onChangeClientCompteClient(){
+  var clientNom = document.getElementById('cca_client').value;
+  var wrap = document.getElementById('cca_departementWrap');
+  var sel = document.getElementById('cca_departement');
+  if(!clientNom){ wrap.style.display='none'; return; }
+
+  // Collecter les departements existants pour ce client (tous ses vehicules)
+  var departementsExistants = {};
+  vehicles.filter(function(v){return v.client===clientNom;}).forEach(function(v){
+    (v.departements||[]).forEach(function(d){ departementsExistants[d]=true; });
+  });
+  var listeDep = Object.keys(departementsExistants).sort();
+
+  if(!listeDep.length){
+    wrap.style.display = 'none'; // pas de departement configure : uniquement vue globale possible
+    sel.innerHTML = '<option value="">Vue globale</option>';
+  } else {
+    wrap.style.display = 'block';
+    var htmlOpts = '<option value="">Vue globale (tous les vehicules du client)</option>';
+    listeDep.forEach(function(d){ htmlOpts += '<option value="'+d.replace(/"/g,'&quot;')+'">'+d+'</option>'; });
+    sel.innerHTML = htmlOpts;
+  }
+}
+
+function afficherErreurCCA(msg){
+  var box = document.getElementById('cca_error');
+  box.textContent = msg;
+  box.style.display = 'block';
+}
+
+function creerCompteClient(){
+  if(currentRole!=='direction') return;
+  document.getElementById('cca_error').style.display = 'none';
+
+  var clientNom = document.getElementById('cca_client').value;
+  var departement = document.getElementById('cca_departement').value;
+  var nomContact = document.getElementById('cca_nomContact').value.trim();
+  var email = document.getElementById('cca_email').value.trim();
+  var password = document.getElementById('cca_password').value;
+
+  if(!clientNom){ afficherErreurCCA('Selectionnez un client.'); return; }
+  if(!email){ afficherErreurCCA('L\'email est obligatoire.'); return; }
+  if(!password || password.length<6){ afficherErreurCCA('Le mot de passe doit contenir au moins 6 caracteres.'); return; }
+
+  var clientTel = '';
+  var v0 = vehicles.find(function(v){return v.client===clientNom;});
+  if(v0) clientTel = v0.tel||'';
+
+  var btn = document.getElementById('cca_btnCreer');
+  btn.disabled = true;
+  btn.textContent = 'Creation en cours...';
+
+  var authSecondaire = getFirebaseAuthSecondaire();
+  authSecondaire.createUserWithEmailAndPassword(email, password)
+    .then(function(cred){
+      var uid = cred.user.uid;
+      var data = {
+        clientNom: clientNom,
+        clientTel: clientTel,
+        departement: departement || null,
+        nomContact: nomContact || null,
+        email: email,
+        creeLe: Date.now()
+      };
+      saveClientAccount(uid, data);
+      // Deconnecter immediatement l'instance secondaire (le compte cree
+      // reste actif dans Firebase Auth, seule cette session temporaire
+      // de creation est fermee) — n'affecte jamais la session Direction.
+      return authSecondaire.signOut();
+    })
+    .then(function(){
+      document.getElementById('modalCreationCompteClient').style.display = 'none';
+      renderPage();
+    })
+    .catch(function(error){
+      btn.disabled = false;
+      btn.textContent = 'Creer le compte';
+      var messages = {
+        'auth/email-already-in-use': 'Cet email est deja utilise par un autre compte.',
+        'auth/invalid-email': 'Adresse email invalide.',
+        'auth/weak-password': 'Mot de passe trop faible (minimum 6 caracteres).'
+      };
+      afficherErreurCCA(messages[error.code] || 'Erreur lors de la creation du compte : '+error.message);
+    });
+}
+
+function supprimerCompteClientByEl(btn){
+  if(currentRole!=='direction') return;
+  var uid = btn.getAttribute('data-uid');
+  var c = CLIENT_ACCOUNTS[uid];
+  var nom = c ? c.clientNom : uid;
+  if(!confirm('Supprimer l\'acces client de "'+nom+'" ?\n\nAttention : ceci retire uniquement le profil GarageOS associe. Le compte de connexion (email/mot de passe) devra etre supprime separement depuis la console Firebase si vous voulez qu\'il ne puisse plus jamais se connecter.')) return;
+  deleteClientAccountData(uid);
+  renderPage();
+}
+
 function pageComptes(){
   var comptes = loadComptes();
   var apiKey = localStorage.getItem('gos_api_key')||'';
@@ -18490,6 +18860,7 @@ function supprimerCompte(btn){
 // ============================================================
 var firebaseAppLoaded = false;
 var firebaseDatabaseLoaded = false;
+var firebaseAuthLoaded = false;
 
 function onFirebaseLoaded(){
   firebaseAppLoaded = true;
@@ -18501,8 +18872,13 @@ function onFirebaseDatabaseLoaded(){
   tryInitFirebase();
 }
 
+function onFirebaseAuthLoaded(){
+  firebaseAuthLoaded = true;
+  tryInitFirebase();
+}
+
 function tryInitFirebase(){
-  if(firebaseAppLoaded && firebaseDatabaseLoaded){
+  if(firebaseAppLoaded && firebaseDatabaseLoaded && firebaseAuthLoaded){
     initFirebase();
     // Filet de securite : si la 1ere reponse Firebase (gos_data) n'arrive
     // jamais (ex: vraiment hors ligne), debloquer quand meme la sauvegarde
@@ -18517,6 +18893,9 @@ function tryInitFirebase(){
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       });
       syncForfaitsClientsFromFirebase(function(){
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      });
+      syncClientAccountsFromFirebase(function(){
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       });
       syncPersonnelFromFirebase(function(){
@@ -18657,6 +19036,13 @@ function initFirebase(){
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       }catch(e){}
     }
+  });
+  // gos_client_accounts est stocke directement comme objet {uid: {...}},
+  // pas en JSON.stringify comme les autres structures : snapshot.val()
+  // renvoie deja l'objet exploitable, pas de parsing necessaire.
+  fbDb.ref('gos_client_accounts').on('value', function(snapshot){
+    CLIENT_ACCOUNTS = snapshot.val() || {};
+    if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
   });
   fbDb.ref('gos_engagements_bancaires').on('value', function(snapshot){
     var val = snapshot.val();
@@ -18885,6 +19271,7 @@ window.onload=function(){
   <!-- Firebase SDK chargé en dernier -->
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js" onload="onFirebaseLoaded()"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js" onload="onFirebaseDatabaseLoaded()"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js" onload="onFirebaseAuthLoaded()"></script>
 <div class="overlay" id="modalCommentaires" style="display:none" onclick="if(event.target===this)this.style.display='none'">
 <div class="modal" style="max-width:520px">
   <div id="commBody"></div>
@@ -18948,6 +19335,64 @@ window.onload=function(){
 </div>
 </div>
 
+
+<div class="overlay" id="modalDepartements" style="display:none" onclick="if(event.target===this)this.style.display='none'">
+<div class="modal modal-lg" style="max-width:640px">
+  <div class="mhead"><h2>&#x1F3E2; Departements — <span id="depClientNom"></span></h2><button class="btn btn-sm" onclick="document.getElementById('modalDepartements').style.display='none'">X</button></div>
+  <div class="mbody">
+    <div class="info-box" style="margin-bottom:12px">Assignez chaque vehicule a un ou plusieurs departements. Un compte cree pour un departement precis ne verra que les vehicules coches pour ce departement. Un vehicule de pool peut etre coche dans plusieurs departements a la fois.</div>
+    <input type="hidden" id="depClientKey">
+    <div class="fr" style="margin-bottom:14px;display:flex;gap:8px;align-items:flex-end">
+      <div style="flex:1"><label class="fl">Nouveau departement</label><input class="inp" id="depNouveauNom" placeholder="Ex: Logistique, RH, Direction Generale..."></div>
+      <button class="btn btn-primary btn-sm" onclick="ajouterDepartementClient()">+ Ajouter</button>
+    </div>
+    <div id="depListeVehicules"></div>
+    <div id="depRapport" style="margin-top:14px"></div>
+  </div>
+  <div class="mfoot">
+    <button class="btn" onclick="document.getElementById('modalDepartements').style.display='none'">Fermer</button>
+  </div>
+</div>
+</div>
+
+<div class="overlay" id="modalCreationCompteClient" style="display:none" onclick="if(event.target===this)this.style.display='none'">
+<div class="modal" style="max-width:460px">
+  <div class="mhead"><h2>+ Nouveau compte client</h2><button class="btn btn-sm" onclick="document.getElementById('modalCreationCompteClient').style.display='none'">X</button></div>
+  <div class="mbody">
+    <div class="fr">
+      <label class="fl">Client (existant) <span style="color:red">*</span></label>
+      <select class="inp" id="cca_client" onchange="onChangeClientCompteClient()">
+        <option value="">— Selectionner —</option>
+      </select>
+    </div>
+    <div class="fr" id="cca_departementWrap" style="display:none">
+      <label class="fl">Departement (optionnel)</label>
+      <select class="inp" id="cca_departement">
+        <option value="">Vue globale (tous les vehicules du client)</option>
+      </select>
+      <div class="xs muted" style="margin-top:3px">Laisser sur "Vue globale" pour un acces a tous les vehicules du client, ou choisir un departement precis pour restreindre l'acces.</div>
+    </div>
+    <div class="fr">
+      <label class="fl">Nom du contact</label>
+      <input class="inp" id="cca_nomContact" placeholder="Ex: M. Diallo, Responsable Logistique...">
+    </div>
+    <div class="fr">
+      <label class="fl">Email de connexion <span style="color:red">*</span></label>
+      <input type="email" class="inp" id="cca_email" placeholder="client@exemple.com">
+    </div>
+    <div class="fr">
+      <label class="fl">Mot de passe <span style="color:red">*</span></label>
+      <input type="text" class="inp" id="cca_password" placeholder="Minimum 6 caracteres">
+      <div class="xs muted" style="margin-top:3px">Communiquez ce mot de passe au client par un canal separe (SMS, appel).</div>
+    </div>
+    <div class="error-box" id="cca_error" style="display:none;background:#FCEBEB;color:#A32D2D;border-radius:8px;padding:10px 12px;font-size:12px;margin-top:10px"></div>
+  </div>
+  <div class="mfoot">
+    <button class="btn" onclick="document.getElementById('modalCreationCompteClient').style.display='none'">Annuler</button>
+    <button class="btn btn-primary" id="cca_btnCreer" onclick="creerCompteClient()">Creer le compte</button>
+  </div>
+</div>
+</div>
 
 <div class="overlay" id="modalFusionClients" style="display:none" onclick="if(event.target===this)this.style.display='none'">
 <div class="modal modal-lg" style="max-width:640px">
