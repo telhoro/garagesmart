@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>GarageOS — Mon espace</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f5f4f1;color:#1a1a1a;min-height:100vh}
+.topbar{background:#fff;border-bottom:1px solid #e8e6e1;padding:14px 20px;display:flex;justify-content:space-between;align-items:center}
+.topbar-left{display:flex;align-items:center;gap:10px}
+.logo-icon{width:32px;height:32px;background:#185FA5;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px;font-weight:700}
+.client-name{font-weight:700;font-size:15px}
+.client-sub{font-size:11px;color:#999}
+.btn-logout{border:1px solid #d0cec9;border-radius:7px;padding:6px 12px;font-size:12px;background:#fff;cursor:pointer;color:#1a1a1a}
+.container{max-width:900px;margin:0 auto;padding:20px}
+.kgrid{display:grid;gap:12px;margin-bottom:20px}
+.k2{grid-template-columns:repeat(2,1fr)}
+.k3{grid-template-columns:repeat(3,1fr)}
+@media (max-width:600px){.k2,.k3{grid-template-columns:1fr 1fr}}
+.kpi{background:#fff;border:1px solid #e8e6e1;border-radius:9px;padding:13px 15px}
+.kpi-lbl{font-size:11px;color:#999;margin-bottom:5px}
+.kpi-val{font-size:19px;font-weight:700}
+.section-title{font-weight:700;font-size:14px;margin:20px 0 10px}
+.vcard{background:#fff;border:1px solid #e8e6e1;border-radius:10px;padding:14px 16px;margin-bottom:10px}
+.vcard-head{display:flex;justify-content:space-between;align-items:flex-start}
+.vcard-immat{font-weight:700;font-size:14px}
+.vcard-modele{font-size:11px;color:#666;margin-top:2px}
+.badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600}
+.b-blue{background:#E6F1FB;color:#185FA5}
+.b-green{background:#EAF3DE;color:#3B6D11}
+.b-amber{background:#FAEEDA;color:#854F0B}
+.b-red{background:#FCEBEB;color:#A32D2D}
+.b-gray{background:#F1EFE8;color:#666}
+.btn-detail{border:1px solid #d0cec9;border-radius:7px;padding:5px 11px;font-size:11px;background:#fff;cursor:pointer;color:#1a1a1a}
+.vcard-foot{margin-top:8px;font-size:11px;color:#999}
+.pieces-list{margin-top:8px;display:flex;gap:6px;flex-wrap:wrap}
+.piece-chip{background:#f5f4f1;border-radius:6px;padding:3px 9px;font-size:11px}
+.no-price-note{font-size:10px;color:#bbb;font-style:italic;margin-top:6px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:6px 8px;font-size:11px;color:#999;font-weight:400;border-bottom:1px solid #e8e6e1}
+td{padding:8px;border-bottom:1px solid #f0ede8}
+.loading{text-align:center;padding:60px 20px;color:#999}
+.empty{text-align:center;padding:30px;color:#999;font-size:13px}
+.detail-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;padding:20px;z-index:100}
+.detail-modal{background:#fff;border-radius:12px;max-width:520px;width:100%;max-height:85vh;overflow-y:auto;padding:20px}
+.detail-modal h3{font-size:15px;margin-bottom:12px}
+.detail-close{float:right;border:none;background:none;font-size:16px;cursor:pointer;color:#999}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="logo-icon">G</div>
+    <div>
+      <div class="client-name" id="topClientName">—</div>
+      <div class="client-sub" id="topClientSub">—</div>
+    </div>
+  </div>
+  <button class="btn-logout" onclick="deconnexion()">Deconnexion</button>
+</div>
+
+<div class="container" id="mainContent">
+  <div class="loading">Chargement...</div>
+</div>
+
+<div class="detail-overlay" id="detailOverlay" onclick="if(event.target===this)fermerDetail()">
+  <div class="detail-modal" id="detailModal"></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+<script>
+var firebaseConfig = {
+  apiKey: "AIzaSyDJncdc6aaiOO0Nl3_bGQ-8peSVa8gdmMU",
+  authDomain: "garage-smart-erp.firebaseapp.com",
+  projectId: "garage-smart-erp",
+  storageBucket: "garage-smart-erp.firebasestorage.app",
+  messagingSenderId: "200279404694",
+  appId: "1:200279404694:web:ab323a97692797967952b7",
+  databaseURL: "https://garage-smart-erp-default-rtdb.firebaseio.com"
+};
+firebase.initializeApp(firebaseConfig);
+var auth = firebase.auth();
+var db = firebase.database();
+
+var compteClient = null;
+var mesVehicules = [];
+
+var LIV_ST = ['livre','facture_deposee','dossier_cloture'];
+var STATUT_LABELS = {
+  'nouveau':'Nouveau','diagnostic':'Diagnostic','chiffrage':'Chiffrage en cours',
+  'attente_validation':'Attente validation','travaux_cours':'Travaux en cours',
+  'attente_pieces':'Attente pieces','livre':'Livre','facture_deposee':'Facture deposee',
+  'dossier_cloture':'Dossier cloture','attente_fin':'En cours de traitement',
+  'devis_termine':'Devis envoye','devis_envoye':'Devis envoye'
+};
+
+function labelStatut(s){ return STATUT_LABELS[s] || (s||'—'); }
+function estEnCours(v){ return LIV_ST.indexOf(v.status)<0; }
+
+auth.onAuthStateChanged(function(user){
+  if(!user){
+    window.location.href = 'client.html';
+    return;
+  }
+  chargerProfilEtDonnees(user.uid);
+});
+
+function chargerProfilEtDonnees(uid){
+  db.ref('gos_client_accounts/'+uid).once('value').then(function(snap){
+    if(!snap.exists()){
+      afficherErreurGenerale('Profil client introuvable. Contactez le garage.');
+      return;
+    }
+    compteClient = snap.val();
+    document.getElementById('topClientName').textContent = compteClient.clientNom;
+    document.getElementById('topClientSub').textContent = compteClient.departement
+      ? 'Departement : '+compteClient.departement
+      : 'Vue globale';
+    chargerVehicules();
+  }).catch(function(){
+    afficherErreurGenerale('Erreur de connexion au serveur.');
+  });
+}
+
+function chargerVehicules(){
+  db.ref('gos_data/vehicles').once('value').then(function(snap){
+    var raw = snap.val();
+    var tous = [];
+    try{ tous = JSON.parse(raw)||[]; }catch(e){ tous = []; }
+
+    mesVehicules = tous.filter(function(v){
+      if(v.client !== compteClient.clientNom) return false;
+      if((v.tel||'') !== (compteClient.clientTel||'')) return false;
+      if(compteClient.departement){
+        return (v.departements||[]).indexOf(compteClient.departement) >= 0;
+      }
+      return true;
+    });
+
+    renderDashboard();
+  }).catch(function(err){
+    afficherErreurGenerale('Erreur de chargement des donnees.');
+    console.error(err);
+  });
+}
+
+function afficherErreurGenerale(msg){
+  document.getElementById('mainContent').innerHTML = '<div class="empty">'+msg+'</div>';
+}
+
+function renderDashboard(){
+  var vehiculesDevis = mesVehicules.filter(function(v){return v.typeClient!=='forfait';});
+  var vehiculesForfait = mesVehicules.filter(function(v){return v.typeClient==='forfait';});
+
+  var html = '';
+
+  if(!mesVehicules.length){
+    document.getElementById('mainContent').innerHTML = '<div class="empty">Aucun vehicule associe a votre compte pour le moment.</div>';
+    return;
+  }
+
+  if(vehiculesDevis.length){
+    var coutTotalFlotte = 0;
+    var facturesImpayees = 0;
+    vehiculesDevis.forEach(function(v){
+      if(v.chiffrage && v.chiffrage.lignes){
+        var montantFacture = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();})
+          .reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+        coutTotalFlotte += montantFacture;
+        var paye = parseFloat(v.montantPaye)||0;
+        if(montantFacture>paye) facturesImpayees += (montantFacture-paye);
+      }
+    });
+
+    html += '<div class="kgrid k3">';
+    html += kpiHtml('Vehicules actifs', vehiculesDevis.length);
+    html += kpiHtml('Cout total flotte', coutTotalFlotte.toLocaleString('fr-FR')+' FCFA', '#185FA5');
+    html += kpiHtml('Factures impayees', facturesImpayees.toLocaleString('fr-FR')+' FCFA', facturesImpayees>0?'#A32D2D':'#3B6D11');
+    html += '</div>';
+
+    html += '<div class="section-title">Vos vehicules</div>';
+    vehiculesDevis.forEach(function(v){ html += renderVehiculeCardDevis(v); });
+
+    var facturesAAfficher = vehiculesDevis.filter(function(v){
+      return v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.some(function(cl){return (cl.piece||'').trim();});
+    });
+    if(facturesAAfficher.length){
+      html += '<div class="section-title">Vos factures</div>';
+      html += '<table><thead><tr><th>Vehicule</th><th>Date</th><th style="text-align:right">Montant</th><th>Statut</th></tr></thead><tbody>';
+      facturesAAfficher.forEach(function(v){
+        var montantFacture = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();})
+          .reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+        var paye = parseFloat(v.montantPaye)||0;
+        var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree;
+        var statutLabel = paye>=montantFacture ? 'Payee' : (paye>0 ? 'Partiel' : 'En attente');
+        var statutClasse = paye>=montantFacture ? 'b-green' : (paye>0 ? 'b-amber' : 'b-red');
+        html += '<tr><td>'+(v.immat||'—')+'</td><td>'+(dateFacture?new Date(dateFacture).toLocaleDateString('fr-FR'):'—')+'</td>';
+        html += '<td style="text-align:right;font-family:monospace">'+montantFacture.toLocaleString('fr-FR')+'</td>';
+        html += '<td><span class="badge '+statutClasse+'">'+statutLabel+'</span></td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+  }
+
+  if(vehiculesForfait.length){
+    html += '<div class="kgrid k2" style="margin-top:'+(vehiculesDevis.length?'24px':'0')+'">';
+    html += kpiHtml('Vehicules en forfait', vehiculesForfait.length);
+    var nbInterventionsForfait = vehiculesForfait.reduce(function(s,v){
+      return s + ((v.chiffrage&&v.chiffrage.lignes) ? v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).length : 0);
+    },0);
+    html += kpiHtml('Interventions', nbInterventionsForfait);
+    html += '</div>';
+
+    html += '<div class="section-title">Vos vehicules (forfait)</div>';
+    vehiculesForfait.forEach(function(v){ html += renderVehiculeCardForfait(v); });
+  }
+
+  document.getElementById('mainContent').innerHTML = html;
+}
+
+function kpiHtml(label, val, color){
+  return '<div class="kpi"><div class="kpi-lbl">'+label+'</div><div class="kpi-val"'+(color?' style="color:'+color+'"':'')+'>'+val+'</div></div>';
+}
+
+function renderVehiculeCardDevis(v){
+  var enCours = estEnCours(v);
+  var statutClasse = enCours ? 'b-blue' : 'b-green';
+  var coutVehicule = 0, nbPieces = 0;
+  if(v.chiffrage && v.chiffrage.lignes){
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    nbPieces = lignes.length;
+    coutVehicule = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+  }
+  var html = '<div class="vcard">';
+  html += '<div class="vcard-head"><div>';
+  html += '<div class="vcard-immat">'+(v.immat||'—')+' — '+(v.marque||'')+' '+(v.modele||'')+'</div>';
+  html += '<div class="vcard-modele"><span class="badge '+statutClasse+'">'+labelStatut(v.status)+'</span></div>';
+  html += '</div><button class="btn-detail" onclick="ouvrirDetailVehicule(\''+v.id+'\')">Voir le detail</button></div>';
+  if(coutVehicule>0){
+    html += '<div class="vcard-foot">Cout total sur ce vehicule : <strong>'+coutVehicule.toLocaleString('fr-FR')+' FCFA</strong>'+(nbPieces?' &middot; '+nbPieces+' intervention(s)':'')+'</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderVehiculeCardForfait(v){
+  var enCours = estEnCours(v);
+  var statutClasse = enCours ? 'b-blue' : 'b-green';
+  var html = '<div class="vcard">';
+  html += '<div class="vcard-head"><div>';
+  html += '<div class="vcard-immat">'+(v.immat||'—')+' — '+(v.marque||'')+' '+(v.modele||'')+'</div>';
+  html += '<div class="vcard-modele"><span class="badge '+statutClasse+'">'+labelStatut(v.status)+'</span></div>';
+  html += '</div><button class="btn-detail" onclick="ouvrirDetailVehicule(\''+v.id+'\')">Voir l\'historique</button></div>';
+  if(v.chiffrage && v.chiffrage.lignes){
+    var pieces = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    if(pieces.length){
+      html += '<div class="pieces-list">';
+      pieces.slice(0,6).forEach(function(cl){ html += '<span class="piece-chip">'+cl.piece+'</span>'; });
+      if(pieces.length>6) html += '<span class="piece-chip">+'+(pieces.length-6)+' autre(s)</span>';
+      html += '</div>';
+      html += '<div class="no-price-note">Aucun montant affiche — couvert par votre forfait</div>';
+    }
+  }
+  html += '</div>';
+  return html;
+}
+
+function ouvrirDetailVehicule(vid){
+  var v = mesVehicules.find(function(x){return x.id===vid;});
+  if(!v) return;
+  var estForfait = v.typeClient==='forfait';
+  var html = '<button class="detail-close" onclick="fermerDetail()">&#10005;</button>';
+  html += '<h3>'+(v.immat||'—')+' — '+(v.marque||'')+' '+(v.modele||'')+'</h3>';
+  html += '<div style="margin-bottom:10px"><span class="badge '+(estEnCours(v)?'b-blue':'b-green')+'">'+labelStatut(v.status)+'</span></div>';
+
+  if(v.chiffrage && v.chiffrage.lignes){
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    if(lignes.length){
+      html += '<table><thead><tr><th>Piece</th><th style="text-align:center">Qte</th>';
+      if(!estForfait) html += '<th style="text-align:right">Prix</th>';
+      html += '</tr></thead><tbody>';
+      lignes.forEach(function(cl){
+        html += '<tr><td>'+cl.piece+'</td><td style="text-align:center">'+(cl.qte||1)+'</td>';
+        if(!estForfait){
+          var total = (parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);
+          html += '<td style="text-align:right;font-family:monospace">'+total.toLocaleString('fr-FR')+'</td>';
+        }
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+    } else {
+      html += '<div class="empty">Aucune intervention enregistree.</div>';
+    }
+  } else {
+    html += '<div class="empty">Aucune intervention enregistree.</div>';
+  }
+
+  document.getElementById('detailModal').innerHTML = html;
+  document.getElementById('detailOverlay').style.display = 'flex';
+}
+
+function fermerDetail(){
+  document.getElementById('detailOverlay').style.display = 'none';
+}
+
+function deconnexion(){
+  auth.signOut().then(function(){
+    window.location.href = 'client.html';
+  });
+}
+</script>
+</body>
+</html>
