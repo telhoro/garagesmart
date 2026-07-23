@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>GarageOS — Espace client</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f5f4f1;color:#1a1a1a;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{background:#fff;border-radius:14px;box-shadow:0 4px 20px rgba(0,0,0,.08);width:100%;max-width:380px;padding:32px 28px}
+.logo{display:flex;align-items:center;gap:10px;margin-bottom:24px;justify-content:center}
+.logo-icon{width:36px;height:36px;background:#185FA5;border-radius:9px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:18px;font-weight:700}
+.logo-text{font-size:17px;font-weight:700}
+h1{font-size:15px;font-weight:600;text-align:center;color:#666;margin-bottom:24px}
+.fr{margin-bottom:14px}
+.fl{font-size:11px;font-weight:600;color:#666;margin-bottom:5px;display:block}
+.inp{width:100%;padding:10px 12px;border:1px solid #d0cec9;border-radius:8px;font-size:14px;font-family:inherit;background:#fff;color:#1a1a1a}
+.inp:focus{outline:none;border-color:#185FA5}
+.btn-connect{width:100%;padding:11px;background:#185FA5;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;margin-top:6px}
+.btn-connect:disabled{opacity:.6;cursor:default}
+.btn-connect:hover:not(:disabled){background:#134d87}
+.error-box{background:#FCEBEB;color:#A32D2D;border-radius:8px;padding:10px 12px;font-size:12.5px;margin-bottom:14px;display:none}
+.footer-note{text-align:center;font-size:11px;color:#999;margin-top:20px}
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="logo">
+    <div class="logo-icon">G</div>
+    <div class="logo-text">GarageOS</div>
+  </div>
+  <h1>Espace client</h1>
+
+  <div class="error-box" id="errorBox"></div>
+
+  <form id="loginForm">
+    <div class="fr">
+      <label class="fl">Adresse email</label>
+      <input type="email" class="inp" id="loginEmail" required autocomplete="username">
+    </div>
+    <div class="fr">
+      <label class="fl">Mot de passe</label>
+      <input type="password" class="inp" id="loginPassword" required autocomplete="current-password">
+    </div>
+    <button type="submit" class="btn-connect" id="btnConnect">Se connecter</button>
+  </form>
+
+  <div class="footer-note">Vos identifiants vous ont été communiqués par le garage.</div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+<script>
+var firebaseConfig = {
+  apiKey: "AIzaSyDJncdc6aaiOO0Nl3_bGQ-8peSVa8gdmMU",
+  authDomain: "garage-smart-erp.firebaseapp.com",
+  projectId: "garage-smart-erp",
+  storageBucket: "garage-smart-erp.firebasestorage.app",
+  messagingSenderId: "200279404694",
+  appId: "1:200279404694:web:ab323a97692797967952b7",
+  databaseURL: "https://garage-smart-erp-default-rtdb.firebaseio.com"
+};
+firebase.initializeApp(firebaseConfig);
+var auth = firebase.auth();
+var db = firebase.database();
+
+// Si deja connecte (session persistante Firebase), passer directement au tableau de bord.
+auth.onAuthStateChanged(function(user){
+  if(user){
+    // Verifie que ce compte a bien un profil client associe avant de rediriger,
+    // pour eviter une redirection vers un tableau de bord vide/casse si le
+    // compte Auth existe mais n'a jamais ete relie a un client GarageOS.
+    db.ref('gos_client_accounts/'+user.uid).once('value').then(function(snap){
+      if(snap.exists()){
+        window.location.href = 'client-dashboard.html';
+      } else {
+        afficherErreur('Ce compte n\'est associé à aucun profil client. Contactez le garage.');
+        auth.signOut();
+      }
+    }).catch(function(){
+      afficherErreur('Erreur de connexion au serveur. Réessayez.');
+    });
+  }
+});
+
+function afficherErreur(msg){
+  var box = document.getElementById('errorBox');
+  box.textContent = msg;
+  box.style.display = 'block';
+}
+function masquerErreur(){
+  document.getElementById('errorBox').style.display = 'none';
+}
+
+document.getElementById('loginForm').addEventListener('submit', function(e){
+  e.preventDefault();
+  masquerErreur();
+  var email = document.getElementById('loginEmail').value.trim();
+  var password = document.getElementById('loginPassword').value;
+  var btn = document.getElementById('btnConnect');
+  btn.disabled = true;
+  btn.textContent = 'Connexion...';
+
+  auth.signInWithEmailAndPassword(email, password)
+    .catch(function(error){
+      btn.disabled = false;
+      btn.textContent = 'Se connecter';
+      var messages = {
+        'auth/invalid-email': 'Adresse email invalide.',
+        'auth/user-disabled': 'Ce compte a été désactivé. Contactez le garage.',
+        'auth/user-not-found': 'Identifiants incorrects.',
+        'auth/wrong-password': 'Identifiants incorrects.',
+        'auth/invalid-credential': 'Identifiants incorrects.',
+        'auth/too-many-requests': 'Trop de tentatives. Réessayez dans quelques minutes.'
+      };
+      afficherErreur(messages[error.code] || 'Erreur de connexion. Réessayez.');
+    });
+    // Pas de .then() de succes ici : onAuthStateChanged gere la redirection
+    // une fois l'utilisateur reellement authentifie, de facon centralisee.
+});
+</script>
+</body>
+</html>
