@@ -756,19 +756,17 @@ function exporterToutHistoriqueExcel(){
   var groupes = regrouperParImmatriculation(vehiculesFiltres);
   if(!groupes.length){ alert('Aucun vehicule a exporter.'); return; }
 
-  var wb = XLSX.utils.book_new();
-  var nomsOnglets = {}; // evite les doublons de nom d'onglet (max 31 caracteres, unicite Excel)
-
+  // Tous les vehicules sont concatenes dans une seule feuille (a la suite,
+  // separes par une ligne vide), plutot qu'un onglet distinct par vehicule.
+  var toutesLesLignes = [];
   groupes.forEach(function(g){
-    var rows = construireLignesExcelVehicule(g);
-    var ws = XLSX.utils.aoa_to_sheet(rows);
-    ws['!cols'] = [{wch:32},{wch:10},{wch:18},{wch:16}];
-    var nomOnglet = (g.immat||'sans-immat').substring(0,31);
-    var suffixe = 1;
-    while(nomsOnglets[nomOnglet]){ nomOnglet = (g.immat||'sans-immat').substring(0,28)+'_'+(++suffixe); }
-    nomsOnglets[nomOnglet] = true;
-    XLSX.utils.book_append_sheet(wb, ws, nomOnglet);
+    toutesLesLignes = toutesLesLignes.concat(construireLignesExcelVehicule(g));
   });
+
+  var ws = XLSX.utils.aoa_to_sheet(toutesLesLignes);
+  ws['!cols'] = [{wch:32},{wch:10},{wch:18},{wch:16}];
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Historique');
 
   var nomFichier = 'Historique_'+(compteClient.clientNom||'client').replace(/[^a-zA-Z0-9_-]/g,'_')+'.xlsx';
   XLSX.writeFile(wb, nomFichier);
