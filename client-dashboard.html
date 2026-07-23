@@ -152,9 +152,36 @@ function afficherErreurGenerale(msg){
   document.getElementById('mainContent').innerHTML = '<div class="empty">'+msg+'</div>';
 }
 
+// Regroupe tous les passages (objets vehicles distincts, meme immat) en un
+// seul enregistrement "vehicule physique" avec l'historique complet. Chaque
+// visite au garage cree un nouvel objet dans vehicles cote GarageOS — ce
+// regroupement reconstitue le vrai historique par immatriculation, comme
+// l'app Direction le fait deja ailleurs (comptage des interventions forfait).
+function regrouperParImmatriculation(liste){
+  var groupes = {};
+  liste.forEach(function(v){
+    var key = (v.immat||'sans-immat').toUpperCase();
+    if(!groupes[key]) groupes[key] = [];
+    groupes[key].push(v);
+  });
+  return Object.keys(groupes).map(function(key){
+    var passages = groupes[key].sort(function(a,b){return (b.entree||0)-(a.entree||0);}); // plus recent d'abord
+    return {
+      immat: key==='sans-immat' ? '' : key,
+      marque: passages[0].marque,
+      modele: passages[0].modele,
+      typeClient: passages[0].typeClient,
+      passages: passages,
+      dernierPassage: passages[0],
+      nbVisites: passages.length
+    };
+  });
+}
+
 function renderDashboard(){
-  var vehiculesDevis = mesVehicules.filter(function(v){return v.typeClient!=='forfait';});
-  var vehiculesForfait = mesVehicules.filter(function(v){return v.typeClient==='forfait';});
+  var vehiculesUniques = regrouperParImmatriculation(mesVehicules);
+  var vehiculesDevis = vehiculesUniques.filter(function(g){return g.typeClient!=='forfait';});
+  var vehiculesForfait = vehiculesUniques.filter(function(g){return g.typeClient==='forfait';});
 
   var html = '';
 
@@ -166,7 +193,7 @@ function renderDashboard(){
   if(vehiculesDevis.length){
     var coutTotalFlotte = 0;
     var facturesImpayees = 0;
-    vehiculesDevis.forEach(function(v){
+    mesVehicules.filter(function(v){return v.typeClient!=='forfait';}).forEach(function(v){
       if(v.chiffrage && v.chiffrage.lignes){
         var montantFacture = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();})
           .reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
@@ -185,12 +212,12 @@ function renderDashboard(){
     html += '<div class="section-title">Vos vehicules</div>';
     vehiculesDevis.forEach(function(v){ html += renderVehiculeCardDevis(v); });
 
-    var facturesAAfficher = vehiculesDevis.filter(function(v){
-      return v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.some(function(cl){return (cl.piece||'').trim();});
+    var facturesAAfficher = mesVehicules.filter(function(v){
+      return v.typeClient!=='forfait' && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.some(function(cl){return (cl.piece||'').trim();});
     });
     if(facturesAAfficher.length){
       html += '<div class="section-title">Vos factures</div>';
-      html += '<table><thead><tr><th>Vehicule</th><th>Date</th><th style="text-align:right">Montant</th><th>Statut</th></tr></thead><tbody>';
+      html += '<table><thead><tr><th>Vehicule</th><th>Date</th><th style="text-align:right">Montant</th><th>Statut</th><th></th></tr></thead><tbody>';
       facturesAAfficher.forEach(function(v){
         var montantFacture = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();})
           .reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
@@ -200,7 +227,8 @@ function renderDashboard(){
         var statutClasse = paye>=montantFacture ? 'b-green' : (paye>0 ? 'b-amber' : 'b-red');
         html += '<tr><td>'+(v.immat||'—')+'</td><td>'+(dateFacture?new Date(dateFacture).toLocaleDateString('fr-FR'):'—')+'</td>';
         html += '<td style="text-align:right;font-family:monospace">'+montantFacture.toLocaleString('fr-FR')+'</td>';
-        html += '<td><span class="badge '+statutClasse+'">'+statutLabel+'</span></td></tr>';
+        html += '<td><span class="badge '+statutClasse+'">'+statutLabel+'</span></td>';
+        html += '<td><button class="btn-detail" onclick="imprimerFacture(\''+v.id+'\')">Imprimer</button></td></tr>';
       });
       html += '</tbody></table>';
     }
@@ -209,7 +237,7 @@ function renderDashboard(){
   if(vehiculesForfait.length){
     html += '<div class="kgrid k2" style="margin-top:'+(vehiculesDevis.length?'24px':'0')+'">';
     html += kpiHtml('Vehicules en forfait', vehiculesForfait.length);
-    var nbInterventionsForfait = vehiculesForfait.reduce(function(s,v){
+    var nbInterventionsForfait = mesVehicules.filter(function(v){return v.typeClient==='forfait';}).reduce(function(s,v){
       return s + ((v.chiffrage&&v.chiffrage.lignes) ? v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).length : 0);
     },0);
     html += kpiHtml('Interventions', nbInterventionsForfait);
@@ -226,35 +254,38 @@ function kpiHtml(label, val, color){
   return '<div class="kpi"><div class="kpi-lbl">'+label+'</div><div class="kpi-val"'+(color?' style="color:'+color+'"':'')+'>'+val+'</div></div>';
 }
 
-function renderVehiculeCardDevis(v){
+function renderVehiculeCardDevis(g){
+  var v = g.dernierPassage;
   var enCours = estEnCours(v);
   var statutClasse = enCours ? 'b-blue' : 'b-green';
-  var coutVehicule = 0, nbPieces = 0;
-  if(v.chiffrage && v.chiffrage.lignes){
-    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
-    nbPieces = lignes.length;
-    coutVehicule = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
-  }
+  var coutTotalImmat = 0;
+  g.passages.forEach(function(p){
+    if(p.chiffrage && p.chiffrage.lignes){
+      coutTotalImmat += p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();})
+        .reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    }
+  });
   var html = '<div class="vcard">';
   html += '<div class="vcard-head"><div>';
-  html += '<div class="vcard-immat">'+(v.immat||'—')+' — '+(v.marque||'')+' '+(v.modele||'')+'</div>';
-  html += '<div class="vcard-modele"><span class="badge '+statutClasse+'">'+labelStatut(v.status)+'</span></div>';
-  html += '</div><button class="btn-detail" onclick="ouvrirDetailVehicule(\''+v.id+'\')">Voir le detail</button></div>';
-  if(coutVehicule>0){
-    html += '<div class="vcard-foot">Cout total sur ce vehicule : <strong>'+coutVehicule.toLocaleString('fr-FR')+' FCFA</strong>'+(nbPieces?' &middot; '+nbPieces+' intervention(s)':'')+'</div>';
+  html += '<div class="vcard-immat">'+(g.immat||'—')+' — '+(g.marque||'')+' '+(g.modele||'')+'</div>';
+  html += '<div class="vcard-modele"><span class="badge '+statutClasse+'">'+labelStatut(v.status)+'</span> <span class="xs muted">&middot; '+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+' a l\'atelier</span></div>';
+  html += '</div><button class="btn-detail" onclick="ouvrirHistoriqueVehicule(\''+g.immat+'\')">Historique complet</button></div>';
+  if(coutTotalImmat>0){
+    html += '<div class="vcard-foot">Cout total (toutes visites) sur ce vehicule : <strong>'+coutTotalImmat.toLocaleString('fr-FR')+' FCFA</strong></div>';
   }
   html += '</div>';
   return html;
 }
 
-function renderVehiculeCardForfait(v){
+function renderVehiculeCardForfait(g){
+  var v = g.dernierPassage;
   var enCours = estEnCours(v);
   var statutClasse = enCours ? 'b-blue' : 'b-green';
   var html = '<div class="vcard">';
   html += '<div class="vcard-head"><div>';
-  html += '<div class="vcard-immat">'+(v.immat||'—')+' — '+(v.marque||'')+' '+(v.modele||'')+'</div>';
-  html += '<div class="vcard-modele"><span class="badge '+statutClasse+'">'+labelStatut(v.status)+'</span></div>';
-  html += '</div><button class="btn-detail" onclick="ouvrirDetailVehicule(\''+v.id+'\')">Voir l\'historique</button></div>';
+  html += '<div class="vcard-immat">'+(g.immat||'—')+' — '+(g.marque||'')+' '+(g.modele||'')+'</div>';
+  html += '<div class="vcard-modele"><span class="badge '+statutClasse+'">'+labelStatut(v.status)+'</span> <span class="xs muted">&middot; '+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+' a l\'atelier</span></div>';
+  html += '</div><button class="btn-detail" onclick="ouvrirHistoriqueVehicule(\''+g.immat+'\')">Historique complet</button></div>';
   if(v.chiffrage && v.chiffrage.lignes){
     var pieces = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
     if(pieces.length){
@@ -269,38 +300,120 @@ function renderVehiculeCardForfait(v){
   return html;
 }
 
-function ouvrirDetailVehicule(vid){
-  var v = mesVehicules.find(function(x){return x.id===vid;});
-  if(!v) return;
-  var estForfait = v.typeClient==='forfait';
-  var html = '<button class="detail-close" onclick="fermerDetail()">&#10005;</button>';
-  html += '<h3>'+(v.immat||'—')+' — '+(v.marque||'')+' '+(v.modele||'')+'</h3>';
-  html += '<div style="margin-bottom:10px"><span class="badge '+(estEnCours(v)?'b-blue':'b-green')+'">'+labelStatut(v.status)+'</span></div>';
+// Affiche l'historique complet d'un vehicule (toutes les visites passees,
+// meme immatriculation), avec pour chaque passage : dates d'entree/sortie,
+// motif du client, et travaux/pieces effectues. C'est la vraie liste des
+// evenements ; le prix n'apparait que pour un vehicule devis, jamais pour
+// un forfait (coherent avec le reste du portail).
+function ouvrirHistoriqueVehicule(immat){
+  var g = regrouperParImmatriculation(mesVehicules).find(function(x){return x.immat===immat;});
+  if(!g) return;
+  var estForfait = g.typeClient==='forfait';
 
-  if(v.chiffrage && v.chiffrage.lignes){
-    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
-    if(lignes.length){
-      html += '<table><thead><tr><th>Piece</th><th style="text-align:center">Qte</th>';
-      if(!estForfait) html += '<th style="text-align:right">Prix</th>';
-      html += '</tr></thead><tbody>';
-      lignes.forEach(function(cl){
-        html += '<tr><td>'+cl.piece+'</td><td style="text-align:center">'+(cl.qte||1)+'</td>';
-        if(!estForfait){
-          var total = (parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);
-          html += '<td style="text-align:right;font-family:monospace">'+total.toLocaleString('fr-FR')+'</td>';
-        }
-        html += '</tr>';
-      });
-      html += '</tbody></table>';
-    } else {
-      html += '<div class="empty">Aucune intervention enregistree.</div>';
+  var html = '<button class="detail-close" onclick="fermerDetail()">&#10005;</button>';
+  html += '<h3>'+(g.immat||'—')+' — '+(g.marque||'')+' '+(g.modele||'')+'</h3>';
+  html += '<div style="margin-bottom:14px" class="xs muted">'+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+' a l\'atelier au total</div>';
+
+  g.passages.forEach(function(p, idx){
+    var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '—';
+    var dateSortie = (p.livraison && LIV_ST.indexOf(p.status)>=0) ? new Date(p.livraison).toLocaleDateString('fr-FR') : null;
+    var lignes = (p.chiffrage && p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
+    var montantPassage = estForfait ? 0 : lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+
+    html += '<div style="border:1px solid #e8e6e1;border-radius:9px;padding:12px 14px;margin-bottom:10px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">';
+    html += '<div><strong>Visite du '+dateEntree+'</strong>'+(dateSortie?' <span class="xs muted">au '+dateSortie+'</span>':' <span class="badge b-blue" style="margin-left:4px">En cours</span>')+'</div>';
+    if(!estForfait && montantPassage>0){
+      html += '<div style="font-family:monospace;font-weight:700">'+montantPassage.toLocaleString('fr-FR')+' FCFA</div>';
     }
-  } else {
-    html += '<div class="empty">Aucune intervention enregistree.</div>';
-  }
+    html += '</div>';
+    if(p.motif){
+      html += '<div class="xs" style="margin-bottom:6px"><span class="muted">Motif :</span> '+p.motif+'</div>';
+    }
+    if(lignes.length){
+      html += '<div class="xs muted" style="margin-bottom:4px">Travaux effectues :</div>';
+      html += '<div class="pieces-list">';
+      lignes.forEach(function(cl){ html += '<span class="piece-chip">'+cl.piece+(cl.qte>1?' (x'+cl.qte+')':'')+'</span>'; });
+      html += '</div>';
+    }
+    if(!estForfait && lignes.length){
+      html += '<div style="margin-top:8px"><button class="btn-detail" onclick="imprimerFacture(\''+p.id+'\')">Imprimer cette facture</button></div>';
+    }
+    html += '</div>';
+  });
+
+  html += '<div style="margin-top:10px;text-align:right"><button class="btn-detail" onclick="imprimerHistorique(\''+immat+'\')">&#128424; Imprimer tout l\'historique</button></div>';
 
   document.getElementById('detailModal').innerHTML = html;
   document.getElementById('detailOverlay').style.display = 'flex';
+}
+
+// Ouvre une fenetre d'impression avec l'historique complet d'un vehicule
+// (toutes les visites, sans les prix pour un forfait).
+function imprimerHistorique(immat){
+  var g = regrouperParImmatriculation(mesVehicules).find(function(x){return x.immat===immat;});
+  if(!g) return;
+  var estForfait = g.typeClient==='forfait';
+
+  var html = '<html><head><meta charset="utf-8"><title>Historique '+g.immat+'</title>';
+  html += '<style>body{font-family:Arial,sans-serif;padding:24px;color:#1a1a1a}h1{font-size:18px}h2{font-size:13px;margin-top:18px;border-bottom:1px solid #ccc;padding-bottom:4px}table{width:100%;border-collapse:collapse;margin-top:6px;font-size:12px}td,th{border:1px solid #ccc;padding:5px 8px;text-align:left}.tot{text-align:right;font-weight:700;margin-top:6px}</style></head><body>';
+  html += '<h1>Historique vehicule — '+g.immat+' '+(g.marque||'')+' '+(g.modele||'')+'</h1>';
+  html += '<div>Client : '+compteClient.clientNom+(compteClient.departement?' — '+compteClient.departement:'')+'</div>';
+  html += '<div>'+g.nbVisites+' visite(s) au total — Edite le '+new Date().toLocaleDateString('fr-FR')+'</div>';
+
+  g.passages.forEach(function(p){
+    var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '—';
+    var dateSortie = (p.livraison && LIV_ST.indexOf(p.status)>=0) ? new Date(p.livraison).toLocaleDateString('fr-FR') : 'En cours';
+    var lignes = (p.chiffrage && p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
+    html += '<h2>Visite du '+dateEntree+' au '+dateSortie+'</h2>';
+    if(p.motif) html += '<div>Motif : '+p.motif+'</div>';
+    if(lignes.length){
+      html += '<table><thead><tr><th>Piece</th><th>Qte</th>'+(estForfait?'':'<th>Prix</th>')+'</tr></thead><tbody>';
+      var total = 0;
+      lignes.forEach(function(cl){
+        var lt = (parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);
+        total += lt;
+        html += '<tr><td>'+cl.piece+'</td><td>'+(cl.qte||1)+'</td>'+(estForfait?'':'<td>'+lt.toLocaleString('fr-FR')+' FCFA</td>')+'</tr>';
+      });
+      html += '</tbody></table>';
+      if(!estForfait) html += '<div class="tot">Total visite : '+total.toLocaleString('fr-FR')+' FCFA</div>';
+    }
+  });
+
+  html += '</body></html>';
+  var w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+  setTimeout(function(){ w.print(); }, 300);
+}
+
+// Imprime une facture individuelle (un seul passage), avec prix — jamais
+// utilise pour un vehicule forfait (le bouton n'apparait que pour devis).
+function imprimerFacture(passageId){
+  var p = mesVehicules.find(function(x){return x.id===passageId;});
+  if(!p) return;
+  var lignes = (p.chiffrage && p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
+  var total = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+  var dateFacture = p.chiffrage.valideDirLe || p.chiffrage.soumisLe || p.entree;
+
+  var html = '<html><head><meta charset="utf-8"><title>Facture '+p.immat+'</title>';
+  html += '<style>body{font-family:Arial,sans-serif;padding:24px;color:#1a1a1a}h1{font-size:18px}table{width:100%;border-collapse:collapse;margin-top:14px;font-size:13px}td,th{border:1px solid #ccc;padding:6px 10px;text-align:left}.tot{text-align:right;font-weight:700;margin-top:10px;font-size:14px}</style></head><body>';
+  html += '<h1>Facture — '+(p.immat||'—')+' '+(p.marque||'')+' '+(p.modele||'')+'</h1>';
+  html += '<div>Client : '+compteClient.clientNom+'</div>';
+  html += '<div>Date : '+(dateFacture?new Date(dateFacture).toLocaleDateString('fr-FR'):'—')+'</div>';
+  html += '<table><thead><tr><th>Piece</th><th>Qte</th><th>Prix</th></tr></thead><tbody>';
+  lignes.forEach(function(cl){
+    var lt = (parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);
+    html += '<tr><td>'+cl.piece+'</td><td>'+(cl.qte||1)+'</td><td>'+lt.toLocaleString('fr-FR')+' FCFA</td></tr>';
+  });
+  html += '</tbody></table>';
+  html += '<div class="tot">Total : '+total.toLocaleString('fr-FR')+' FCFA</div>';
+  html += '</body></html>';
+
+  var w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+  setTimeout(function(){ w.print(); }, 300);
 }
 
 function fermerDetail(){
@@ -313,5 +426,6 @@ function deconnexion(){
   });
 }
 </script>
+
 </body>
 </html>
