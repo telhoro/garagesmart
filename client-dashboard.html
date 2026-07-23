@@ -269,8 +269,19 @@ function appliquerFiltres(liste){
 }
 
 function onChangeRecherche(){
-  rechercheTexte = document.getElementById('rechercheInput').value;
+  var input = document.getElementById('rechercheInput');
+  rechercheTexte = input.value;
+  var positionCurseur = input.selectionStart; // sauvegarde avant que le re-rendu ne detruise le champ
   renderDashboard();
+  // Le renderDashboard() reconstruit tout le DOM via innerHTML, ce qui
+  // recree un NOUVEL element <input> sans focus — on le redonne
+  // explicitement, sinon l'utilisateur doit re-cliquer apres chaque
+  // caractere tape.
+  var nouveauInput = document.getElementById('rechercheInput');
+  if(nouveauInput){
+    nouveauInput.focus();
+    nouveauInput.setSelectionRange(positionCurseur, positionCurseur);
+  }
 }
 
 function appliquerPeriode(){
