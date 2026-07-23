@@ -17,7 +17,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .kgrid{display:grid;gap:12px;margin-bottom:20px}
 .k2{grid-template-columns:repeat(2,1fr)}
 .k3{grid-template-columns:repeat(3,1fr)}
-@media (max-width:600px){.k2,.k3{grid-template-columns:1fr 1fr}}
+.k4{grid-template-columns:repeat(4,1fr)}
+@media (max-width:600px){.k2,.k3,.k4{grid-template-columns:1fr 1fr}}
 .kpi{background:#fff;border:1px solid #e8e6e1;border-radius:9px;padding:13px 15px}
 .kpi-lbl{font-size:11px;color:#999;margin-bottom:5px}
 .kpi-val{font-size:19px;font-weight:700}
@@ -113,6 +114,10 @@ var STATUT_LABELS = {
 };
 
 function labelStatut(s){ return STATUT_LABELS[s] || (s||'—'); }
+function formaterDelai(jours){
+  if(jours===null || jours===undefined) return null;
+  return jours<1 ? Math.round(jours*24)+'h' : jours.toFixed(1)+'j';
+}
 function estEnCours(v){ return LIV_ST.indexOf(v.status)<0; }
 
 auth.onAuthStateChanged(function(user){
@@ -180,6 +185,25 @@ function regrouperParImmatriculation(liste){
   });
   return Object.keys(groupes).map(function(key){
     var passages = groupes[key].sort(function(a,b){return (b.entree||0)-(a.entree||0);}); // plus recent d'abord
+
+    // Kilometrage le plus recent connu (le champ km est saisi a chaque
+    // passage ; on prend la valeur du passage le plus recent qui en a une).
+    var dernierKm = null;
+    for(var i=0;i<passages.length;i++){
+      if(passages[i].km){ dernierKm = passages[i].km; break; }
+    }
+
+    // Delai moyen d'immobilisation : uniquement sur les passages termines
+    // (entree ET livraison connues, livraison posterieure a l'entree).
+    var delais = [];
+    passages.forEach(function(p){
+      if(p.entree && p.livraison && p.livraison>p.entree){
+        var jours = (p.livraison-p.entree)/86400000;
+        if(jours>0 && jours<365) delais.push(jours);
+      }
+    });
+    var delaiMoyenJours = delais.length ? (delais.reduce(function(s,d){return s+d;},0)/delais.length) : null;
+
     return {
       immat: key==='sans-immat' ? '' : key,
       marque: passages[0].marque,
@@ -187,7 +211,9 @@ function regrouperParImmatriculation(liste){
       typeClient: passages[0].typeClient,
       passages: passages,
       dernierPassage: passages[0],
-      nbVisites: passages.length
+      nbVisites: passages.length,
+      dernierKm: dernierKm,
+      delaiMoyenJours: delaiMoyenJours
     };
   });
 }
@@ -285,10 +311,13 @@ function renderDashboard(){
       }
     });
 
-    html += '<div class="kgrid k3">';
+    html += '<div class="kgrid k4">';
     html += kpiHtml('Vehicules actifs', vehiculesDevis.length);
     html += kpiHtml('Cout total flotte', coutTotalFlotte.toLocaleString('fr-FR')+' FCFA', '#185FA5');
     html += kpiHtml('Factures impayees', facturesImpayees.toLocaleString('fr-FR')+' FCFA', facturesImpayees>0?'#A32D2D':'#3B6D11');
+    var delaisFlotteDevis = vehiculesDevis.filter(function(g){return g.delaiMoyenJours!==null;}).map(function(g){return g.delaiMoyenJours;});
+    var delaiMoyenFlotteDevis = delaisFlotteDevis.length ? (delaisFlotteDevis.reduce(function(s,d){return s+d;},0)/delaisFlotteDevis.length) : null;
+    html += kpiHtml('Immobilisation moyenne (flotte)', formaterDelai(delaiMoyenFlotteDevis)||'—');
     html += '</div>';
 
     html += '<div class="section-title">Vos vehicules</div>';
@@ -317,12 +346,15 @@ function renderDashboard(){
   }
 
   if(vehiculesForfait.length){
-    html += '<div class="kgrid k2" style="margin-top:'+(vehiculesDevis.length?'24px':'0')+'">';
+    html += '<div class="kgrid k3" style="margin-top:'+(vehiculesDevis.length?'24px':'0')+'">';
     html += kpiHtml('Vehicules en forfait', vehiculesForfait.length);
     var nbInterventionsForfait = vehiculesFiltres.filter(function(v){return v.typeClient==='forfait';}).reduce(function(s,v){
       return s + ((v.chiffrage&&v.chiffrage.lignes) ? v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).length : 0);
     },0);
     html += kpiHtml('Interventions', nbInterventionsForfait);
+    var delaisFlotteForfait = vehiculesForfait.filter(function(g){return g.delaiMoyenJours!==null;}).map(function(g){return g.delaiMoyenJours;});
+    var delaiMoyenFlotteForfait = delaisFlotteForfait.length ? (delaisFlotteForfait.reduce(function(s,d){return s+d;},0)/delaisFlotteForfait.length) : null;
+    html += kpiHtml('Immobilisation moyenne (flotte)', formaterDelai(delaiMoyenFlotteForfait)||'—');
     html += '</div>';
 
     html += '<div class="section-title">Vos vehicules (forfait)</div>';
@@ -351,12 +383,22 @@ function renderVehiculeCardDevis(g){
   html += '<div class="vcard-head"><div>';
   html += '<div class="vcard-immat">'+(g.immat||'—')+' — '+(g.marque||'')+' '+(g.modele||'')+'</div>';
   html += '<div class="vcard-modele"><span class="badge '+statutClasse+'">'+labelStatut(v.status)+'</span> <span class="xs muted">&middot; '+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+' a l\'atelier</span></div>';
+  html += renderInfosVehicule(g);
   html += '</div><button class="btn-detail" onclick="ouvrirHistoriqueVehicule(\''+g.immat+'\')">Historique complet</button></div>';
   if(coutTotalImmat>0){
     html += '<div class="vcard-foot">Cout total (toutes visites) sur ce vehicule : <strong>'+coutTotalImmat.toLocaleString('fr-FR')+' FCFA</strong></div>';
   }
   html += '</div>';
   return html;
+}
+
+function renderInfosVehicule(g){
+  var delaiFormate = formaterDelai(g.delaiMoyenJours);
+  var parts = [];
+  if(g.dernierKm) parts.push(g.dernierKm.toLocaleString('fr-FR')+' km');
+  if(delaiFormate) parts.push('Immobilisation moyenne : '+delaiFormate);
+  if(!parts.length) return '';
+  return '<div class="xs muted" style="margin-top:3px">'+parts.join(' &middot; ')+'</div>';
 }
 
 function renderVehiculeCardForfait(g){
@@ -367,6 +409,7 @@ function renderVehiculeCardForfait(g){
   html += '<div class="vcard-head"><div>';
   html += '<div class="vcard-immat">'+(g.immat||'—')+' — '+(g.marque||'')+' '+(g.modele||'')+'</div>';
   html += '<div class="vcard-modele"><span class="badge '+statutClasse+'">'+labelStatut(v.status)+'</span> <span class="xs muted">&middot; '+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+' a l\'atelier</span></div>';
+  html += renderInfosVehicule(g);
   html += '</div><button class="btn-detail" onclick="ouvrirHistoriqueVehicule(\''+g.immat+'\')">Historique complet</button></div>';
   if(v.chiffrage && v.chiffrage.lignes){
     var pieces = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
@@ -482,8 +525,11 @@ function imprimerToutHistorique(){
   html += '<style>body{font-family:Arial,sans-serif;padding:24px;color:#1a1a1a}';
   html += 'h1{font-size:18px}h2{font-size:14px;margin-top:14px}h3{font-size:12.5px;margin-top:14px;border-bottom:1px solid #ccc;padding-bottom:4px}';
   html += 'table{width:100%;border-collapse:collapse;margin-top:6px;font-size:12px}td,th{border:1px solid #ccc;padding:5px 8px;text-align:left}';
-  html += '.tot{text-align:right;font-weight:700;margin-top:6px}.vehicule-bloc{page-break-after:always;padding-bottom:20px}';
-  html += '.vehicule-bloc:last-child{page-break-after:auto}</style></head><body>';
+  html += '.tot{text-align:right;font-weight:700;margin-top:6px}';
+  html += '.vehicule-bloc{page-break-after:always;break-after:page;padding-bottom:20px}';
+  html += '.vehicule-bloc:last-child{page-break-after:auto;break-after:auto}';
+  html += '@media print{.vehicule-bloc{page-break-after:always;break-after:page}.vehicule-bloc:last-child{page-break-after:avoid;break-after:avoid}}';
+  html += '</style></head><body>';
 
   html += '<h1>Historique complet — '+compteClient.clientNom+(compteClient.departement?' — '+compteClient.departement:'')+'</h1>';
   html += '<div>'+groupes.length+' vehicule(s) — Edite le '+new Date().toLocaleDateString('fr-FR')+'</div>';
