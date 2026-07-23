@@ -568,7 +568,20 @@ function ouvrirHistoriqueVehicule(immat){
 
   var html = '<button class="detail-close" onclick="fermerDetail()">&#10005;</button>';
   html += '<h3>'+(g.immat||'—')+' — '+(g.marque||'')+' '+(g.modele||'')+'</h3>';
-  html += '<div style="margin-bottom:14px" class="xs muted">'+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+' a l\'atelier au total</div>';
+
+  // Nombre total d'interventions (pieces posees, toutes visites confondues)
+  var nbInterventionsTotal = g.passages.reduce(function(s,p){
+    return s + ((p.chiffrage&&p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).length : 0);
+  },0);
+  var tauxRetour = g.nbVisites ? Math.round((g.nbRetours/g.nbVisites)*100) : 0;
+
+  html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px">';
+  html += '<span class="badge b-gray">'+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+'</span>';
+  html += '<span class="badge b-gray">'+nbInterventionsTotal+' intervention'+(nbInterventionsTotal>1?'s':'')+'</span>';
+  if(g.dernierKm) html += '<span class="badge b-gray">'+g.dernierKm.toLocaleString('fr-FR')+' km</span>';
+  if(g.delaiMoyenJours!==null) html += '<span class="badge b-gray">Immobilisation moyenne : '+formaterDelai(g.delaiMoyenJours)+'</span>';
+  html += '<span class="badge '+(g.nbRetours>0?'b-red':'b-green')+'">Taux de retour : '+tauxRetour+'%'+(g.nbRetours>0?' ('+g.nbRetours+'/'+g.nbVisites+')':'')+'</span>';
+  html += '</div>';
 
   g.passages.forEach(function(p, idx){
     var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '—';
@@ -585,6 +598,17 @@ function ouvrirHistoriqueVehicule(immat){
     html += '</div>';
     if(p.motif){
       html += '<div class="xs" style="margin-bottom:6px"><span class="muted">Motif :</span> '+p.motif+'</div>';
+    }
+    var infosPassage = [];
+    if(p.km) infosPassage.push(p.km.toLocaleString('fr-FR')+' km');
+    if(p.entree && p.livraison && p.livraison>p.entree){
+      infosPassage.push('Immobilise : '+formaterDelai((p.livraison-p.entree)/86400000));
+    }
+    if(p.nature==='Retour client'){
+      infosPassage.push('<span style="color:#A32D2D;font-weight:600">Retour client</span>');
+    }
+    if(infosPassage.length){
+      html += '<div class="xs muted" style="margin-bottom:6px">'+infosPassage.join(' &middot; ')+'</div>';
     }
     if(lignes.length){
       html += '<div class="xs muted" style="margin-bottom:4px">Travaux effectues :</div>';
@@ -612,10 +636,20 @@ function imprimerHistorique(immat){
   var estForfait = g.typeClient==='forfait';
 
   var html = '<html><head><meta charset="utf-8"><title>Historique '+g.immat+'</title>';
-  html += '<style>body{font-family:Arial,sans-serif;padding:24px;color:#1a1a1a}h1{font-size:18px}h2{font-size:13px;margin-top:18px;border-bottom:1px solid #ccc;padding-bottom:4px}table{width:100%;border-collapse:collapse;margin-top:6px;font-size:12px}td,th{border:1px solid #ccc;padding:5px 8px;text-align:left}.tot{text-align:right;font-weight:700;margin-top:6px}</style></head><body>';
+  html += '<style>body{font-family:Arial,sans-serif;padding:24px;color:#1a1a1a}h1{font-size:18px}h2{font-size:13px;margin-top:18px;border-bottom:1px solid #ccc;padding-bottom:4px}table{width:100%;border-collapse:collapse;margin-top:6px;font-size:12px}td,th{border:1px solid #ccc;padding:5px 8px;text-align:left}.tot{text-align:right;font-weight:700;margin-top:6px}.resume{margin-top:10px;font-size:12px;color:#444}</style></head><body>';
   html += '<h1>Historique vehicule — '+g.immat+' '+(g.marque||'')+' '+(g.modele||'')+'</h1>';
   html += '<div>Client : '+compteClient.clientNom+(compteClient.departement?' — '+compteClient.departement:'')+'</div>';
   html += '<div>'+g.nbVisites+' visite(s) au total — Edite le '+new Date().toLocaleDateString('fr-FR')+'</div>';
+
+  var nbInterventionsTotal = g.passages.reduce(function(s,p){
+    return s + ((p.chiffrage&&p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).length : 0);
+  },0);
+  var tauxRetour = g.nbVisites ? Math.round((g.nbRetours/g.nbVisites)*100) : 0;
+  html += '<div class="resume">'+nbInterventionsTotal+' intervention(s)'
+    + (g.dernierKm?' &middot; '+g.dernierKm.toLocaleString('fr-FR')+' km':'')
+    + (g.delaiMoyenJours!==null?' &middot; Immobilisation moyenne : '+formaterDelai(g.delaiMoyenJours):'')
+    + ' &middot; Taux de retour : '+tauxRetour+'%'+(g.nbRetours>0?' ('+g.nbRetours+'/'+g.nbVisites+')':'')
+    + '</div>';
 
   g.passages.forEach(function(p){
     var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '—';
@@ -623,6 +657,13 @@ function imprimerHistorique(immat){
     var lignes = (p.chiffrage && p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
     html += '<h2>Visite du '+dateEntree+' au '+dateSortie+'</h2>';
     if(p.motif) html += '<div>Motif : '+p.motif+'</div>';
+    var infosPassage = [];
+    if(p.km) infosPassage.push(p.km.toLocaleString('fr-FR')+' km');
+    if(p.entree && p.livraison && p.livraison>p.entree){
+      infosPassage.push('Immobilise : '+formaterDelai((p.livraison-p.entree)/86400000));
+    }
+    if(p.nature==='Retour client') infosPassage.push('Retour client');
+    if(infosPassage.length) html += '<div>'+infosPassage.join(' — ')+'</div>';
     if(lignes.length){
       html += '<table><thead><tr><th>Piece</th><th>Qte</th>'+(estForfait?'':'<th>Prix</th>')+'</tr></thead><tbody>';
       var total = 0;
@@ -673,12 +714,29 @@ function imprimerToutHistorique(){
     html += '<div class="vehicule-bloc">';
     html += '<h2>'+g.immat+' — '+(g.marque||'')+' '+(g.modele||'')+' ('+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+')</h2>';
 
+    var nbInterventionsTotal = g.passages.reduce(function(s,p){
+      return s + ((p.chiffrage&&p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).length : 0);
+    },0);
+    var tauxRetour = g.nbVisites ? Math.round((g.nbRetours/g.nbVisites)*100) : 0;
+    html += '<div style="font-size:12px;color:#444;margin-bottom:8px">'+nbInterventionsTotal+' intervention(s)'
+      + (g.dernierKm?' &middot; '+g.dernierKm.toLocaleString('fr-FR')+' km':'')
+      + (g.delaiMoyenJours!==null?' &middot; Immobilisation moyenne : '+formaterDelai(g.delaiMoyenJours):'')
+      + ' &middot; Taux de retour : '+tauxRetour+'%'+(g.nbRetours>0?' ('+g.nbRetours+'/'+g.nbVisites+')':'')
+      + '</div>';
+
     g.passages.forEach(function(p){
       var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '—';
       var dateSortie = (p.livraison && LIV_ST.indexOf(p.status)>=0) ? new Date(p.livraison).toLocaleDateString('fr-FR') : 'En cours';
       var lignes = (p.chiffrage && p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
       html += '<h3>Visite du '+dateEntree+' au '+dateSortie+'</h3>';
       if(p.motif) html += '<div>Motif : '+p.motif+'</div>';
+      var infosPassage = [];
+      if(p.km) infosPassage.push(p.km.toLocaleString('fr-FR')+' km');
+      if(p.entree && p.livraison && p.livraison>p.entree){
+        infosPassage.push('Immobilise : '+formaterDelai((p.livraison-p.entree)/86400000));
+      }
+      if(p.nature==='Retour client') infosPassage.push('Retour client');
+      if(infosPassage.length) html += '<div>'+infosPassage.join(' — ')+'</div>';
       if(lignes.length){
         html += '<table><thead><tr><th>Piece</th><th>Qte</th>'+(estForfait?'':'<th>Prix</th>')+'</tr></thead><tbody>';
         var total = 0;
