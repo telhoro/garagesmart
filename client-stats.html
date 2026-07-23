@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>GarageOS — Statistiques</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f5f4f1;color:#1a1a1a;min-height:100vh}
+.topbar{background:#fff;border-bottom:1px solid #e8e6e1;padding:14px 20px;display:flex;justify-content:space-between;align-items:center}
+.topbar-left{display:flex;align-items:center;gap:10px}
+.logo-icon{width:32px;height:32px;background:#185FA5;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px;font-weight:700}
+.client-name{font-weight:700;font-size:15px}
+.client-sub{font-size:11px;color:#999}
+.btn-top{border:1px solid #d0cec9;border-radius:7px;padding:6px 12px;font-size:12px;background:#fff;cursor:pointer;color:#1a1a1a;text-decoration:none;display:inline-block}
+.container{max-width:1100px;margin:0 auto;padding:20px}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+.date-input{padding:8px 10px;border:1px solid #d0cec9;border-radius:8px;font-size:12px;font-family:inherit}
+.btn-filter{border:1px solid #d0cec9;border-radius:8px;padding:8px 14px;font-size:12px;background:#fff;cursor:pointer;color:#1a1a1a}
+.btn-filter.active{background:#185FA5;color:#fff;border-color:#185FA5}
+.btn-action{border:none;border-radius:8px;padding:9px 16px;font-size:12.5px;font-weight:600;cursor:pointer;color:#fff}
+.btn-export{background:#185FA5}
+.btn-print{background:#3B6D11}
+.filter-label{font-size:11px;color:#999}
+.kgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+@media (max-width:700px){.kgrid{grid-template-columns:1fr 1fr}}
+.kpi{background:#fff;border:1px solid #e8e6e1;border-radius:9px;padding:13px 15px}
+.kpi-lbl{font-size:11px;color:#999;margin-bottom:5px}
+.kpi-val{font-size:19px;font-weight:700}
+table{width:100%;border-collapse:collapse;font-size:12.5px;background:#fff;border-radius:9px;overflow:hidden;border:1px solid #e8e6e1}
+th{text-align:left;padding:10px 12px;font-size:11px;color:#666;font-weight:600;background:#f5f4f1;cursor:pointer;user-select:none;white-space:nowrap}
+th:hover{background:#ebe9e4}
+th.sorted-asc::after{content:' \25B2';font-size:9px}
+th.sorted-desc::after{content:' \25BC';font-size:9px}
+td{padding:9px 12px;border-top:1px solid #f0ede8}
+.empty{text-align:center;padding:40px;color:#999;font-size:13px}
+.loading{text-align:center;padding:60px 20px;color:#999}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="logo-icon">G</div>
+    <div>
+      <div class="client-name" id="topClientName">—</div>
+      <div class="client-sub" id="topClientSub">—</div>
+    </div>
+  </div>
+  <a class="btn-top" href="client-dashboard.html">&larr; Retour au tableau de bord</a>
+</div>
+
+<div class="container" id="mainContent">
+  <div class="loading">Chargement...</div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+var firebaseConfig = {
+  apiKey: "AIzaSyDJncdc6aaiOO0Nl3_bGQ-8peSVa8gdmMU",
+  authDomain: "garage-smart-erp.firebaseapp.com",
+  projectId: "garage-smart-erp",
+  storageBucket: "garage-smart-erp.firebasestorage.app",
+  messagingSenderId: "200279404694",
+  appId: "1:200279404694:web:ab323a97692797967952b7",
+  databaseURL: "https://garage-smart-erp-default-rtdb.firebaseio.com"
+};
+firebase.initializeApp(firebaseConfig);
+var auth = firebase.auth();
+var db = firebase.database();
+
+var compteClient = null;
+var mesVehicules = [];
+var LIV_ST = ['livre','facture_deposee','dossier_cloture'];
+
+var periodeFiltre = 'tout';
+var periodeDebut = null;
+var periodeFin = null;
+var triColonne = 'immat';
+var triSens = 'asc';
+
+function estEnCours(v){ return LIV_ST.indexOf(v.status)<0; }
+function formaterDelai(jours){
+  if(jours===null || jours===undefined) return null;
+  return jours<1 ? Math.round(jours*24)+'h' : jours.toFixed(1)+'j';
+}
+
+auth.onAuthStateChanged(function(user){
+  if(!user){ window.location.href = 'client.html'; return; }
+  chargerProfilEtDonnees(user.uid);
+});
+
+function chargerProfilEtDonnees(uid){
+  db.ref('gos_client_accounts/'+uid).once('value').then(function(snap){
+    if(!snap.exists()){ afficherErreurGenerale('Profil client introuvable. Contactez le garage.'); return; }
+    compteClient = snap.val();
+    document.getElementById('topClientName').textContent = compteClient.clientNom;
+    document.getElementById('topClientSub').textContent = compteClient.departement ? 'Departement : '+compteClient.departement : 'Vue globale';
+    chargerVehicules();
+  }).catch(function(){ afficherErreurGenerale('Erreur de connexion au serveur.'); });
+}
+
+function chargerVehicules(){
+  db.ref('gos_data/vehicles').once('value').then(function(snap){
+    var raw = snap.val();
+    var tous = [];
+    try{ tous = JSON.parse(raw)||[]; }catch(e){ tous = []; }
+    mesVehicules = tous.filter(function(v){
+      if(v.client !== compteClient.clientNom) return false;
+      if((v.tel||'') !== (compteClient.clientTel||'')) return false;
+      if(compteClient.departement) return (v.departements||[]).indexOf(compteClient.departement) >= 0;
+      return true;
+    });
+    renderPage();
+  }).catch(function(){ afficherErreurGenerale('Erreur de chargement des donnees.'); });
+}
+
+function afficherErreurGenerale(msg){
+  document.getElementById('mainContent').innerHTML = '<div class="empty">'+msg+'</div>';
+}
+
+function regrouperParImmatriculation(liste){
+  var groupes = {};
+  liste.forEach(function(v){
+    var key = (v.immat||'sans-immat').toUpperCase();
+    if(!groupes[key]) groupes[key] = [];
+    groupes[key].push(v);
+  });
+  return Object.keys(groupes).map(function(key){
+    var passages = groupes[key].sort(function(a,b){return (b.entree||0)-(a.entree||0);});
+
+    var dernierKm = null;
+    for(var i=0;i<passages.length;i++){
+      if(passages[i].km){ dernierKm = passages[i].km; break; }
+    }
+
+    var delais = [];
+    passages.forEach(function(p){
+      if(p.entree && p.livraison && p.livraison>p.entree){
+        var jours = (p.livraison-p.entree)/86400000;
+        if(jours>0 && jours<365) delais.push(jours);
+      }
+    });
+    var delaiMoyenJours = delais.length ? (delais.reduce(function(s,d){return s+d;},0)/delais.length) : null;
+
+    var nbRetours = passages.filter(function(p){return p.nature==='Retour client';}).length;
+
+    var ageAnnees = null;
+    for(var j=0;j<passages.length;j++){
+      var p = passages[j];
+      if(p.mec){
+        var dMec = new Date(p.mec);
+        if(!isNaN(dMec.getTime())){ ageAnnees = (Date.now()-dMec.getTime())/(365.25*86400000); break; }
+      }
+      if(p.annee && !isNaN(parseInt(p.annee,10))){ ageAnnees = new Date().getFullYear() - parseInt(p.annee,10); break; }
+    }
+
+    var coutTotal = 0;
+    if(passages[0].typeClient!=='forfait'){
+      passages.forEach(function(p){
+        if(p.chiffrage && p.chiffrage.lignes){
+          coutTotal += p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();})
+            .reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+        }
+      });
+    }
+
+    return {
+      immat: key==='sans-immat' ? '' : key,
+      marque: passages[0].marque, modele: passages[0].modele, typeClient: passages[0].typeClient,
+      passages: passages, dernierPassage: passages[0],
+      ageAnnees: ageAnnees, nbVisites: passages.length, dernierKm: dernierKm,
+      delaiMoyenJours: delaiMoyenJours, nbRetours: nbRetours, coutTotal: coutTotal
+    };
+  });
+}
+
+function appliquerFiltrePeriode(liste){
+  if(periodeFiltre!=='custom' || !periodeDebut || !periodeFin) return liste;
+  return liste.filter(function(v){
+    var d = v.entree || 0;
+    return d>=periodeDebut && d<=periodeFin;
+  });
+}
+
+function appliquerPeriode(){
+  var deb = document.getElementById('periodeDebutInput').value;
+  var fin = document.getElementById('periodeFinInput').value;
+  if(!deb || !fin){ alert('Selectionnez les deux dates.'); return; }
+  periodeDebut = new Date(deb).setHours(0,0,0,0);
+  periodeFin = new Date(fin).setHours(23,59,59,999);
+  periodeFiltre = 'custom';
+  renderPage();
+}
+
+function reinitialiserPeriode(){
+  periodeFiltre = 'tout'; periodeDebut = null; periodeFin = null;
+  renderPage();
+}
+
+function trierPar(colonne){
+  if(triColonne===colonne){
+    triSens = triSens==='asc' ? 'desc' : 'asc';
+  } else {
+    triColonne = colonne;
+    triSens = 'asc';
+  }
+  renderPage();
+}
+
+function valeurTri(g, colonne){
+  switch(colonne){
+    case 'immat': return g.immat||'';
+    case 'marque': return (g.marque||'')+' '+(g.modele||'');
+    case 'age': return g.ageAnnees===null ? -1 : g.ageAnnees;
+    case 'visites': return g.nbVisites;
+    case 'km': return g.dernierKm||0;
+    case 'immobilisation': return g.delaiMoyenJours===null ? -1 : g.delaiMoyenJours;
+    case 'retours': return g.nbRetours;
+    case 'montant': return g.coutTotal;
+    default: return '';
+  }
+}
+
+function trierGroupes(groupes){
+  groupes.sort(function(a,b){
+    var va = valeurTri(a, triColonne), vb = valeurTri(b, triColonne);
+    var cmp = (typeof va==='string') ? va.localeCompare(vb) : (va-vb);
+    return triSens==='asc' ? cmp : -cmp;
+  });
+  return groupes;
+}
+
+function renderPage(){
+  var vehiculesFiltres = appliquerFiltrePeriode(mesVehicules);
+  var groupes = trierGroupes(regrouperParImmatriculation(vehiculesFiltres));
+  var estForfait = groupes.length && groupes.every(function(g){return g.typeClient==='forfait';});
+  var estMixte = groupes.some(function(g){return g.typeClient==='forfait';}) && groupes.some(function(g){return g.typeClient!=='forfait';});
+
+  var html = '<div class="toolbar">';
+  html += '<span class="filter-label">Periode :</span>';
+  html += '<input type="date" class="date-input" id="periodeDebutInput" value="'+(periodeDebut?new Date(periodeDebut).toISOString().slice(0,10):'')+'">';
+  html += '<span class="filter-label">a</span>';
+  html += '<input type="date" class="date-input" id="periodeFinInput" value="'+(periodeFin?new Date(periodeFin).toISOString().slice(0,10):'')+'">';
+  html += '<button class="btn-filter'+(periodeFiltre==='custom'?' active':'')+'" onclick="appliquerPeriode()">Appliquer</button>';
+  if(periodeFiltre==='custom') html += '<button class="btn-filter" onclick="reinitialiserPeriode()">Reinitialiser</button>';
+  html += '<button class="btn-action btn-export" onclick="exporterStatsExcel()">&#128202; Exporter Excel</button>';
+  html += '<button class="btn-action btn-print" onclick="imprimerStats()">&#128424; Imprimer</button>';
+  html += '</div>';
+
+  if(!groupes.length){
+    html += '<div class="empty">Aucun vehicule sur cette periode.</div>';
+    document.getElementById('mainContent').innerHTML = html;
+    return;
+  }
+
+  var ages = groupes.filter(function(g){return g.ageAnnees!==null;}).map(function(g){return g.ageAnnees;});
+  var ageMoyen = ages.length ? (ages.reduce(function(s,a){return s+a;},0)/ages.length) : null;
+  var kms = groupes.filter(function(g){return g.dernierKm;}).map(function(g){return g.dernierKm;});
+  var kmMoyen = kms.length ? Math.round(kms.reduce(function(s,k){return s+k;},0)/kms.length) : null;
+  var totalRetours = groupes.reduce(function(s,g){return s+g.nbRetours;},0);
+  var totalDepense = groupes.reduce(function(s,g){return s+g.coutTotal;},0);
+
+  html += '<div class="kgrid">';
+  html += '<div class="kpi"><div class="kpi-lbl">Vehicules</div><div class="kpi-val">'+groupes.length+'</div></div>';
+  html += '<div class="kpi"><div class="kpi-lbl">Age moyen</div><div class="kpi-val">'+(ageMoyen!==null?ageMoyen.toFixed(1)+' an'+(ageMoyen>=2?'s':''):'—')+'</div></div>';
+  html += '<div class="kpi"><div class="kpi-lbl">Kilometrage moyen</div><div class="kpi-val">'+(kmMoyen!==null?kmMoyen.toLocaleString('fr-FR')+' km':'—')+'</div></div>';
+  if(!estForfait){
+    html += '<div class="kpi"><div class="kpi-lbl">Total depense</div><div class="kpi-val" style="color:#185FA5">'+totalDepense.toLocaleString('fr-FR')+' FCFA</div></div>';
+  } else {
+    html += '<div class="kpi"><div class="kpi-lbl">Retours</div><div class="kpi-val" style="color:'+(totalRetours>0?'#A32D2D':'#3B6D11')+'">'+totalRetours+'</div></div>';
+  }
+  html += '</div>';
+
+  function thSort(label, colonne){
+    var classe = triColonne===colonne ? (triSens==='asc'?'sorted-asc':'sorted-desc') : '';
+    return '<th class="'+classe+'" onclick="trierPar(\''+colonne+'\')">'+label+'</th>';
+  }
+
+  html += '<table><thead><tr>';
+  html += thSort('Vehicule','immat');
+  html += thSort('Marque / Modele','marque');
+  html += thSort('Age','age');
+  html += thSort('Visites','visites');
+  html += thSort('Km','km');
+  html += thSort('Immobilisation moy.','immobilisation');
+  html += thSort('Retours','retours');
+  if(!estForfait || estMixte) html += thSort('Montant depense','montant');
+  html += '</tr></thead><tbody>';
+
+  groupes.forEach(function(g){
+    var estF = g.typeClient==='forfait';
+    html += '<tr>';
+    html += '<td><strong>'+(g.immat||'—')+'</strong></td>';
+    html += '<td>'+(g.marque||'')+' '+(g.modele||'')+'</td>';
+    html += '<td>'+(g.ageAnnees!==null?g.ageAnnees.toFixed(1)+' an'+(g.ageAnnees>=2?'s':''):'—')+'</td>';
+    html += '<td>'+g.nbVisites+'</td>';
+    html += '<td>'+(g.dernierKm?g.dernierKm.toLocaleString('fr-FR'):'—')+'</td>';
+    html += '<td>'+(g.delaiMoyenJours!==null?formaterDelai(g.delaiMoyenJours):'—')+'</td>';
+    html += '<td'+(g.nbRetours>0?' style="color:#A32D2D;font-weight:600"':'')+'>'+g.nbRetours+'</td>';
+    if(!estForfait || estMixte){
+      html += '<td>'+(estF?'—':(g.coutTotal?g.coutTotal.toLocaleString('fr-FR')+' FCFA':'—'))+'</td>';
+    }
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+
+  document.getElementById('mainContent').innerHTML = html;
+}
+
+function exporterStatsExcel(){
+  var vehiculesFiltres = appliquerFiltrePeriode(mesVehicules);
+  var groupes = trierGroupes(regrouperParImmatriculation(vehiculesFiltres));
+  if(!groupes.length){ alert('Aucune donnee a exporter.'); return; }
+
+  var rows = groupes.map(function(g){
+    var estF = g.typeClient==='forfait';
+    var ligne = {
+      'Vehicule': g.immat, 'Marque': g.marque||'', 'Modele': g.modele||'',
+      'Age (annees)': g.ageAnnees!==null?Number(g.ageAnnees.toFixed(1)):'',
+      'Visites': g.nbVisites, 'Km': g.dernierKm||'',
+      'Immobilisation moyenne': g.delaiMoyenJours!==null?formaterDelai(g.delaiMoyenJours):'',
+      'Retours': g.nbRetours
+    };
+    if(!estF) ligne['Montant depense (FCFA)'] = g.coutTotal||0;
+    return ligne;
+  });
+
+  var ws = XLSX.utils.json_to_sheet(rows);
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Statistiques');
+  XLSX.writeFile(wb, 'Statistiques_'+(compteClient.clientNom||'client').replace(/[^a-zA-Z0-9_-]/g,'_')+'.xlsx');
+}
+
+function imprimerStats(){
+  var vehiculesFiltres = appliquerFiltrePeriode(mesVehicules);
+  var groupes = trierGroupes(regrouperParImmatriculation(vehiculesFiltres));
+  if(!groupes.length){ alert('Aucune donnee a imprimer.'); return; }
+  var estForfaitGlobal = groupes.every(function(g){return g.typeClient==='forfait';});
+
+  var html = '<html><head><meta charset="utf-8"><title>Statistiques — '+compteClient.clientNom+'</title>';
+  html += '<style>body{font-family:Arial,sans-serif;padding:24px;color:#1a1a1a}h1{font-size:18px}table{width:100%;border-collapse:collapse;margin-top:14px;font-size:12px}td,th{border:1px solid #ccc;padding:6px 8px;text-align:left}</style></head><body>';
+  html += '<h1>Statistiques vehicules — '+compteClient.clientNom+(compteClient.departement?' — '+compteClient.departement:'')+'</h1>';
+  html += '<div>'+groupes.length+' vehicule(s) — Edite le '+new Date().toLocaleDateString('fr-FR')+'</div>';
+  if(periodeFiltre==='custom') html += '<div>Periode : '+new Date(periodeDebut).toLocaleDateString('fr-FR')+' au '+new Date(periodeFin).toLocaleDateString('fr-FR')+'</div>';
+
+  html += '<table><thead><tr><th>Vehicule</th><th>Marque/Modele</th><th>Age</th><th>Visites</th><th>Km</th><th>Immobilisation moy.</th><th>Retours</th>'+(estForfaitGlobal?'':'<th>Montant depense</th>')+'</tr></thead><tbody>';
+  groupes.forEach(function(g){
+    var estF = g.typeClient==='forfait';
+    html += '<tr><td>'+(g.immat||'—')+'</td><td>'+(g.marque||'')+' '+(g.modele||'')+'</td>';
+    html += '<td>'+(g.ageAnnees!==null?g.ageAnnees.toFixed(1)+' an'+(g.ageAnnees>=2?'s':''):'—')+'</td>';
+    html += '<td>'+g.nbVisites+'</td><td>'+(g.dernierKm?g.dernierKm.toLocaleString('fr-FR'):'—')+'</td>';
+    html += '<td>'+(g.delaiMoyenJours!==null?formaterDelai(g.delaiMoyenJours):'—')+'</td><td>'+g.nbRetours+'</td>';
+    if(!estForfaitGlobal) html += '<td>'+(estF?'—':(g.coutTotal?g.coutTotal.toLocaleString('fr-FR')+' FCFA':'—'))+'</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></body></html>';
+
+  var w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+  setTimeout(function(){ w.print(); }, 300);
+}
+</script>
+</body>
+</html>
