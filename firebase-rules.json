@@ -1,0 +1,57 @@
+{
+  "rules": {
+    "gos_client_accounts": {
+      ".read": "auth == null",
+      ".write": "auth == null",
+      "$uid": {
+        ".read": "auth == null || auth.uid == $uid"
+      }
+    },
+    "gos_messages": {
+      ".read": "auth == null",
+      ".write": "auth == null",
+      "$uid": {
+        ".read": "auth == null || auth.uid == $uid",
+        ".write": "auth == null || auth.uid == $uid"
+      }
+    },
+    "gos_data": {
+      ".read": true,
+      ".write": "auth == null"
+    },
+    "gos_comptes": {
+      ".read": "auth == null",
+      ".write": "auth == null"
+    },
+    "gos_personnel": {
+      ".read": "auth == null",
+      ".write": "auth == null"
+    },
+    "gos_fournisseurs": {
+      ".read": "auth == null",
+      ".write": "auth == null"
+    },
+    "gos_stock": {
+      ".read": "auth == null",
+      ".write": "auth == null"
+    },
+    "gos_forfaits_clients": {
+      ".read": "auth == null",
+      ".write": "auth == null"
+    },
+    "gos_forfait_factures": {
+      ".read": "auth == null",
+      ".write": "auth == null"
+    },
+    "gos_charges_fixes": {
+      ".read": "auth == null",
+      ".write": "auth == null"
+    },
+    "gos_engagements_bancaires": {
+      ".read": "auth == null",
+      ".write": "auth == null"
+    },
+    ".read": "auth == null",
+    ".write": "auth == null"
+  }
+}

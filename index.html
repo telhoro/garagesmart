@@ -729,7 +729,7 @@ tr:hover td{background:#faf9f7}
 <!-- MODAL DETAIL -->
 <div class="overlay" id="modalDet" style="display:none" onclick="if(event.target===this)confirmerFermetureDet()">
 <div class="modal modal-xl">
-  <div class="mhead"><h2 id="detTitle">Detail</h2><div class="flex gap6"><button class="btn btn-sm" id="btnPhotos" style="color:#185FA5;border-color:#B5D4F4" onclick="photosVisible=!photosVisible;openDetKeepEdit(detCurrentVid)">&#x1F4F7; Photos</button><button class="btn btn-sm" onclick="imprimerDetCourant()" title="Imprimer devis/facture">&#x1F5A8;</button><button class="btn btn-sm" onclick="imprimerFicheEntree(detCurrentVid)" title="Fiche d'entree" style="color:#3B6D11;border-color:#3B6D11">&#x1F4CB; Fiche</button><button class="btn btn-sm" id="btnCommentaires" onclick="ouvrirCommentaires(detCurrentVid)" title="Commentaires" style="color:#854F0B;border-color:#E8A44A">&#x1F4AC;</button><button class="btn btn-sm" onclick="closeDet()">X</button></div></div>
+  <div class="mhead"><h2 id="detTitle">Detail</h2><div class="flex gap6"><button class="btn btn-sm" id="btnPhotos" style="color:#185FA5;border-color:#B5D4F4" onclick="photosVisible=!photosVisible;openDetKeepEdit(detCurrentVid)">&#x1F4F7; Photos</button><button class="btn btn-sm" onclick="imprimerDetCourant()" title="Imprimer devis/facture">&#x1F5A8;</button><button class="btn btn-sm" onclick="imprimerFicheEntree(detCurrentVid)" title="Fiche d'entree" style="color:#3B6D11;border-color:#3B6D11">&#x1F4CB; Fiche</button><button class="btn btn-sm" id="btnCommentaires" onclick="ouvrirCommentaires(detCurrentVid)" title="Commentaires" style="color:#854F0B;border-color:#E8A44A">&#x1F4AC;</button><button class="btn btn-sm" id="btnMessageClient" onclick="ouvrirConversationDepuisFiche(detCurrentVid)" title="Message client" style="color:#185FA5;border-color:#B5D4F4">&#x1F310; Message client</button><button class="btn btn-sm" onclick="closeDet()">X</button></div></div>
   <div class="mbody" id="detBody"></div>
   <div class="mfoot" id="detFoot"></div>
 </div>
@@ -1790,19 +1790,20 @@ function initFournisseurs(){
 
 var NAV = {
   direction:[
-    {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'},{id:'acces_clients',e:'AC',l:'Acces clients'}]},
+    {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'},{id:'acces_clients',e:'AC',l:'Acces clients'},{id:'messages_clients',e:'MC',l:'Messages clients'}]},
     {l:'Finances',items:[{id:'finances_dashboard',e:'FD',l:'Tableau de bord'},{id:'facturation',e:'F',l:'Facturation'},{id:'dettes_fournisseurs',e:'DF',l:'Dettes fournisseurs'},{id:'prevision_treso',e:'PT',l:'Prevision tresorerie'}]},
     {l:'Rentabilite',items:[{id:'rentabilite',e:'RD',l:'Clients Devis'},{id:'rentabilite_forfait',e:'RF',l:'Clients Forfait'},{id:'analyse_pieces',e:'AP',l:'Analyse pieces'}]},
     {l:'Gestion',items:[{id:'archives',e:'Ar',l:'Archives'},{id:'banques',e:'B',l:'Banques'},{id:'charges_fixes',e:'CF',l:'Charges fixes'},{id:'engagements_bancaires',e:'EB',l:'Engagements bancaires'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'stock',e:'St',l:'Gestion du stock'},{id:'travaux_prevoir',e:'TP',l:'Travaux a prevoir'},{id:'devis_differes',e:'DD',l:'Devis differes'},{id:'sinistres',e:'S',l:'Sinistres'},{id:'val_fin',e:'VF',l:'Validation financiere'},{id:'kpi',e:'K',l:'KPI'}]}
   ],
   reception:[
     {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'historique',e:'H',l:'Historique'}]},
-    {l:'Clients',items:[{id:'clients',e:'C',l:'Clients et vehicules'}]},
+    {l:'Clients',items:[{id:'clients',e:'C',l:'Clients et vehicules'},{id:'messages_clients',e:'MC',l:'Messages clients'}]},
     {l:'Suivi',items:[{id:'devis_differes',e:'DD',l:'Devis differes'}]}
   ],
   chef_atelier:[
     {l:'Atelier',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'}]},
-    {l:'Equipes',items:[{id:'equipes',e:'E',l:'Equipes et techniciens'}]}
+    {l:'Equipes',items:[{id:'equipes',e:'E',l:'Equipes et techniciens'}]},
+    {l:'Clients',items:[{id:'messages_clients',e:'MC',l:'Messages clients'}]}
   ],
   chef_equipe:[
     {l:'Mon equipe',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'}]},
@@ -1824,7 +1825,8 @@ var TITLES = {
   dashboard:'Tableau de bord',sinistres:'Sinistres',clients:'Clients et vehicules',
   a_attribuer:'A attribuer',val_devis:'Validation devis',travaux:'Travaux et Tests',
   equipes:'Equipes et techniciens',chiffrage:'Chiffrage achats',stats_tech:'Mes statistiques',fournisseurs:'Gestion des fournisseurs',tresorerie:'Tresorerie',rentabilite:'Rentabilite clients Devis',rentabilite_forfait:'Rentabilite clients Forfait',analyse_pieces:'Analyse des pieces',facturation:'Facturation',creances:'Creances clients',archives:'Archives vehicules',facturation_forfait:'Facturation forfaits',banques:'Gestion des banques',testeur:'Tableau de bord testeur',
-  appro:'Approvisionnement',val_fin:'Validation financiere',kpi:'KPI et Analyses'
+  appro:'Approvisionnement',val_fin:'Validation financiere',kpi:'KPI et Analyses',
+  messages_clients:'Messages clients'
 };
 
 var SAMPLE = [];
@@ -2329,6 +2331,16 @@ function renderNav(){var cfg=NAV[currentRole]||NAV.direction,h='';cfg.forEach(fu
     } else if(item.id==='travaux_prevoir'){
       var nt = vehicles.filter(function(v){ return !v.isProspect && v.travauxAPrevoir && v.travauxAPrevoir.length; }).length;
       if(nt>0) compteur = '<span class="badge b-amber" style="margin-left:auto;font-size:9px">'+nt+'</span>';
+    } else if(item.id==='messages_clients'){
+      var nbMsgNonLus = 0;
+      Object.keys(MESSAGES_CLIENTS_DATA).forEach(function(uid){
+        var vehiculesMap = MESSAGES_CLIENTS_DATA[uid]||{};
+        Object.keys(vehiculesMap).forEach(function(vehiculeId){
+          var messages = vehiculesMap[vehiculeId]||{};
+          nbMsgNonLus += Object.keys(messages).filter(function(id){return messages[id].auteur==='client' && !messages[id].lu;}).length;
+        });
+      });
+      if(nbMsgNonLus>0) compteur = '<span class="badge b-red" style="margin-left:auto;font-size:9px">'+nbMsgNonLus+'</span>';
     }
     h+='<div class="nav-item'+(item.id===currentPage?' active':'')+'" onclick="navigate(\''+item.id+'\')">'+'<span>'+item.e+'</span><span>'+item.l+'</span>'+compteur+'</div>';
   });h+='</div>';});// Ajouter bouton déconnexion en bas de la sidebar
@@ -4136,6 +4148,7 @@ function renderPage(){
   else if(r==='achats') html=pageDashAchats();
   else if(r==='direction' && p==='comptes') html=pageComptes();
   else if(r==='direction' && p==='acces_clients') html=pageAccesClients();
+  else if((r==='direction' || r==='reception' || r==='chef_atelier' || r==='chef_equipe') && p==='messages_clients') html=pageMessagesClients();
   else if(r==='direction') html=pageDashDir();
   else if(r==='testeur') html=pageDashTesteur();
   else html='<div class="empty">Page non trouvee</div>';
@@ -18412,6 +18425,184 @@ function supprimerCompteClientByEl(btn){
   renderPage();
 }
 
+// ── Page Messages clients : conversations liees a des vehicules precis,
+// initiees par le client depuis le portail distant (client-dashboard.html).
+// Separee du systeme de commentaires internes (v.commentaires) : stockage
+// dans gos_messages/{uid_client}/{vehiculeId}/{messageId}, jamais melange
+// avec les notes internes du garage.
+var MESSAGES_CLIENTS_DATA = {}; // {uid: {vehiculeId: {msgId: {...}}}}
+var messagesClientsConvActive = null; // {uid, vehiculeId} de la conversation ouverte
+
+function syncMessagesClientsFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_messages').once('value').then(function(snap){
+    MESSAGES_CLIENTS_DATA = snap.val() || {};
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
+}
+
+function pageMessagesClients(){
+  var html = '<div style="display:flex;gap:16px;height:calc(100vh - 140px);min-height:500px">';
+
+  // Colonne gauche : liste des conversations, une ligne par (uid, vehiculeId)
+  var conversations = [];
+  Object.keys(MESSAGES_CLIENTS_DATA).forEach(function(uid){
+    var vehiculesMap = MESSAGES_CLIENTS_DATA[uid] || {};
+    Object.keys(vehiculesMap).forEach(function(vehiculeId){
+      var messages = vehiculesMap[vehiculeId] || {};
+      var ids = Object.keys(messages);
+      if(!ids.length) return;
+      var dernierMsg = ids.map(function(id){return messages[id];}).sort(function(a,b){return (b.date||0)-(a.date||0);})[0];
+      var nbNonLus = ids.filter(function(id){return messages[id].auteur==='client' && !messages[id].lu;}).length;
+      var v = vehicles.find(function(x){return x.id===vehiculeId;});
+      conversations.push({
+        uid: uid, vehiculeId: vehiculeId,
+        immat: v ? v.immat : '(vehicule inconnu)',
+        client: v ? v.client : '',
+        dernierMsg: dernierMsg, nbNonLus: nbNonLus,
+        dateDernier: dernierMsg.date||0
+      });
+    });
+  });
+  conversations.sort(function(a,b){return b.dateDernier-a.dateDernier;});
+
+  html += '<div style="width:320px;flex-shrink:0;background:#fff;border:1px solid #e8e6e1;border-radius:10px;overflow-y:auto">';
+  if(!conversations.length){
+    html += '<div class="empty" style="padding:30px">Aucun message pour l\'instant.</div>';
+  } else {
+    conversations.forEach(function(c){
+      var estActive = messagesClientsConvActive && messagesClientsConvActive.uid===c.uid && messagesClientsConvActive.vehiculeId===c.vehiculeId;
+      html += '<div onclick="ouvrirConversationClient(\''+c.uid+'\',\''+c.vehiculeId+'\')" style="padding:12px 14px;border-bottom:1px solid #f0ede8;cursor:pointer;'+(estActive?'background:#E6F1FB':'')+'">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center">';
+      html += '<strong style="font-size:13px">'+c.client+'</strong>';
+      if(c.nbNonLus>0) html += '<span style="background:#A32D2D;color:#fff;border-radius:10px;padding:1px 7px;font-size:10px">'+c.nbNonLus+'</span>';
+      html += '</div>';
+      html += '<div class="xs muted">'+c.immat+'</div>';
+      html += '<div class="xs" style="margin-top:3px;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(c.dernierMsg.auteur==='garage'?'Vous : ':'')+escapeHtmlMsg(c.dernierMsg.texte)+'</div>';
+      html += '</div>';
+    });
+  }
+  html += '</div>';
+
+  // Colonne droite : conversation active
+  html += '<div style="flex:1;background:#fff;border:1px solid #e8e6e1;border-radius:10px;display:flex;flex-direction:column">';
+  if(!messagesClientsConvActive){
+    html += '<div class="empty" style="margin:auto">Selectionnez une conversation a gauche.</div>';
+  } else {
+    var v = vehicles.find(function(x){return x.id===messagesClientsConvActive.vehiculeId;});
+    html += '<div style="padding:12px 16px;border-bottom:1px solid #e8e6e1;font-weight:700">'+(v?v.client+' — '+v.immat:'Vehicule inconnu')+'</div>';
+    html += '<div id="msgClientListe" style="flex:1;overflow-y:auto;padding:14px"></div>';
+    html += '<div style="display:flex;gap:8px;padding:12px 14px;border-top:1px solid #e8e6e1">';
+    html += '<input type="text" id="msgClientInput" placeholder="Repondre au client..." style="flex:1;padding:9px 12px;border:1px solid #d0cec9;border-radius:8px;font-size:13px" onkeydown="if(event.key===\'Enter\')envoyerMessageClientByEl()">';
+    html += '<button onclick="envoyerMessageClientByEl()" style="background:#185FA5;color:#fff;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer">Envoyer</button>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  html += '</div>';
+  return html;
+}
+
+function escapeHtmlMsg(s){
+  var d = document.createElement('div');
+  d.textContent = s||'';
+  return d.innerHTML;
+}
+
+function ouvrirConversationClient(uid, vehiculeId){
+  messagesClientsConvActive = {uid:uid, vehiculeId:vehiculeId};
+  renderPage();
+  // Rendu de la liste de messages + marquage lu, une fois le DOM pret
+  setTimeout(function(){
+    renderMessagesClientListe();
+    marquerMessagesClientLus(uid, vehiculeId);
+  }, 0);
+}
+
+function renderMessagesClientListe(){
+  var zone = document.getElementById('msgClientListe');
+  if(!zone || !messagesClientsConvActive) return;
+  var messages = (MESSAGES_CLIENTS_DATA[messagesClientsConvActive.uid] && MESSAGES_CLIENTS_DATA[messagesClientsConvActive.uid][messagesClientsConvActive.vehiculeId]) || {};
+  var ids = Object.keys(messages).sort(function(a,b){return (messages[a].date||0)-(messages[b].date||0);});
+  if(!ids.length){ zone.innerHTML = '<div class="empty">Aucun message.</div>'; return; }
+  var html = '';
+  ids.forEach(function(id){
+    var m = messages[id];
+    var estGarage = m.auteur==='garage';
+    var heure = m.date ? new Date(m.date).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
+    html += '<div style="max-width:70%;margin-bottom:10px;'+(estGarage?'margin-left:auto':'')+'">';
+    html += '<div style="padding:8px 12px;border-radius:12px;font-size:13px;'+(estGarage?'background:#185FA5;color:#fff;border-bottom-right-radius:3px':'background:#f0ede8;color:#1a1a1a;border-bottom-left-radius:3px')+'">';
+    html += escapeHtmlMsg(m.texte);
+    html += '</div>';
+    html += '<div class="xs muted" style="margin-top:2px;'+(estGarage?'text-align:right':'')+'">'+(estGarage?(m.nomAuteur||'Garage'):'Client')+' &middot; '+heure+'</div>';
+    html += '</div>';
+  });
+  zone.innerHTML = html;
+  zone.scrollTop = zone.scrollHeight;
+}
+
+function marquerMessagesClientLus(uid, vehiculeId){
+  var messages = (MESSAGES_CLIENTS_DATA[uid] && MESSAGES_CLIENTS_DATA[uid][vehiculeId]) || {};
+  var aMarquer = [];
+  Object.keys(messages).forEach(function(id){
+    if(messages[id].auteur==='client' && !messages[id].lu){
+      messages[id].lu = true; // mise a jour locale immediate (badge disparait tout de suite)
+      aMarquer.push(id);
+    }
+  });
+  if(!aMarquer.length || !fbDb || !fbConnected) return;
+  aMarquer.forEach(function(id){
+    fbDb.ref('gos_messages/'+uid+'/'+vehiculeId+'/'+id+'/lu').set(true);
+  });
+}
+
+function envoyerMessageClientByEl(){
+  var input = document.getElementById('msgClientInput');
+  var texte = input.value.trim();
+  if(!texte || !messagesClientsConvActive || !fbDb) return;
+  var uid = messagesClientsConvActive.uid, vehiculeId = messagesClientsConvActive.vehiculeId;
+  var nomAuteur = currentUser ? currentUser.login : (currentRole==='direction'?'Direction':currentRole==='reception'?'Reception':'Atelier');
+  var ref = fbDb.ref('gos_messages/'+uid+'/'+vehiculeId).push();
+  var message = {auteur:'garage', nomAuteur:nomAuteur, texte:texte, date:Date.now(), lu:false};
+  ref.set(message).then(function(){
+    MESSAGES_CLIENTS_DATA[uid] = MESSAGES_CLIENTS_DATA[uid] || {};
+    MESSAGES_CLIENTS_DATA[uid][vehiculeId] = MESSAGES_CLIENTS_DATA[uid][vehiculeId] || {};
+    MESSAGES_CLIENTS_DATA[uid][vehiculeId][ref.key] = message;
+    input.value = '';
+    renderMessagesClientListe();
+  });
+}
+
+// Ouvre la messagerie client directement depuis la fiche detail d'un
+// vehicule (raccourci pour l'equipe, sans passer par la liste complete
+// des conversations). Cherche le compte client dont clientNom/clientTel
+// correspondent au vehicule, s'il existe.
+function ouvrirConversationDepuisFiche(vid){
+  var v = vehicles.find(function(x){return x.id===vid;});
+  if(!v) return;
+  var uidTrouve = null;
+  Object.keys(CLIENT_ACCOUNTS).forEach(function(uid){
+    var c = CLIENT_ACCOUNTS[uid];
+    if(uidTrouve) return;
+    if(c.clientNom===v.client && (c.clientTel||'')===(v.tel||'')){
+      // Si le compte est restreint a un departement, verifier que ce
+      // vehicule y appartient avant de le considerer comme correspondant.
+      if(c.departement){
+        if((v.departements||[]).indexOf(c.departement)>=0) uidTrouve = uid;
+      } else {
+        uidTrouve = uid;
+      }
+    }
+  });
+  if(!uidTrouve){
+    alert('Aucun compte d\'acces client (portail distant) n\'est associe a ce vehicule pour l\'instant.\nCreez-en un dans "Acces clients" si vous souhaitez pouvoir echanger des messages avec ce client.');
+    return;
+  }
+  closeDet();
+  navigate('messages_clients');
+  setTimeout(function(){ ouvrirConversationClient(uidTrouve, vid); }, 50);
+}
+
 function pageComptes(){
   var comptes = loadComptes();
   var apiKey = localStorage.getItem('gos_api_key')||'';
@@ -18898,6 +19089,9 @@ function tryInitFirebase(){
       syncClientAccountsFromFirebase(function(){
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       });
+      syncMessagesClientsFromFirebase(function(){
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      });
       syncPersonnelFromFirebase(function(){
         syncComptesFromFirebase(function(comptes){
           syncApiKeyFromFirebase(function(){
@@ -19043,6 +19237,15 @@ function initFirebase(){
   fbDb.ref('gos_client_accounts').on('value', function(snapshot){
     CLIENT_ACCOUNTS = snapshot.val() || {};
     if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+  });
+  fbDb.ref('gos_messages').on('value', function(snapshot){
+    MESSAGES_CLIENTS_DATA = snapshot.val() || {};
+    if(currentPage==='messages_clients' && document.getElementById('content') && !uneModaleEstOuverte()){
+      renderPage();
+      if(messagesClientsConvActive){
+        setTimeout(function(){ renderMessagesClientListe(); }, 0);
+      }
+    }
   });
   fbDb.ref('gos_engagements_bancaires').on('value', function(snapshot){
     var val = snapshot.val();
