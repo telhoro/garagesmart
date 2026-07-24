@@ -18508,7 +18508,7 @@ function pageImportHistorique(){
 
   html += '<div class="card" style="padding:16px;margin-bottom:16px">';
   html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Client destinataire <span style="color:red">*</span></label>';
-  html += '<input class="inp" id="ih_client" list="ih_client_list" placeholder="Nom du client (existant ou nouveau)">';
+  html += '<input class="inp" id="ih_client" list="ih_client_list" placeholder="Nom du client (existant ou nouveau)" oninput="ihClientAutoFill()">';
   html += '<datalist id="ih_client_list">'+optsClients+'</datalist></div>';
   html += '<div class="g2" style="margin-bottom:10px">';
   html += '<div class="fr"><label class="fl">Type client</label><select class="inp" id="ih_typeClient"><option value="forfait">Forfait</option><option value="devis">Devis</option></select></div>';
@@ -18521,6 +18521,39 @@ function pageImportHistorique(){
 
   html += '<div id="ih_apercu"></div>';
   return html;
+}
+
+// Des qu'un nom correspondant a un client existant est reconnu (espaces et
+// casse ignores), pre-remplit automatiquement le telephone et verrouille
+// type/statut sur ceux du client — evite de saisir un mauvais telephone ou
+// un type incoherent pour un client qui existe deja, meme si le champ
+// n'utilise qu'une simple datalist HTML (pas d'evenement natif dedie).
+function ihClientAutoFill(){
+  var nom = (document.getElementById('ih_client').value||'').trim();
+  var champTel = document.getElementById('ih_tel');
+  var champType = document.getElementById('ih_typeClient');
+  var champEntite = document.getElementById('ih_entite');
+  if(!nom){
+    champTel.disabled = false; champTel.placeholder = '+225 ...';
+    champType.disabled = false; champEntite.disabled = false;
+    return;
+  }
+  var nomNorm = normaliserNomClientGlobal(nom);
+  var match = vehicles.find(function(v){ return v.client && normaliserNomClientGlobal(v.client)===nomNorm && v.isProspect!==true; });
+  if(!match){
+    var fiche = CLIENTS_SANS_VEHICULE.find(function(c){ return normaliserNomClientGlobal(c.nom)===nomNorm; });
+    if(fiche) match = {tel:fiche.tel, typeClient:fiche.typeClient, entite:fiche.entite};
+  }
+  if(match){
+    champTel.value = match.tel || '';
+    champTel.disabled = true;
+    if(match.typeClient){ champType.value = match.typeClient; champType.disabled = true; }
+    if(match.entite){ champEntite.value = match.entite; champEntite.disabled = true; }
+  } else {
+    champTel.disabled = false;
+    champType.disabled = false;
+    champEntite.disabled = false;
+  }
 }
 
 function analyserFichierImportHisto(input){
