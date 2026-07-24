@@ -136,9 +136,28 @@ var STATUT_LABELS = {
 };
 
 function labelStatut(s){ return STATUT_LABELS[s] || (s||'—'); }
+// Compte le nombre de jours OUVRABLES (lundi a vendredi, samedi/dimanche
+// exclus) entre deux timestamps — utilise pour le delai d'immobilisation,
+// afin de ne pas compter les week-ends comme du temps d'atelier "perdu".
+// Jours feries non geres pour l'instant (liste non maintenue de facon
+// fiable), uniquement le week-end est exclu.
+function joursOuvrablesEntre(debut, fin){
+  if(!debut || !fin || fin<debut) return 0;
+  var dDebut = new Date(debut); dDebut.setHours(0,0,0,0);
+  var dFin = new Date(fin); dFin.setHours(0,0,0,0);
+  var count = 0;
+  var cursor = new Date(dDebut);
+  while(cursor.getTime() <= dFin.getTime()){
+    var jourSemaine = cursor.getDay();
+    if(jourSemaine!==0 && jourSemaine!==6) count++;
+    cursor.setDate(cursor.getDate()+1);
+  }
+  return count;
+}
+
 function formaterDelai(jours){
   if(jours===null || jours===undefined) return null;
-  return jours<1 ? Math.round(jours*24)+'h' : jours.toFixed(1)+'j';
+  return jours+' jour ouvrable'+(jours>1?'s':'');
 }
 function estEnCours(v){ return LIV_ST.indexOf(v.status)<0; }
 
@@ -216,16 +235,17 @@ function regrouperParImmatriculation(liste){
       if(passages[i].km){ dernierKm = passages[i].km; break; }
     }
 
-    // Delai moyen d'immobilisation : uniquement sur les passages termines
-    // (entree ET livraison connues, livraison posterieure a l'entree).
+    // Delai moyen d'immobilisation EN JOURS OUVRABLES : uniquement sur les
+    // passages termines (entree ET livraison connues, livraison posterieure
+    // a l'entree). Samedi/dimanche exclus du comptage.
     var delais = [];
     passages.forEach(function(p){
-      if(p.entree && p.livraison && p.livraison>p.entree){
-        var jours = (p.livraison-p.entree)/86400000;
+      if(p.entree && p.livraison && p.livraison>=p.entree){
+        var jours = joursOuvrablesEntre(p.entree, p.livraison);
         if(jours>0 && jours<365) delais.push(jours);
       }
     });
-    var delaiMoyenJours = delais.length ? (delais.reduce(function(s,d){return s+d;},0)/delais.length) : null;
+    var delaiMoyenJours = delais.length ? Math.round(delais.reduce(function(s,d){return s+d;},0)/delais.length) : null;
 
     // Nombre de retours : passages explicitement marques "Retour client"
     // par le garage a l'accueil (champ v.nature), pas un calcul deduit —
@@ -570,7 +590,7 @@ function renderInfosEnCours(v){
   if(!estEnCours(v)) return '';
   var parts = [];
   if(v.entree){
-    var joursEcoules = (Date.now()-v.entree)/86400000;
+    var joursEcoules = joursOuvrablesEntre(v.entree, Date.now());
     parts.push('Immobilise depuis : <strong>'+formaterDelai(joursEcoules)+'</strong>');
   }
   if(v.livraison){
@@ -665,8 +685,8 @@ function ouvrirHistoriqueVehicule(immat){
     }
     var infosPassage = [];
     if(p.km) infosPassage.push(p.km.toLocaleString('fr-FR')+' km');
-    if(p.entree && p.livraison && p.livraison>p.entree){
-      infosPassage.push('Immobilise : '+formaterDelai((p.livraison-p.entree)/86400000));
+    if(p.entree && p.livraison && p.livraison>=p.entree){
+      infosPassage.push('Immobilise : '+formaterDelai(joursOuvrablesEntre(p.entree, p.livraison)));
     }
     if(p.nature==='Retour client'){
       infosPassage.push('<span style="color:#A32D2D;font-weight:600">Retour client</span>');
@@ -785,8 +805,8 @@ function imprimerHistorique(immat){
     if(p.motif) html += '<div>Motif : '+p.motif+'</div>';
     var infosPassage = [];
     if(p.km) infosPassage.push(p.km.toLocaleString('fr-FR')+' km');
-    if(p.entree && p.livraison && p.livraison>p.entree){
-      infosPassage.push('Immobilise : '+formaterDelai((p.livraison-p.entree)/86400000));
+    if(p.entree && p.livraison && p.livraison>=p.entree){
+      infosPassage.push('Immobilise : '+formaterDelai(joursOuvrablesEntre(p.entree, p.livraison)));
     }
     if(p.nature==='Retour client') infosPassage.push('Retour client');
     if(infosPassage.length) html += '<div>'+infosPassage.join(' — ')+'</div>';
@@ -881,8 +901,8 @@ function imprimerToutHistorique(){
       if(p.motif) html += '<div>Motif : '+p.motif+'</div>';
       var infosPassage = [];
       if(p.km) infosPassage.push(p.km.toLocaleString('fr-FR')+' km');
-      if(p.entree && p.livraison && p.livraison>p.entree){
-        infosPassage.push('Immobilise : '+formaterDelai((p.livraison-p.entree)/86400000));
+      if(p.entree && p.livraison && p.livraison>=p.entree){
+        infosPassage.push('Immobilise : '+formaterDelai(joursOuvrablesEntre(p.entree, p.livraison)));
       }
       if(p.nature==='Retour client') infosPassage.push('Retour client');
       if(infosPassage.length) html += '<div>'+infosPassage.join(' — ')+'</div>';

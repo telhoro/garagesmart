@@ -14241,12 +14241,31 @@ function delaiMoyenVehicule(v){
   var avg=durees.reduce(function(s,d){return s+d;},0)/durees.length;
   return avg<1?Math.round(avg*24)+'h':avg.toFixed(1)+'j';
 }
+// Compte le nombre de jours OUVRABLES (lundi a vendredi, samedi/dimanche
+// exclus) entre deux timestamps — utilise pour le delai d'immobilisation
+// moyen, afin de ne pas compter les week-ends comme du temps d'atelier.
+// Jours feries non geres pour l'instant (liste non maintenue de facon
+// fiable), uniquement le week-end est exclu.
+function joursOuvrablesEntre(debut, fin){
+  if(!debut || !fin || fin<debut) return 0;
+  var dDebut = new Date(debut); dDebut.setHours(0,0,0,0);
+  var dFin = new Date(fin); dFin.setHours(0,0,0,0);
+  var count = 0;
+  var cursor = new Date(dDebut);
+  while(cursor.getTime() <= dFin.getTime()){
+    var jourSemaine = cursor.getDay();
+    if(jourSemaine!==0 && jourSemaine!==6) count++;
+    cursor.setDate(cursor.getDate()+1);
+  }
+  return count;
+}
+
 function delaiMoyenClient(vehicules){
   var vals=[];
-  vehicules.forEach(function(v){if(v.entree&&v.livraison&&v.livraison>v.entree){var j=(v.livraison-v.entree)/86400000;if(j>0&&j<365)vals.push(j);}});
+  vehicules.forEach(function(v){if(v.entree&&v.livraison&&v.livraison>=v.entree){var j=joursOuvrablesEntre(v.entree,v.livraison);if(j>0&&j<365)vals.push(j);}});
   if(!vals.length)return null;
-  var avg=vals.reduce(function(s,d){return s+d;},0)/vals.length;
-  return avg<1?Math.round(avg*24)+'h':avg.toFixed(1)+'j';
+  var avg=Math.round(vals.reduce(function(s,d){return s+d;},0)/vals.length);
+  return avg+'j ouvrable'+(avg>1?'s':'');
 }
 
 function buildClients(q){

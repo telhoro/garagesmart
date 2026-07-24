@@ -83,9 +83,26 @@ var triColonne = 'immat';
 var triSens = 'asc';
 
 function estEnCours(v){ return LIV_ST.indexOf(v.status)<0; }
+// Compte le nombre de jours OUVRABLES (lundi a vendredi, samedi/dimanche
+// exclus) entre deux timestamps — coherent avec le meme calcul dans
+// client-dashboard.html.
+function joursOuvrablesEntre(debut, fin){
+  if(!debut || !fin || fin<debut) return 0;
+  var dDebut = new Date(debut); dDebut.setHours(0,0,0,0);
+  var dFin = new Date(fin); dFin.setHours(0,0,0,0);
+  var count = 0;
+  var cursor = new Date(dDebut);
+  while(cursor.getTime() <= dFin.getTime()){
+    var jourSemaine = cursor.getDay();
+    if(jourSemaine!==0 && jourSemaine!==6) count++;
+    cursor.setDate(cursor.getDate()+1);
+  }
+  return count;
+}
+
 function formaterDelai(jours){
   if(jours===null || jours===undefined) return null;
-  return jours<1 ? Math.round(jours*24)+'h' : jours.toFixed(1)+'j';
+  return jours+' jour ouvrable'+(jours>1?'s':'');
 }
 
 auth.onAuthStateChanged(function(user){
@@ -139,12 +156,12 @@ function regrouperParImmatriculation(liste){
 
     var delais = [];
     passages.forEach(function(p){
-      if(p.entree && p.livraison && p.livraison>p.entree){
-        var jours = (p.livraison-p.entree)/86400000;
+      if(p.entree && p.livraison && p.livraison>=p.entree){
+        var jours = joursOuvrablesEntre(p.entree, p.livraison);
         if(jours>0 && jours<365) delais.push(jours);
       }
     });
-    var delaiMoyenJours = delais.length ? (delais.reduce(function(s,d){return s+d;},0)/delais.length) : null;
+    var delaiMoyenJours = delais.length ? Math.round(delais.reduce(function(s,d){return s+d;},0)/delais.length) : null;
 
     var nbRetours = passages.filter(function(p){return p.nature==='Retour client';}).length;
 
