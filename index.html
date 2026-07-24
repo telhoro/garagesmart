@@ -4527,6 +4527,28 @@ function setStatus(id,st){for(var i=0;i<vehicles.length;i++){if(vehicles[i].id==
 function assignTech(id,tech){for(var i=0;i<vehicles.length;i++){if(vehicles[i].id===id){vehicles[i].technicien=tech;break;}}saveV();renderPage();}
 function deleteVehicle(id){if(!confirm('Supprimer ce vehicule ?'))return;vehicles=vehicles.filter(function(v){return v.id!==id;});saveV();renderPage();}
 
+// Supprime UN SEUL passage precis (une visite parmi plusieurs d'un meme
+// vehicule), contrairement a supprimerVehiculeComplet qui retire tout
+// l'historique du vehicule. Reservee a la Direction.
+function supprimerPassageByEl(btn){
+  if(currentRole!=='direction') return;
+  var vid = btn.getAttribute('data-vid');
+  var immat = btn.getAttribute('data-immat');
+  var dateStr = btn.getAttribute('data-date');
+  var nbAutresPassages = vehicles.filter(function(v){
+    return (v.immat||'').toUpperCase()===((immat||'').toUpperCase()) && v.id!==vid && !v.isProspect;
+  }).length;
+  var msg = 'Supprimer le passage du '+dateStr+' pour '+immat+' ?\n\n'
+    + (nbAutresPassages>0
+      ? 'Les autres passages de ce vehicule ('+nbAutresPassages+' restant(s)) ne seront pas touches.'
+      : 'Attention : c\'est le SEUL passage enregistre pour ce vehicule — apres suppression, il n\'apparaitra plus du tout dans Clients et vehicules.')
+    + '\n\nCette action est irreversible.';
+  if(!confirm(msg)) return;
+  vehicles = vehicles.filter(function(v){ return v.id!==vid; });
+  saveV();
+  renderPage();
+}
+
 // ============================================================
 // TABLE VEHICULES (sans colonne statut changeable)
 // ============================================================
@@ -14578,7 +14600,9 @@ function renderClientsListe(clients, q){
             h+='<td style="padding:5px 8px;color:#5a5956;white-space:nowrap;width:90px">'+dateStr+'</td>';
             h+='<td style="padding:5px 8px;font-weight:700">'+motif+'</td>';
             h+='<td style="padding:5px 8px;text-align:right">'+badge+'</td>';
-            h+='<td style="padding:5px 8px;text-align:right"><button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-vid="'+d.id+'" onclick="openDetById(this)">&#x1F441;</button></td>';
+            h+='<td style="padding:5px 8px;text-align:right"><button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-vid="'+d.id+'" onclick="openDetById(this)">&#x1F441;</button>'
+              +(currentRole==='direction' ? ' <button class="btn btn-sm" style="font-size:10px;padding:2px 6px;color:#A32D2D;border-color:#E0A0A0" data-vid="'+d.id+'" data-immat="'+(d.immat||'').replace(/"/g,'&quot;')+'" data-date="'+dateStr+'" onclick="event.stopPropagation();supprimerPassageByEl(this)" title="Supprimer ce passage precis">&#x1F5D1;</button>' : '')
+              +'</td>';
             h+='</tr>';
             if(symp) h+='<tr style="border-bottom:0.5px solid #f0ede8"><td colspan="4" style="padding:3px 8px;color:#888;font-style:italic">'+symp+'</td></tr>';
             pieces.forEach(function(p){h+='<tr style="border-bottom:0.5px solid #f8f7f5"><td colspan="4" style="padding:2px 8px;color:#3B6D11">&#x25AA; '+p+'</td></tr>';});
