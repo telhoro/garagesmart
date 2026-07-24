@@ -18466,10 +18466,25 @@ function pageImportHistorique(){
 
   html += '<div class="info-box" style="margin-bottom:16px">Importez un fichier Excel contenant l\'historique de visites d\'un client (colonnes attendues : Immatriculation, N°Serie, Marque, Modele, Mise en circulation, Date Entree, Date Sortie, Km, Travaux realises). Une ligne = une visite. Les pieces (texte libre, une par ligne dans la cellule) sont automatiquement decoupees en lignes de chiffrage, prix a 0 (a completer ensuite).</div>';
 
+  // Liste des clients existants pour la datalist, generee directement ici
+  // (au rendu de la page) plutot que via un appel externe separe — evite
+  // toute dependance a l'ordre d'execution ou a un setTimeout fragile.
+  var seenClients = {}; var optsClients = '';
+  vehicles.forEach(function(x){
+    if(x.client && x.isProspect!==true){
+      var k = x.client.toLowerCase().trim();
+      if(!seenClients[k]){ seenClients[k]=true; optsClients += '<option value="'+x.client.replace(/"/g,'&quot;')+'">'; }
+    }
+  });
+  CLIENTS_SANS_VEHICULE.forEach(function(c){
+    var k = (c.nom||'').toLowerCase().trim();
+    if(k && !seenClients[k]){ seenClients[k]=true; optsClients += '<option value="'+(c.nom||'').replace(/"/g,'&quot;')+'">'; }
+  });
+
   html += '<div class="card" style="padding:16px;margin-bottom:16px">';
   html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Client destinataire <span style="color:red">*</span></label>';
   html += '<input class="inp" id="ih_client" list="ih_client_list" placeholder="Nom du client (existant ou nouveau)">';
-  html += '<datalist id="ih_client_list"></datalist></div>';
+  html += '<datalist id="ih_client_list">'+optsClients+'</datalist></div>';
   html += '<div class="g2" style="margin-bottom:10px">';
   html += '<div class="fr"><label class="fl">Type client</label><select class="inp" id="ih_typeClient"><option value="forfait">Forfait</option><option value="devis">Devis</option></select></div>';
   html += '<div class="fr"><label class="fl">Statut</label><select class="inp" id="ih_entite"><option>Entreprise</option><option>Particulier</option></select></div>';
@@ -18481,23 +18496,6 @@ function pageImportHistorique(){
 
   html += '<div id="ih_apercu"></div>';
   return html;
-}
-
-function ouvrirPageImportHistorique(){
-  navigate('import_historique');
-  setTimeout(function(){
-    var dl = document.getElementById('ih_client_list');
-    if(dl){
-      var seen = {}; var opts = '';
-      vehicles.forEach(function(x){
-        if(x.client && x.isProspect!==true){
-          var k = x.client.toLowerCase().trim();
-          if(!seen[k]){ seen[k]=true; opts += '<option value="'+x.client.replace(/"/g,'&quot;')+'">'; }
-        }
-      });
-      dl.innerHTML = opts;
-    }
-  }, 50);
 }
 
 function analyserFichierImportHisto(input){
@@ -18653,9 +18651,22 @@ function afficherApercuImportHisto(){
 }
 
 function validerImportHistorique(){
-  if(!importHistoData || !importHistoData.lignes.length) return;
-  if(currentRole!=='direction') return;
-  if(!confirm('Importer '+importHistoData.lignes.length+' visite(s) pour "'+importHistoData.client+'" ?\nCette action cree de nouveaux dossiers vehicule, elle est irreversible (mais chaque dossier reste modifiable/supprimable individuellement ensuite).')) return;
+  console.log('DEBUG validerImportHistorique appelee');
+  console.log('DEBUG importHistoData=', importHistoData ? ('present, '+importHistoData.lignes.length+' lignes') : 'NULL');
+  console.log('DEBUG currentRole=', currentRole);
+  if(!importHistoData || !importHistoData.lignes.length){
+    alert('Aucune donnee a importer. Selectionnez a nouveau le fichier Excel.');
+    return;
+  }
+  if(currentRole!=='direction'){
+    alert('Cette action est reservee au role Direction.');
+    return;
+  }
+  console.log('DEBUG avant confirm()');
+  var reponse = confirm('Importer '+importHistoData.lignes.length+' visite(s) pour "'+importHistoData.client+'" ?\nCette action cree de nouveaux dossiers vehicule, elle est irreversible (mais chaque dossier reste modifiable/supprimable individuellement ensuite).');
+  console.log('DEBUG reponse confirm=', reponse);
+  if(!reponse) return;
+  console.log('DEBUG confirme, debut de la boucle d\'import');
 
   var d = importHistoData;
   d.lignes.forEach(function(l){
@@ -18680,8 +18691,10 @@ function validerImportHistorique(){
     };
     vehicles.push(v);
   });
+  console.log('DEBUG boucle terminee, vehicles.length total=', vehicles.length);
 
   saveV();
+  console.log('DEBUG saveV() execute');
   importHistoData = null;
   importHistoStats = null;
   alert('Import termine : '+d.lignes.length+' visite(s) ajoutee(s) pour '+d.client+'.');
