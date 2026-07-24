@@ -14264,8 +14264,8 @@ function delaiMoyenClient(vehicules){
   var vals=[];
   vehicules.forEach(function(v){if(v.entree&&v.livraison&&v.livraison>=v.entree){var j=joursOuvrablesEntre(v.entree,v.livraison);if(j>0&&j<365)vals.push(j);}});
   if(!vals.length)return null;
-  var avg=Math.round(vals.reduce(function(s,d){return s+d;},0)/vals.length);
-  return avg+'j ouvrable'+(avg>1?'s':'');
+  var avg=vals.reduce(function(s,d){return s+d;},0)/vals.length;
+  return avg.toFixed(2)+'j';
 }
 
 function buildClients(q){

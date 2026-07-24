@@ -102,7 +102,7 @@ function joursOuvrablesEntre(debut, fin){
 
 function formaterDelai(jours){
   if(jours===null || jours===undefined) return null;
-  return jours+' jour ouvrable'+(jours>1?'s':'');
+  return jours.toFixed(2)+'j';
 }
 
 auth.onAuthStateChanged(function(user){
@@ -161,7 +161,7 @@ function regrouperParImmatriculation(liste){
         if(jours>0 && jours<365) delais.push(jours);
       }
     });
-    var delaiMoyenJours = delais.length ? Math.round(delais.reduce(function(s,d){return s+d;},0)/delais.length) : null;
+    var delaiMoyenJours = delais.length ? (delais.reduce(function(s,d){return s+d;},0)/delais.length) : null;
 
     var nbRetours = passages.filter(function(p){return p.nature==='Retour client';}).length;
 

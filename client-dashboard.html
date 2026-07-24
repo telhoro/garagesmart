@@ -157,7 +157,7 @@ function joursOuvrablesEntre(debut, fin){
 
 function formaterDelai(jours){
   if(jours===null || jours===undefined) return null;
-  return jours+' jour ouvrable'+(jours>1?'s':'');
+  return jours.toFixed(2)+'j';
 }
 function estEnCours(v){ return LIV_ST.indexOf(v.status)<0; }
 
@@ -245,7 +245,7 @@ function regrouperParImmatriculation(liste){
         if(jours>0 && jours<365) delais.push(jours);
       }
     });
-    var delaiMoyenJours = delais.length ? Math.round(delais.reduce(function(s,d){return s+d;},0)/delais.length) : null;
+    var delaiMoyenJours = delais.length ? (delais.reduce(function(s,d){return s+d;},0)/delais.length) : null;
 
     // Nombre de retours : passages explicitement marques "Retour client"
     // par le garage a l'accueil (champ v.nature), pas un calcul deduit —
