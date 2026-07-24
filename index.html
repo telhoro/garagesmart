@@ -14274,13 +14274,28 @@ function confirmerSupprimerClient(btn){
 }
 
 function supprimerClient(ck){
+  var clients = buildClients();
+  var c = clients.find(function(x){ return ((x.nom||'')+'_'+(x.tel||'')).replace(/\W/g,'_') === ck; });
+  if(!c){ alert('Client introuvable (peut-etre deja supprime).'); renderPage(); return; }
+  var nomNorm = (c.nom||'').trim().toLowerCase();
+  var telNorm = (c.tel||'').trim().replace(/\s/g,'');
+  var avant = vehicles.length;
   vehicles = vehicles.filter(function(v){
-    var vTel = (v.tel||'').trim().replace(/\s/g,'');
-    var vKey = vTel || (v.client||'').trim().toLowerCase().replace(/\s+/g,'_');
-    return vKey !== ck;
+    var vNomNorm = (v.client||'').trim().toLowerCase();
+    var vTelNorm = (v.tel||'').trim().replace(/\s/g,'');
+    return !(vNomNorm===nomNorm && vTelNorm===telNorm);
   });
+  var nbSupprimes = avant - vehicles.length;
+  // Retirer aussi la fiche "sans vehicule" correspondante, le cas echeant
+  if(c.sansVehiculeId){
+    CLIENTS_SANS_VEHICULE = CLIENTS_SANS_VEHICULE.filter(function(x){ return x.id!==c.sansVehiculeId; });
+    saveClientsSansVehicule();
+  }
   saveV();
   renderPage();
+  if(nbSupprimes>0){
+    alert(nbSupprimes+' vehicule(s) supprime(s) pour "'+c.nom+'".');
+  }
 }
 
 function toggleVeh(key){
