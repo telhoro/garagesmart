@@ -3090,6 +3090,7 @@ function setPerfPeriodeById(btn){ setPerfPeriode(btn.getAttribute('data-pk')); }
 
 
 var _modifAttribImmat = null;
+var _modifAttribVid = null; // dossier precis, pour cibler les details vehicule (immat/marque/etc.)
 
 
 
@@ -3663,12 +3664,76 @@ function validerModifClient(){
 }
 
 
+// ── Cloture forcee (Direction uniquement) ────────────────────────────────
+// Ferme un dossier sans passer par le circuit normal (livraison, facture),
+// SANS l'enregistrer en chiffre d'affaires ni en depenses : les lignes du
+// chiffrage sont retirees du dossier (donc exclues des calculs CA/depenses,
+// qui se basent sur v.chiffrage.lignes) et transferees en "travaux a
+// prevoir" sur ce vehicule, pour rester consultables/reutilisables plus
+// tard sans polluer les stats financieres actuelles.
+function ouvrirClotureForceeByEl(btn){
+  if(currentRole!=='direction') return;
+  var vid = btn.getAttribute('data-vid');
+  var v = vehicles.find(function(x){return x.id===vid;});
+  if(!v) return;
+  var lignes = (v.chiffrage && v.chiffrage.lignes) ? v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
+  var msg = 'Cloturer "'+v.immat+' — '+(v.marque||'')+' '+(v.modele||'')+'" sans passer par le circuit normal ?\n\n'
+    + 'Ce dossier ne sera PAS comptabilise en chiffre d\'affaires ni en depenses.'
+    + (lignes.length ? '\n'+lignes.length+' piece(s) actuellement chiffree(s) seront deplacees vers "Travaux a prevoir" pour ce vehicule (recuperables plus tard, sans impact financier immediat).' : '')
+    + '\n\nCette action est irreversible (le dossier reste consultable dans l\'historique, mais ne pourra plus etre repris dans le circuit normal).';
+  if(!confirm(msg)) return;
+  clotureDossierForcee(vid);
+}
+
+function clotureDossierForcee(vid){
+  var v = vehicles.find(function(x){return x.id===vid;});
+  if(!v) return;
+
+  var lignes = (v.chiffrage && v.chiffrage.lignes) ? v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
+  var nbTransferees = 0;
+  if(lignes.length){
+    var travauxExistants = v.travauxAPrevoir || [];
+    var nouveauxTravaux = lignes.map(function(cl){
+      return {
+        id: 'tap_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+        piece: cl.piece,
+        qte: parseInt(cl.qte,10)||1,
+        prixAchat: cl.prixAchat||'',
+        prixVente: cl.prixVente||'',
+        source: cl.source||'commande',
+        fournisseurId: cl.fournisseurId||'',
+        dateOrigine: Date.now(),
+        immatOrigine: v.immat
+      };
+    });
+    v.travauxAPrevoir = travauxExistants.concat(nouveauxTravaux);
+    v.travauxAPrevoirCree = true;
+    nbTransferees = nouveauxTravaux.length;
+    // Vider les lignes du chiffrage : c'est ce qui exclut concretement ce
+    // dossier des calculs de CA/depenses (bases sur chiffrage.lignes), tout
+    // en gardant une trace de ce qui avait ete chiffre (via les commentaires
+    // et travauxAPrevoir).
+    v.chiffrage.lignes = [];
+  }
+
+  v.status = 'dossier_cloture';
+  v.clotureForcee = true;
+  v.archiveDate = Date.now();
+  ajouterCommentaireSysteme(v, '&#x1F512; Dossier cloture directement par la Direction (hors circuit normal)'
+    + (nbTransferees ? ' — '+nbTransferees+' piece(s) deplacee(s) vers Travaux a prevoir' : '')
+    + '. Non comptabilise en CA/depenses.', currentUser ? currentUser.login : 'Direction');
+
+  saveV();
+  renderPage();
+}
+
 function ouvrirModifAttribution(btn){
   if(currentRole!=='direction') return;
   var vid = btn.getAttribute('data-vid');
   var v = vehicles.find(function(x){ return x.id===vid; });
   if(!v) return;
   _modifAttribImmat = v.immat;
+  _modifAttribVid = vid; // dossier precis, pour cibler les details vehicule (immat/marque/etc.)
   document.getElementById('modifAttribVehInfo').textContent = v.immat + ' - ' + (v.marque||'') + ' ' + (v.modele||'');
   document.getElementById('modif_client').value = v.client || '';
   document.getElementById('modif_tel').value = v.tel || '';
@@ -3678,6 +3743,17 @@ function ouvrirModifAttribution(btn){
   document.getElementById('modif_client_hint').textContent = '';
   document.getElementById('modif_typeClient').disabled = false;
   document.getElementById('modif_entite').disabled = false;
+  // Details vehicule : modifies uniquement sur CE dossier precis (vid),
+  // pas propages aux autres visites — chaque visite garde son propre
+  // kilometrage/etat, contrairement au client qui est le meme partout.
+  document.getElementById('modif_veh_immat').value = v.immat || '';
+  document.getElementById('modif_veh_marque').value = v.marque || '';
+  document.getElementById('modif_veh_modele').value = v.modele || '';
+  document.getElementById('modif_veh_vin').value = v.vin || '';
+  document.getElementById('modif_veh_km').value = v.km || '';
+  document.getElementById('modif_veh_energie').value = v.energie || '';
+  document.getElementById('modif_veh_vignette').value = v.vignette || '';
+  document.getElementById('modif_veh_mec').value = v.mec || '';
   // Remplir la datalist avec les clients existants (uniques par nom+tel)
   var seen = {};
   var opts = '';
@@ -3767,6 +3843,42 @@ function validerModifAttribution(){
   });
 
   saveV();
+
+  // Details vehicule : modifies UNIQUEMENT sur le dossier precis (vid),
+  // jamais propages aux autres visites de ce vehicule — executes APRES la
+  // boucle de reattribution client ci-dessus (qui se base sur l'ancienne
+  // immatriculation), pour ne jamais casser son regroupement en cours de
+  // route si l'immatriculation elle-meme est modifiee ici.
+  if(_modifAttribVid){
+    var vDossier = vehicles.find(function(x){ return x.id===_modifAttribVid; });
+    if(vDossier){
+      var newImmat = (document.getElementById('modif_veh_immat').value||'').trim().toUpperCase();
+      var newMarque = (document.getElementById('modif_veh_marque').value||'').trim();
+      var newModele = (document.getElementById('modif_veh_modele').value||'').trim();
+      var newVin = (document.getElementById('modif_veh_vin').value||'').trim();
+      var newKm = document.getElementById('modif_veh_km').value;
+      var newEnergie = document.getElementById('modif_veh_energie').value;
+      var newVignette = document.getElementById('modif_veh_vignette').value;
+      var newMec = document.getElementById('modif_veh_mec').value;
+      var changesVeh = [];
+      if(newImmat && newImmat!==vDossier.immat) changesVeh.push('immat: '+vDossier.immat+' -> '+newImmat);
+      if(newMarque!==(vDossier.marque||'')) changesVeh.push('marque: '+(vDossier.marque||'-')+' -> '+newMarque);
+      if(newModele!==(vDossier.modele||'')) changesVeh.push('modele: '+(vDossier.modele||'-')+' -> '+newModele);
+      if(newImmat) vDossier.immat = newImmat;
+      vDossier.marque = newMarque;
+      vDossier.modele = newModele;
+      vDossier.vin = newVin;
+      vDossier.km = newKm ? parseInt(newKm,10) : null;
+      vDossier.energie = newEnergie;
+      vDossier.vignette = newVignette ? parseInt(newVignette,10) : null;
+      vDossier.mec = newMec || null;
+      if(changesVeh.length){
+        ajouterCommentaireSysteme(vDossier, '&#x270F; Modification vehicule (direction) : '+changesVeh.join(', '), currentUser ? currentUser.login : 'Direction');
+      }
+      saveV();
+    }
+  }
+  _modifAttribVid = null;
 
   // Meme nettoyage que validerModifClient/validerFusionClients : si
   // l'ancien nom de client n'est plus utilise par aucun vehicule apres
@@ -4432,6 +4544,9 @@ function vtableRec(list){
     h+='<td>'+chronoHtml(v)+'</td>';
     h+='<td><div class="flex gap6">';
     h+='<button class="btn btn-sm" title="Voir details" data-vid="'+v.id+'" onclick="openDetById(this)">&#x1F441;</button>';
+    if(currentRole==='direction' && v.status!=='dossier_cloture' && !v.isProspect){
+      h+='<button class="btn btn-sm" title="Cloturer sans facturer (le devis part en travaux a prevoir)" style="color:#854F0B;border-color:#E8A44A" onclick="ouvrirClotureForceeByEl(this)" data-vid="'+v.id+'">&#x1F512; Cloturer</button>';
+    }
     h+='<button class="btn btn-danger btn-sm" title="Supprimer" onclick="deleteVehicle(\''+v.id+'\')">&#x1F5D1;</button>';
     h+='</div></td>';
     h+='</tr>';
@@ -14311,7 +14426,7 @@ function pageClients(){
   var clients=buildClients(q);
   var html='<div class="card"><div class="card-head">Clients et vehicules <div style="display:flex;gap:8px;align-items:center"><span class="badge b-gray">'+clients.length+' client'+(clients.length!==1?'s':'')+'</span>'+(currentRole==='direction'?'<button class="btn btn-sm" style="background:#534AB7;color:#fff;border-color:#534AB7" onclick="ouvrirFusionClients()" title="Fusionner les doublons clients">&#x1F517; Fusionner doublons</button> <button class="btn btn-sm" style="background:#A32D2D;color:#fff;border-color:#A32D2D" onclick="ouvrirImmatDoublons()" title="Corriger les immatriculations partagees">&#x1F697; Immats doublons</button> <button class="btn btn-sm" style="background:#3B6D11;color:#fff;border-color:#3B6D11" onclick="ouvrirCreationClientSansVehicule()">&#x1F464; Nouveau client</button> ':'')+'<button class="btn btn-primary btn-sm" onclick="openRec(null)">+ Nouveau vehicule</button> <button class="btn btn-sm" style="background:#854F0B;color:#fff;border-color:#854F0B" onclick="ouvrirDevisProspect()">&#x1F4CB; Devis prospect</button></div></div>';
   html+='<div style="padding:10px 16px;border-bottom:1px solid #e8e6e1"><input class="inp" id="clientSearch" placeholder="Rechercher par nom, telephone, email, immat, marque..." oninput="filtrerClients(this.value)" value="'+q.replace(/"/g,'&#34;')+'"></div>';
-  html+='<div id="clientsListe">'+renderClientsListe(clients)+'</div></div>';
+  html+='<div id="clientsListe">'+renderClientsListe(clients, q)+'</div></div>';
   return html;
 }
 
@@ -14320,13 +14435,13 @@ function filtrerClients(q){
   // -> le focus et le curseur restent dans la barre de recherche
   var clients = buildClients(q);
   var liste = document.getElementById('clientsListe');
-  if(liste){ liste.innerHTML = renderClientsListe(clients); }
+  if(liste){ liste.innerHTML = renderClientsListe(clients, q); }
   // Mettre a jour le compteur de clients
   var badge = document.querySelector('.card-head .badge.b-gray');
   if(badge){ badge.textContent = clients.length+' client'+(clients.length!==1?'s':''); }
 }
 
-function renderClientsListe(clients){
+function renderClientsListe(clients, q){
   var html='<div>';
   if(!clients.length)html+='<div class="empty">Aucun client trouve</div>';
   clients.forEach(function(c){
@@ -14392,6 +14507,21 @@ function renderClientsListe(clients){
       c.vehicules.filter(function(v){return v.isProspect;}).forEach(function(v){
         allVehs.push(v);
       });
+      // Si une recherche est active ET qu'elle ne correspond pas deja au
+      // nom/tel/email du client lui-meme (dans ce cas le client est trouve
+      // "en tant que client", on garde tous ses vehicules) — alors on ne
+      // garde que les vehicules qui correspondent reellement au terme
+      // recherche (immat/marque/modele), pour ne pas noyer un vehicule
+      // precis parmi tous les autres du meme client.
+      if(q){
+        var ql = q.toLowerCase();
+        var matchClientDirect = c.nom.toLowerCase().indexOf(ql)>=0 || (c.tel||'').indexOf(ql)>=0 || (c.email||'').toLowerCase().indexOf(ql)>=0;
+        if(!matchClientDirect){
+          allVehs = allVehs.filter(function(v){
+            return (v.immat||'').toLowerCase().indexOf(ql)>=0 || (v.marque||'').toLowerCase().indexOf(ql)>=0 || (v.modele||'').toLowerCase().indexOf(ql)>=0;
+          });
+        }
+      }
       allVehs.forEach(function(v){
         var key = (v.immat||'').toUpperCase();
         if(!immatMap[key]) immatMap[key] = [];
@@ -20013,11 +20143,13 @@ window.onload=function(){
 
 
 <div class="overlay" id="modalModifAttrib" style="display:none" onclick="if(event.target===this)this.style.display='none'">
-<div class="modal" style="max-width:480px">
-  <div class="mhead"><h2>&#x270F; Corriger l'attribution</h2><button class="btn btn-sm" onclick="document.getElementById('modalModifAttrib').style.display='none'">X</button></div>
+<div class="modal" style="max-width:560px">
+  <div class="mhead"><h2>&#x270F; Modifier le vehicule</h2><button class="btn btn-sm" onclick="document.getElementById('modalModifAttrib').style.display='none'">X</button></div>
   <div class="mbody">
-    <div class="info-box" style="margin-bottom:12px">Correction reservee a la direction. Modifie le client et/ou le type sur <b>tous les dossiers</b> de ce vehicule.</div>
-    <div id="modifAttribVehInfo" style="font-weight:700;font-size:14px;margin-bottom:12px"></div>
+    <div class="info-box" style="margin-bottom:12px">Correction reservee a la direction. Le client et le type sont appliques sur <b>tous les dossiers</b> de ce vehicule (toutes visites). Les details vehicule (immat, marque...) sont modifies uniquement sur <b>ce dossier precis</b>.</div>
+    <div id="modifAttribVehInfo" style="font-weight:700;font-size:14px;margin-bottom:6px"></div>
+
+    <div style="font-size:11px;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:.03em;margin:14px 0 6px">Client</div>
     <div class="fr" style="margin-bottom:10px"><label class="fl">Nom du client (existant ou nouveau)</label>
       <input class="inp" id="modif_client" list="modif_client_list" placeholder="Tapez pour rechercher..." oninput="modifClientAutoFill()">
       <datalist id="modif_client_list"></datalist>
@@ -20033,6 +20165,34 @@ window.onload=function(){
         </select></div>
       <div class="fr"><label class="fl">Statut</label>
         <select class="inp" id="modif_entite"><option>Particulier</option><option>Entreprise</option></select></div>
+    </div>
+
+    <div style="font-size:11px;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:.03em;margin:16px 0 6px;border-top:1px solid #e8e6e1;padding-top:12px">Vehicule</div>
+    <div class="g2" style="margin-bottom:10px">
+      <div class="fr"><label class="fl">Immatriculation</label>
+        <input class="inp" id="modif_veh_immat" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()"></div>
+      <div class="fr"><label class="fl">Marque</label>
+        <input class="inp" id="modif_veh_marque"></div>
+    </div>
+    <div class="g2" style="margin-bottom:10px">
+      <div class="fr"><label class="fl">Modele</label>
+        <input class="inp" id="modif_veh_modele"></div>
+      <div class="fr"><label class="fl">VIN</label>
+        <input class="inp" id="modif_veh_vin" maxlength="17" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9]/g,'')"></div>
+    </div>
+    <div class="g2" style="margin-bottom:10px">
+      <div class="fr"><label class="fl">Kilometrage</label>
+        <input class="inp" type="number" id="modif_veh_km"></div>
+      <div class="fr"><label class="fl">Energie</label>
+        <select class="inp" id="modif_veh_energie">
+          <option value="">--</option><option value="Essence">Essence</option><option value="Diesel">Diesel</option><option value="Hybride">Hybride</option><option value="Electrique">Electrique</option><option value="GPL">GPL</option>
+        </select></div>
+    </div>
+    <div class="g2" style="margin-bottom:10px">
+      <div class="fr"><label class="fl">Vignette (FCFA)</label>
+        <input class="inp" type="number" id="modif_veh_vignette"></div>
+      <div class="fr"><label class="fl">Mise en circulation</label>
+        <input type="date" class="inp" id="modif_veh_mec"></div>
     </div>
   </div>
   <div class="mfoot">
