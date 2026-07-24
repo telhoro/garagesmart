@@ -1647,6 +1647,40 @@ function syncForfaitsClientsFromFirebase(callback){
   }).catch(function(){ if(callback) callback(); });
 }
 
+// ── Clients sans vehicule ────────────────────────────────────────────────
+// Une fiche client peut etre creee AVANT tout vehicule (ex: nouveau client
+// dont on connait deja les coordonnees, en attente de sa premiere visite).
+// buildClients() les integre a la liste normale, avec un tableau vehicules
+// vide — des qu'un vehicule reel est ajoute pour ce client (meme nom+tel),
+// l'entree correspondante ici devient redondante mais n'est jamais
+// supprimee automatiquement (evite de perdre des infos si le vehicule est
+// ensuite retire) ; buildClients() la masque simplement si un vehicule
+// existe deja pour ce nom+tel, pour ne jamais dupliquer une ligne client.
+var CLIENTS_SANS_VEHICULE = []; // {id, nom, tel, email, typeClient, entite, creeLe}
+function saveClientsSansVehicule(){
+  localStorage.setItem('gos_clients_sans_vehicule', JSON.stringify(CLIENTS_SANS_VEHICULE));
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_clients_sans_vehicule').set(JSON.stringify(CLIENTS_SANS_VEHICULE)).catch(function(e){
+      console.error('Firebase clients sans vehicule save error:', e);
+    });
+  }
+}
+function loadClientsSansVehicule(){
+  try{ CLIENTS_SANS_VEHICULE = JSON.parse(localStorage.getItem('gos_clients_sans_vehicule'))||[]; }catch(e){ CLIENTS_SANS_VEHICULE=[]; }
+}
+function syncClientsSansVehiculeFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_clients_sans_vehicule').once('value').then(function(snap){
+    var val = snap.val();
+    if(val){
+      try{ CLIENTS_SANS_VEHICULE = JSON.parse(val)||[]; localStorage.setItem('gos_clients_sans_vehicule', val); }catch(e){}
+    } else if(CLIENTS_SANS_VEHICULE.length && fbConnected){
+      fbDb.ref('gos_clients_sans_vehicule').set(JSON.stringify(CLIENTS_SANS_VEHICULE));
+    }
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
+}
+
 var SAMPLE_FOURNISSEURS = [
   {id:'f1',nom:'Auto Parts Abidjan',tel:'+225 27 20 11 22',specialite:'Pieces detachees toutes marques',conditions:'les_deux',actif:true},
   {id:'f2',nom:'Toyota Abidjan',tel:'+225 27 30 44 55',specialite:'Pieces OEM Toyota / Lexus',conditions:'credit',actif:true},
@@ -3281,6 +3315,88 @@ function validerFusionClients(){
 // (vehicules de pool partages). Stocke dans v.departements (tableau de
 // noms). Nouveau champ optionnel : aucun impact sur les vehicules
 // existants (tableau vide par defaut = pas encore classe).
+// ── Clients sans vehicule ────────────────────────────────────────────────
+function ouvrirCreationClientSansVehicule(){
+  if(currentRole!=='direction') return;
+  document.getElementById('scv_nom').value = '';
+  document.getElementById('scv_tel').value = '';
+  document.getElementById('scv_email').value = '';
+  document.getElementById('scv_typeClient').value = 'devis';
+  document.getElementById('scv_entite').value = 'Particulier';
+  document.getElementById('scv_responsableParc').value = '';
+  document.getElementById('scv_error').style.display = 'none';
+  toggleScvResponsableParcField();
+  document.getElementById('modalCreationClientSansVehicule').style.display = 'flex';
+}
+function toggleScvResponsableParcField(){
+  var wrap = document.getElementById('scv_responsableParcWrap');
+  if(!wrap) return;
+  wrap.style.display = (document.getElementById('scv_entite').value==='Entreprise') ? 'block' : 'none';
+}
+
+function creerClientSansVehicule(){
+  if(currentRole!=='direction') return;
+  var nom = document.getElementById('scv_nom').value.trim();
+  var tel = document.getElementById('scv_tel').value.trim();
+  var email = document.getElementById('scv_email').value.trim();
+  var typeClient = document.getElementById('scv_typeClient').value;
+  var entite = document.getElementById('scv_entite').value;
+  var responsableParc = document.getElementById('scv_responsableParc').value.trim();
+  var errBox = document.getElementById('scv_error');
+  errBox.style.display = 'none';
+
+  if(!nom){ errBox.textContent='Le nom du client est obligatoire.'; errBox.style.display='block'; return; }
+
+  // Verifier qu'un client (avec ou sans vehicule) ne porte pas deja ce nom+tel
+  var telNorm = tel.replace(/\s/g,'');
+  var nomNorm = nom.toLowerCase().trim();
+  var dejaVehicule = vehicles.some(function(v){
+    return !v.archive && (v.client||'').toLowerCase().trim()===nomNorm && (v.tel||'').replace(/\s/g,'')===telNorm;
+  });
+  var dejaSansVehicule = CLIENTS_SANS_VEHICULE.some(function(c){
+    return (c.nom||'').toLowerCase().trim()===nomNorm && (c.tel||'').replace(/\s/g,'')===telNorm;
+  });
+  if(dejaVehicule || dejaSansVehicule){
+    errBox.textContent = 'Un client avec ce nom et ce telephone existe deja.';
+    errBox.style.display = 'block';
+    return;
+  }
+
+  CLIENTS_SANS_VEHICULE.push({
+    id: 'scv_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),
+    nom: nom, tel: tel, email: email, typeClient: typeClient, entite: entite,
+    responsableParc: (entite==='Entreprise') ? responsableParc : '',
+    creeLe: Date.now()
+  });
+  saveClientsSansVehicule();
+  document.getElementById('modalCreationClientSansVehicule').style.display = 'none';
+  renderPage();
+}
+
+function supprimerClientSansVehiculeByEl(btn){
+  if(currentRole!=='direction') return;
+  var id = btn.getAttribute('data-scv-id');
+  var c = CLIENTS_SANS_VEHICULE.find(function(x){return x.id===id;});
+  if(!c) return;
+  if(!confirm('Supprimer la fiche client "'+c.nom+'" ?\nAucun vehicule n\'est associe a ce client, cette suppression est sans risque.')) return;
+  CLIENTS_SANS_VEHICULE = CLIENTS_SANS_VEHICULE.filter(function(x){return x.id!==id;});
+  saveClientsSansVehicule();
+  renderPage();
+}
+
+// Ouvre le formulaire Nouveau vehicule, pre-rempli avec les infos d'un
+// client cree sans vehicule au prealable. Une fois le vehicule enregistre,
+// la fiche "sans vehicule" devient automatiquement redondante et se
+// masque d'elle-meme dans buildClients() (sans etre supprimee).
+function openRecPourClient(scvId){
+  var c = CLIENTS_SANS_VEHICULE.find(function(x){return x.id===scvId;});
+  if(!c) return;
+  openRec({
+    client: c.nom, tel: c.tel, email: c.email,
+    typeClient: c.typeClient, entite: c.entite
+  });
+}
+
 function ouvrirGestionDepartements(btn){
   if(currentRole!=='direction') return;
   var cnom = btn.getAttribute('data-cnom');
@@ -3446,13 +3562,25 @@ function ouvrirModifClient(btn){
   _modifClientRef = { nom: cnom, tel: ctel };
   var ref = vehicles.find(function(x){ return x.client===cnom && (x.tel||'')===ctel && x.isProspect!==true; });
   if(!ref) ref = vehicles.find(function(x){ return x.client===cnom && (x.tel||'')===ctel; });
+  // Si aucun vehicule (client cree "sans vehicule"), retrouver sa fiche
+  // dans CLIENTS_SANS_VEHICULE pour pre-remplir correctement.
+  var fiche = ref ? null : CLIENTS_SANS_VEHICULE.find(function(c){ return c.nom===cnom && (c.tel||'')===ctel; });
+  _modifClientRef.sansVehiculeId = fiche ? fiche.id : null;
   document.getElementById('mc_nom').value = cnom || '';
   document.getElementById('mc_tel').value = ctel || '';
-  document.getElementById('mc_email').value = ref ? (ref.email||'') : '';
-  var t = ref ? (ref.typeClient||'devis') : 'devis';
+  document.getElementById('mc_email').value = ref ? (ref.email||'') : (fiche ? (fiche.email||'') : '');
+  var t = ref ? (ref.typeClient||'devis') : (fiche ? (fiche.typeClient||'devis') : 'devis');
   document.getElementById('mc_typeClient').value = (t==='assurance' ? 'devis' : t);
-  document.getElementById('mc_entite').value = ref ? (ref.entite||'Particulier') : 'Particulier';
+  var entiteVal = ref ? (ref.entite||'Particulier') : (fiche ? (fiche.entite||'Particulier') : 'Particulier');
+  document.getElementById('mc_entite').value = entiteVal;
+  document.getElementById('mc_responsableParc').value = ref ? (ref.responsableParc||'') : (fiche ? (fiche.responsableParc||'') : '');
+  toggleResponsableParcField();
   document.getElementById('modalModifClient').style.display = 'flex';
+}
+function toggleResponsableParcField(){
+  var wrap = document.getElementById('mc_responsableParcWrap');
+  if(!wrap) return;
+  wrap.style.display = (document.getElementById('mc_entite').value==='Entreprise') ? 'block' : 'none';
 }
 
 function validerModifClient(){
@@ -3463,6 +3591,7 @@ function validerModifClient(){
   var newEmail = (document.getElementById('mc_email').value||'').trim();
   var newType = document.getElementById('mc_typeClient').value;
   var newEntite = document.getElementById('mc_entite').value;
+  var newResponsableParc = (document.getElementById('mc_responsableParc').value||'').trim();
   if(!newNom){ alert('Le nom du client est obligatoire.'); return; }
 
   var oldNom = _modifClientRef.nom;
@@ -3479,12 +3608,25 @@ function validerModifClient(){
       v.email = newEmail;
       if(v.typeClient!=='assurance') v.typeClient = newType; // ne pas ecraser ancien dossier assurance pur
       v.entite = newEntite;
+      v.responsableParc = (newEntite==='Entreprise') ? newResponsableParc : '';
       count++;
       if(changes.length){
         ajouterCommentaireSysteme(v, '\u270F Modification client (direction) : '+changes.join(', '), currentUser ? currentUser.login : 'Direction');
       }
     }
   });
+
+  // Client cree "sans vehicule" : mettre a jour sa fiche directement,
+  // puisqu'aucun vehicule n'existe pour propager les changements.
+  if(_modifClientRef.sansVehiculeId){
+    var fiche = CLIENTS_SANS_VEHICULE.find(function(c){return c.id===_modifClientRef.sansVehiculeId;});
+    if(fiche){
+      fiche.nom = newNom; fiche.tel = newTel; fiche.email = newEmail;
+      fiche.typeClient = newType; fiche.entite = newEntite;
+      fiche.responsableParc = (newEntite==='Entreprise') ? newResponsableParc : '';
+      saveClientsSansVehicule();
+    }
+  }
 
   // Si plus aucun vehicule ne porte l'ancien nom, transferer/nettoyer les
   // enregistrements forfait qui referencent encore ce nom (sinon ils
@@ -3533,6 +3675,8 @@ function ouvrirModifAttribution(btn){
   document.getElementById('modif_typeClient').value = (v.typeClient==='assurance' ? 'devis' : (v.typeClient || 'devis'));
   document.getElementById('modif_entite').value = v.entite || 'Particulier';
   document.getElementById('modif_client_hint').textContent = '';
+  document.getElementById('modif_typeClient').disabled = false;
+  document.getElementById('modif_entite').disabled = false;
   // Remplir la datalist avec les clients existants (uniques par nom+tel)
   var seen = {};
   var opts = '';
@@ -3543,21 +3687,41 @@ function ouvrirModifAttribution(btn){
     }
   });
   document.getElementById('modif_client_list').innerHTML = opts;
+  modifClientAutoFill(); // verrouille directement type/statut si le client actuel du vehicule existe deja
   document.getElementById('modalModifAttrib').style.display = 'flex';
 }
 
 function modifClientAutoFill(){
   var nom = (document.getElementById('modif_client').value||'').trim();
   var hint = document.getElementById('modif_client_hint');
-  if(!nom){ hint.textContent=''; return; }
+  var champTypeClient = document.getElementById('modif_typeClient');
+  var champEntite = document.getElementById('modif_entite');
+  if(!nom){
+    hint.textContent='';
+    champTypeClient.disabled = false;
+    champEntite.disabled = false;
+    return;
+  }
   // Chercher un client existant avec ce nom exact
   var match = vehicles.find(function(x){ return x.client && x.client.toLowerCase().trim()===nom.toLowerCase() && x.isProspect!==true; });
   if(match){
     document.getElementById('modif_tel').value = match.tel || '';
     document.getElementById('modif_email').value = match.email || '';
-    hint.textContent = '\u2713 Client existant : le vehicule sera rattache a ce client';
+    // Le type de client (devis/forfait) et le statut (particulier/entreprise)
+    // appartiennent au client, pas a un choix arbitraire a chaque
+    // reattribution : ils sont verrouilles sur la valeur du client existant,
+    // pour empecher toute incoherence entre un vehicule et son client.
+    if(match.typeClient && match.typeClient!=='assurance'){
+      champTypeClient.value = match.typeClient;
+    }
+    champEntite.value = (match.entite && match.entite.toLowerCase()!=='particulier') ? 'Entreprise' : 'Particulier';
+    champTypeClient.disabled = true;
+    champEntite.disabled = true;
+    hint.textContent = '\u2713 Client existant : le vehicule sera rattache a ce client (type et statut verrouilles sur ceux du client)';
     hint.style.color = '#3B6D11';
   } else {
+    champTypeClient.disabled = false;
+    champEntite.disabled = false;
     hint.textContent = '\u2295 Nouveau client (n\'existe pas encore)';
     hint.style.color = '#854F0B';
   }
@@ -13953,7 +14117,7 @@ function buildClients(q){
     var tel = (v.tel||'').trim().replace(/\s/g,'');
     var nomK=(v.client||'').trim().toLowerCase().replace(/\s+/g,'_');
     var key = nomK+'_'+(tel||'no_tel');
-    if(!map[key])map[key]={nom:v.client,tel:v.tel||'',email:v.email||'',entite:v.entite||'Particulier',typeClient:v.typeClient,vehicules:[]};
+    if(!map[key])map[key]={nom:v.client,tel:v.tel||'',email:v.email||'',entite:v.entite||'Particulier',typeClient:v.typeClient,responsableParc:v.responsableParc||'',vehicules:[]};
     // Mettre à jour le nom si on a déjà la clé (évite les doublons nom/tel)
     if(!map[key].tel && v.tel) map[key].tel = v.tel;
     map[key].vehicules.push(v);
@@ -13966,11 +14130,22 @@ function buildClients(q){
     var nomK = (v.client||'').trim().toLowerCase().replace(/\s+/g,'_');
     var key = nomK+'_'+(tel||'no_tel');
     if(!nomK && !tel) return;   // ni nom ni telephone : impossible de regrouper
-    if(!map[key])map[key]={nom:v.client||'Client inconnu',tel:v.tel||'',email:v.email||'',entite:v.entite||'Particulier',typeClient:v.typeClient||'devis',vehicules:[]};
+    if(!map[key])map[key]={nom:v.client||'Client inconnu',tel:v.tel||'',email:v.email||'',entite:v.entite||'Particulier',typeClient:v.typeClient||'devis',responsableParc:v.responsableParc||'',vehicules:[]};
     if(!map[key].tel && v.tel) map[key].tel = v.tel;
     if(!map[key].email && v.email) map[key].email = v.email;
     var alreadyIn = map[key].vehicules.some(function(x){return x.id===v.id;});
     if(!alreadyIn) map[key].vehicules.push(v);
+  });
+  // Integrer les clients crees SANS vehicule (fiche autonome), uniquement
+  // s'ils n'ont toujours aucun vehicule reel sous ce nom+tel — des qu'un
+  // vrai vehicule existe pour ce client, la ligne "sans vehicule" est
+  // masquee ici pour ne jamais dupliquer le client dans la liste.
+  CLIENTS_SANS_VEHICULE.forEach(function(c){
+    var tel = (c.tel||'').trim().replace(/\s/g,'');
+    var nomK = (c.nom||'').trim().toLowerCase().replace(/\s+/g,'_');
+    var key = nomK+'_'+(tel||'no_tel');
+    if(map[key]) return; // un vehicule existe deja pour ce client : ne pas dupliquer
+    map[key] = {nom:c.nom, tel:c.tel||'', email:c.email||'', entite:c.entite||'Particulier', typeClient:c.typeClient||'devis', responsableParc:c.responsableParc||'', vehicules:[], sansVehiculeId:c.id};
   });
   var list=Object.keys(map).map(function(k){return map[k];});
   list.sort(function(a,b){var aA=a.vehicules.some(function(v){return LIV_ST.indexOf(v.status)<0;});var bA=b.vehicules.some(function(v){return LIV_ST.indexOf(v.status)<0;});if(aA&&!bA)return -1;if(!aA&&bA)return 1;return a.nom.localeCompare(b.nom);});
@@ -14117,7 +14292,7 @@ function toggleClient(key){if(openClientKeys[key]){delete openClientKeys[key];}e
 function pageClients(){
   var q=(document.getElementById&&document.getElementById('clientSearch'))?document.getElementById('clientSearch').value:'';
   var clients=buildClients(q);
-  var html='<div class="card"><div class="card-head">Clients et vehicules <div style="display:flex;gap:8px;align-items:center"><span class="badge b-gray">'+clients.length+' client'+(clients.length!==1?'s':'')+'</span>'+(currentRole==='direction'?'<button class="btn btn-sm" style="background:#534AB7;color:#fff;border-color:#534AB7" onclick="ouvrirFusionClients()" title="Fusionner les doublons clients">&#x1F517; Fusionner doublons</button> <button class="btn btn-sm" style="background:#A32D2D;color:#fff;border-color:#A32D2D" onclick="ouvrirImmatDoublons()" title="Corriger les immatriculations partagees">&#x1F697; Immats doublons</button> ':'')+'<button class="btn btn-primary btn-sm" onclick="openRec(null)">+ Nouveau vehicule</button> <button class="btn btn-sm" style="background:#854F0B;color:#fff;border-color:#854F0B" onclick="ouvrirDevisProspect()">&#x1F4CB; Devis prospect</button></div></div>';
+  var html='<div class="card"><div class="card-head">Clients et vehicules <div style="display:flex;gap:8px;align-items:center"><span class="badge b-gray">'+clients.length+' client'+(clients.length!==1?'s':'')+'</span>'+(currentRole==='direction'?'<button class="btn btn-sm" style="background:#534AB7;color:#fff;border-color:#534AB7" onclick="ouvrirFusionClients()" title="Fusionner les doublons clients">&#x1F517; Fusionner doublons</button> <button class="btn btn-sm" style="background:#A32D2D;color:#fff;border-color:#A32D2D" onclick="ouvrirImmatDoublons()" title="Corriger les immatriculations partagees">&#x1F697; Immats doublons</button> <button class="btn btn-sm" style="background:#3B6D11;color:#fff;border-color:#3B6D11" onclick="ouvrirCreationClientSansVehicule()">&#x1F464; Nouveau client</button> ':'')+'<button class="btn btn-primary btn-sm" onclick="openRec(null)">+ Nouveau vehicule</button> <button class="btn btn-sm" style="background:#854F0B;color:#fff;border-color:#854F0B" onclick="ouvrirDevisProspect()">&#x1F4CB; Devis prospect</button></div></div>';
   html+='<div style="padding:10px 16px;border-bottom:1px solid #e8e6e1"><input class="inp" id="clientSearch" placeholder="Rechercher par nom, telephone, email, immat, marque..." oninput="filtrerClients(this.value)" value="'+q.replace(/"/g,'&#34;')+'"></div>';
   html+='<div id="clientsListe">'+renderClientsListe(clients)+'</div></div>';
   return html;
@@ -14147,21 +14322,32 @@ function renderClientsListe(clients){
     html+='<div class="client-row">';
     html+='<div class="client-row-head'+(isOpen?' open':'')+'" data-ckey="'+key+'" onclick="toggleClientByEl(this)">';
     html+='<span style="font-size:10px;color:#aaa;margin-right:10px">'+(isOpen?'&#x25BC;':'&#x25B6;')+'</span>';
-    html+='<div style="flex:1"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span class="fw7" style="font-size:14px">'+c.nom+'</span>'+(nbDevis>0?'<span style="background:#854F0B;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;">'+nbDevis+' devis</span>':'')+tbadge(c.typeClient)+'<span class="badge b-gray">'+c.entite+'</span><span class="xs muted">'+c.tel+'</span>'+(c.email?'<span class="xs muted">'+c.email+'</span>':'')+'</div></div>';
+    html+='<div style="flex:1"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span class="fw7" style="font-size:14px">'+c.nom+'</span>'+(nbDevis>0?'<span style="background:#854F0B;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;">'+nbDevis+' devis</span>':'')+tbadge(c.typeClient)+'<span class="badge b-gray">'+c.entite+'</span><span class="xs muted">'+c.tel+'</span>'+(c.email?'<span class="xs muted">'+c.email+'</span>':'')+(c.responsableParc?'<span class="xs" style="color:#185FA5">&#x1F464; '+c.responsableParc+'</span>':'')+'</div></div>';
     html+='<div style="display:flex;gap:6px;align-items:center;flex-shrink:0">';
-    html+='<span class="badge b-blue">'+c.vehicules.length+' veh.</span>';
+    if(!c.vehicules.length){
+      html+='<span class="badge b-gray" style="font-style:italic">Aucun vehicule</span>';
+    } else {
+      html+='<span class="badge b-blue">'+c.vehicules.length+' veh.</span>';
+    }
     if(nbActifs>0)html+='<span class="badge b-amber">'+nbActifs+' en cours</span>';
     html+='<span class="badge b-gray">'+totalInterv+' interv.</span>';
     if(nbDevis>0)html+='<span class="badge" style="background:#854F0B;color:#fff">'+nbDevis+' devis</span>';
 
     if(dmClient)html+='<span class="badge b-teal" title="Delai moyen immobilisation">&#x23F1; '+dmClient+' moy.</span>';
+    if(!c.vehicules.length && c.sansVehiculeId && currentRole==='direction'){
+      html+='<button class="btn btn-primary btn-sm" title="Ajouter un vehicule a ce client" onclick="event.stopPropagation();openRecPourClient(\''+c.sansVehiculeId+'\')" style="font-size:11px">+ Ajouter un vehicule</button>';
+    }
     if(currentRole==='direction'){html+='<button class="btn btn-sm" title="Modifier le client" onclick="event.stopPropagation();ouvrirModifClient(this)" data-cnom="'+c.nom.replace(/"/g,'&quot;')+'" data-ctel="'+(c.tel||'')+'" style="padding:4px 8px;font-size:12px;color:#A32D2D;border-color:#E0A0A0">&#x270F;</button>';}
     if(currentRole==='direction' && (c.entite||'').toLowerCase()!=='particulier'){
       html+='<button class="btn btn-sm" title="Gerer les departements" onclick="event.stopPropagation();ouvrirGestionDepartements(this)" data-cnom="'+c.nom.replace(/"/g,'&quot;')+'" data-ctel="'+(c.tel||'')+'" style="padding:4px 8px;font-size:12px;color:#185FA5;border-color:#B5D4F4">&#x1F3E2; Departements</button>';
     }
     html+='<button class="btn btn-sm" title="Rapport client" onclick="event.stopPropagation();ouvrirRapportCli(this)" data-ck="'+key+'" style="padding:4px 8px;font-size:12px">&#x1F4CB;</button>';
     if(currentRole==='direction'){
-      html+='<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();confirmerSupprimerClient(this)" data-ck="'+key+'" style="font-size:11px">&#x1F5D1; Supprimer</button>';
+      if(c.sansVehiculeId){
+        html+='<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();supprimerClientSansVehiculeByEl(this)" data-scv-id="'+c.sansVehiculeId+'" style="font-size:11px">&#x1F5D1; Supprimer</button>';
+      } else {
+        html+='<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();confirmerSupprimerClient(this)" data-ck="'+key+'" style="font-size:11px">&#x1F5D1; Supprimer</button>';
+      }
     }
     html+='</div></div>';
     if(isOpen){
@@ -14841,7 +15027,7 @@ function openRec(prefill){
     sv('f_energie',prefill.energie||'');sv('f_vignette',prefill.vignette||'');
   sv('f_type',prefill.typeClient);sv('f_typeClient',prefill.typeClient);
     var daEl=document.getElementById('f_dossierAssurance');if(daEl) daEl.checked = (prefill.dossierAssurance===true || prefill.typeClient==='assurance');sv('f_entite',prefill.entite||'Particulier');sv('f_prio',prefill.priorite);
-    toggleEntite();document.getElementById('recTitle').textContent='Nouvelle entree - '+prefill.immat;setTimeout(function(){showTab('v');},50);
+    toggleEntite();document.getElementById('recTitle').textContent = prefill.immat ? ('Nouvelle entree - '+prefill.immat) : ('Nouveau vehicule - '+(prefill.client||''));setTimeout(function(){showTab('v');},50);
 
     // Préremplir assurance et contrôle technique si disponibles
     var today = new Date(); today.setHours(0,0,0,0);
@@ -19092,6 +19278,9 @@ function tryInitFirebase(){
       syncMessagesClientsFromFirebase(function(){
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       });
+      syncClientsSansVehiculeFromFirebase(function(){
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      });
       syncPersonnelFromFirebase(function(){
         syncComptesFromFirebase(function(comptes){
           syncApiKeyFromFirebase(function(){
@@ -19245,6 +19434,16 @@ function initFirebase(){
       if(messagesClientsConvActive){
         setTimeout(function(){ renderMessagesClientListe(); }, 0);
       }
+    }
+  });
+  fbDb.ref('gos_clients_sans_vehicule').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        CLIENTS_SANS_VEHICULE = JSON.parse(val)||[];
+        localStorage.setItem('gos_clients_sans_vehicule', val);
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
     }
   });
   fbDb.ref('gos_engagements_bancaires').on('value', function(snapshot){
@@ -19436,7 +19635,7 @@ window.onload=function(){
       v.status = 'devis_termine'; migrated = true;
     }
   });
-  if(migrated) saveV();loadPersonnel();initFournisseurs();initBanques();loadForfaitFactures();loadStock();loadChargesFixes();loadEngagementsBancaires();loadForfaitsClients();
+  if(migrated) saveV();loadPersonnel();initFournisseurs();initBanques();loadForfaitFactures();loadStock();loadChargesFixes();loadEngagementsBancaires();loadForfaitsClients();loadClientsSansVehicule();
   // Alimenter le catalogue pièces depuis l'historique existant
   vehicles.forEach(function(v){ if(v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length) indexerPiecesChiffrage(v); });
   renderNav();renderPage();
@@ -19528,7 +19727,12 @@ window.onload=function(){
       <div class="fr"><label class="fl">Type client (forfait / devis)</label>
         <select class="inp" id="mc_typeClient"><option value="devis">Devis</option><option value="forfait">Forfait</option></select></div>
       <div class="fr"><label class="fl">Statut</label>
-        <select class="inp" id="mc_entite"><option>Particulier</option><option>Entreprise</option></select></div>
+        <select class="inp" id="mc_entite" onchange="toggleResponsableParcField()"><option>Particulier</option><option>Entreprise</option></select></div>
+    </div>
+    <div class="fr" id="mc_responsableParcWrap" style="margin-bottom:10px;display:none">
+      <label class="fl">Responsable / Gestionnaire de parc</label>
+      <input class="inp" id="mc_responsableParc" placeholder="Nom du responsable qui gere le parc automobile">
+      <div class="xs muted" style="margin-top:3px">Personne de contact au sein de l'entreprise pour les questions liees au parc automobile.</div>
     </div>
   </div>
   <div class="mfoot">
@@ -19593,6 +19797,45 @@ window.onload=function(){
   <div class="mfoot">
     <button class="btn" onclick="document.getElementById('modalCreationCompteClient').style.display='none'">Annuler</button>
     <button class="btn btn-primary" id="cca_btnCreer" onclick="creerCompteClient()">Creer le compte</button>
+  </div>
+</div>
+</div>
+
+<div class="overlay" id="modalCreationClientSansVehicule" style="display:none" onclick="if(event.target===this)this.style.display='none'">
+<div class="modal" style="max-width:440px">
+  <div class="mhead"><h2>&#x1F464; Nouveau client</h2><button class="btn btn-sm" onclick="document.getElementById('modalCreationClientSansVehicule').style.display='none'">X</button></div>
+  <div class="mbody">
+    <div class="info-box" style="margin-bottom:12px">Cree une fiche client sans vehicule associe pour l'instant. Vous pourrez lui rattacher un ou plusieurs vehicules plus tard, depuis sa ligne dans la liste.</div>
+    <div class="fr">
+      <label class="fl">Nom du client <span style="color:red">*</span></label>
+      <input class="inp" id="scv_nom" placeholder="Nom ou raison sociale">
+    </div>
+    <div class="fr">
+      <label class="fl">Telephone</label>
+      <input class="inp" id="scv_tel" placeholder="+225 ...">
+    </div>
+    <div class="fr">
+      <label class="fl">Email</label>
+      <input type="email" class="inp" id="scv_email" placeholder="client@exemple.com">
+    </div>
+    <div class="g2">
+      <div class="fr"><label class="fl">Type client</label>
+        <select class="inp" id="scv_typeClient">
+          <option value="devis">Devis</option><option value="forfait">Forfait</option>
+        </select></div>
+      <div class="fr"><label class="fl">Statut</label>
+        <select class="inp" id="scv_entite" onchange="toggleScvResponsableParcField()"><option>Particulier</option><option>Entreprise</option></select></div>
+    </div>
+    <div class="fr" id="scv_responsableParcWrap" style="display:none;margin-top:10px">
+      <label class="fl">Responsable / Gestionnaire de parc</label>
+      <input class="inp" id="scv_responsableParc" placeholder="Nom du responsable qui gere le parc automobile">
+      <div class="xs muted" style="margin-top:3px">Personne de contact au sein de l'entreprise pour les questions liees au parc automobile.</div>
+    </div>
+    <div class="error-box" id="scv_error" style="display:none;background:#FCEBEB;color:#A32D2D;border-radius:8px;padding:10px 12px;font-size:12px;margin-top:10px"></div>
+  </div>
+  <div class="mfoot">
+    <button class="btn" onclick="document.getElementById('modalCreationClientSansVehicule').style.display='none'">Annuler</button>
+    <button class="btn btn-primary" onclick="creerClientSansVehicule()">Creer le client</button>
   </div>
 </div>
 </div>
