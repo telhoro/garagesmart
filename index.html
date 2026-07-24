@@ -1824,7 +1824,7 @@ function initFournisseurs(){
 
 var NAV = {
   direction:[
-    {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'},{id:'acces_clients',e:'AC',l:'Acces clients'},{id:'messages_clients',e:'MC',l:'Messages clients'}]},
+    {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'},{id:'acces_clients',e:'AC',l:'Acces clients'},{id:'messages_clients',e:'MC',l:'Messages clients'},{id:'import_historique',e:'IH',l:'Import historique'}]},
     {l:'Finances',items:[{id:'finances_dashboard',e:'FD',l:'Tableau de bord'},{id:'facturation',e:'F',l:'Facturation'},{id:'dettes_fournisseurs',e:'DF',l:'Dettes fournisseurs'},{id:'prevision_treso',e:'PT',l:'Prevision tresorerie'}]},
     {l:'Rentabilite',items:[{id:'rentabilite',e:'RD',l:'Clients Devis'},{id:'rentabilite_forfait',e:'RF',l:'Clients Forfait'},{id:'analyse_pieces',e:'AP',l:'Analyse pieces'}]},
     {l:'Gestion',items:[{id:'archives',e:'Ar',l:'Archives'},{id:'banques',e:'B',l:'Banques'},{id:'charges_fixes',e:'CF',l:'Charges fixes'},{id:'engagements_bancaires',e:'EB',l:'Engagements bancaires'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'stock',e:'St',l:'Gestion du stock'},{id:'travaux_prevoir',e:'TP',l:'Travaux a prevoir'},{id:'devis_differes',e:'DD',l:'Devis differes'},{id:'sinistres',e:'S',l:'Sinistres'},{id:'val_fin',e:'VF',l:'Validation financiere'},{id:'kpi',e:'K',l:'KPI'}]}
@@ -1860,7 +1860,8 @@ var TITLES = {
   a_attribuer:'A attribuer',val_devis:'Validation devis',travaux:'Travaux et Tests',
   equipes:'Equipes et techniciens',chiffrage:'Chiffrage achats',stats_tech:'Mes statistiques',fournisseurs:'Gestion des fournisseurs',tresorerie:'Tresorerie',rentabilite:'Rentabilite clients Devis',rentabilite_forfait:'Rentabilite clients Forfait',analyse_pieces:'Analyse des pieces',facturation:'Facturation',creances:'Creances clients',archives:'Archives vehicules',facturation_forfait:'Facturation forfaits',banques:'Gestion des banques',testeur:'Tableau de bord testeur',
   appro:'Approvisionnement',val_fin:'Validation financiere',kpi:'KPI et Analyses',
-  messages_clients:'Messages clients'
+  messages_clients:'Messages clients',
+  import_historique:'Import historique'
 };
 
 var SAMPLE = [];
@@ -4313,6 +4314,7 @@ function renderPage(){
   else if(r==='achats') html=pageDashAchats();
   else if(r==='direction' && p==='comptes') html=pageComptes();
   else if(r==='direction' && p==='acces_clients') html=pageAccesClients();
+  else if(r==='direction' && p==='import_historique') html=pageImportHistorique();
   else if(r==='direction') html=pageDashDir();
   else if(r==='testeur') html=pageDashTesteur();
   else html='<div class="empty">Page non trouvee</div>';
@@ -18447,6 +18449,245 @@ function doLogout(){
 // (client.html). Chaque compte est cree dans Firebase Authentication
 // (email/mot de passe), puis associe a un client GarageOS et
 // eventuellement un departement precis (grand compte).
+// ── Import Excel : historique complet d'un client (visites + pieces) ────
+// Permet d'importer en masse l'historique d'un client depuis un fichier
+// Excel externe (immat, chassis, marque, modele, dates, km, pieces en
+// texte libre) — cree un dossier vehicule par visite, avec les pieces
+// decoupees en lignes de chiffrage (prix a 0, a completer manuellement).
+// Detection de doublons stricte : (immat normalisee + date d'entree)
+// deja presente => la ligne est ignoree pour ne jamais dupliquer.
+var importHistoData = null; // resultat du parsing, avant validation
+var importHistoStats = null;
+
+function pageImportHistorique(){
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+  html += '<h2 style="font-size:16px;font-weight:700;margin:0">Import historique client (Excel)</h2>';
+  html += '</div>';
+
+  html += '<div class="info-box" style="margin-bottom:16px">Importez un fichier Excel contenant l\'historique de visites d\'un client (colonnes attendues : Immatriculation, N°Serie, Marque, Modele, Mise en circulation, Date Entree, Date Sortie, Km, Travaux realises). Une ligne = une visite. Les pieces (texte libre, une par ligne dans la cellule) sont automatiquement decoupees en lignes de chiffrage, prix a 0 (a completer ensuite).</div>';
+
+  html += '<div class="card" style="padding:16px;margin-bottom:16px">';
+  html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Client destinataire <span style="color:red">*</span></label>';
+  html += '<input class="inp" id="ih_client" list="ih_client_list" placeholder="Nom du client (existant ou nouveau)">';
+  html += '<datalist id="ih_client_list"></datalist></div>';
+  html += '<div class="g2" style="margin-bottom:10px">';
+  html += '<div class="fr"><label class="fl">Type client</label><select class="inp" id="ih_typeClient"><option value="forfait">Forfait</option><option value="devis">Devis</option></select></div>';
+  html += '<div class="fr"><label class="fl">Statut</label><select class="inp" id="ih_entite"><option>Entreprise</option><option>Particulier</option></select></div>';
+  html += '</div>';
+  html += '<div class="fr"><label class="fl">Telephone (si nouveau client)</label><input class="inp" id="ih_tel" placeholder="+225 ..."></div>';
+  html += '<div class="fr" style="margin-top:10px"><label class="fl">Fichier Excel</label>';
+  html += '<input type="file" id="ih_fichier" accept=".xlsx,.xls" onchange="analyserFichierImportHisto(this)"></div>';
+  html += '</div>';
+
+  html += '<div id="ih_apercu"></div>';
+  return html;
+}
+
+function ouvrirPageImportHistorique(){
+  navigate('import_historique');
+  setTimeout(function(){
+    var dl = document.getElementById('ih_client_list');
+    if(dl){
+      var seen = {}; var opts = '';
+      vehicles.forEach(function(x){
+        if(x.client && x.isProspect!==true){
+          var k = x.client.toLowerCase().trim();
+          if(!seen[k]){ seen[k]=true; opts += '<option value="'+x.client.replace(/"/g,'&quot;')+'">'; }
+        }
+      });
+      dl.innerHTML = opts;
+    }
+  }, 50);
+}
+
+function analyserFichierImportHisto(input){
+  var file = input.files[0];
+  if(!file) return;
+  var clientNom = document.getElementById('ih_client').value.trim();
+  if(!clientNom){ alert('Indiquez le nom du client destinataire avant de choisir le fichier.'); input.value=''; return; }
+
+  var reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      var data = new Uint8Array(e.target.result);
+      var wb = XLSX.read(data, {type:'array', cellDates:true});
+      var ws = wb.Sheets[wb.SheetNames[0]];
+      var rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:false, dateNF:'yyyy-mm-dd'});
+      traiterLignesImportHisto(rows);
+    } catch(err){
+      document.getElementById('ih_apercu').innerHTML = '<div class="empty" style="color:#A32D2D">Erreur de lecture du fichier : '+err.message+'</div>';
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// Normalise une date Excel (peut arriver en texte 'yyyy-mm-dd', en Date JS
+// deja convertie par cellDates, ou en numero de serie Excel) vers un
+// timestamp JS, ou null si vide/invalide.
+function parserDateImport(val){
+  if(!val) return null;
+  if(val instanceof Date) return val.getTime();
+  if(typeof val==='number'){
+    // Numero de serie Excel (jours depuis 1899-12-30)
+    var epoch = new Date(Date.UTC(1899,11,30));
+    return epoch.getTime() + val*86400000;
+  }
+  var d = new Date(val);
+  return isNaN(d.getTime()) ? null : d.getTime();
+}
+
+function decouperPieces(texte){
+  if(!texte) return [];
+  return String(texte).split('\n')
+    .map(function(l){ return l.replace(/^\s*-\s*/,'').trim(); })
+    .filter(function(l){ return l.length>0; });
+}
+
+function traiterLignesImportHisto(rows){
+  var clientNom = document.getElementById('ih_client').value.trim();
+  var typeClient = document.getElementById('ih_typeClient').value;
+  var entite = document.getElementById('ih_entite').value;
+  var tel = document.getElementById('ih_tel').value.trim();
+
+  // Reperer les colonnes par leur en-tete (plus robuste qu'une position fixe)
+  var entetes = (rows[0]||[]).map(function(h){ return (h||'').toString().trim().toLowerCase(); });
+  function idxCol(motCle){
+    for(var i=0;i<entetes.length;i++){ if(entetes[i].indexOf(motCle)>=0) return i; }
+    return -1;
+  }
+  var cImmat = idxCol('immatricul');
+  var cChassis = idxCol('serie');
+  var cMarque = idxCol('marque');
+  var cModele = idxCol('modèle') >= 0 ? idxCol('modèle') : idxCol('modele');
+  var cMec = idxCol('mise en cir');
+  var cEntree = idxCol('entrée')>=0 ? idxCol('entrée') : idxCol('entree');
+  var cSortie = idxCol('sortie');
+  var cKm = idxCol('km');
+  var cTravaux = idxCol('travaux');
+
+  if(cImmat<0 || cEntree<0){
+    document.getElementById('ih_apercu').innerHTML = '<div class="empty" style="color:#A32D2D">Colonnes "Immatriculation" et/ou "Date Entree" introuvables. Verifiez les en-tetes du fichier.</div>';
+    return;
+  }
+
+  var lignesTraitees = [];
+  var doublonsIgnores = 0;
+
+  for(var r=1; r<rows.length; r++){
+    var row = rows[r];
+    if(!row || !row[cImmat]) continue;
+    var immatBrut = String(row[cImmat]).trim().toUpperCase();
+    var immatNorm = immatBrut.replace(/[\s\-]/g,'');
+    var dateEntree = parserDateImport(row[cEntree]);
+    if(!dateEntree) continue; // ligne inexploitable sans date d'entree
+
+    // Detection de doublon stricte : meme immat normalisee + meme date
+    // d'entree (jour pres) deja presente dans vehicles => on ignore.
+    var dejaExiste = vehicles.some(function(v){
+      var vImmatNorm = (v.immat||'').toUpperCase().replace(/[\s\-]/g,'');
+      if(vImmatNorm !== immatNorm) return false;
+      if(!v.entree) return false;
+      return Math.abs(v.entree - dateEntree) < 86400000; // meme jour
+    });
+    if(dejaExiste){ doublonsIgnores++; continue; }
+
+    var pieces = cTravaux>=0 ? decouperPieces(row[cTravaux]) : [];
+    lignesTraitees.push({
+      immat: immatBrut,
+      chassis: cChassis>=0 ? (row[cChassis]||'') : '',
+      marque: cMarque>=0 ? (row[cMarque]||'') : '',
+      modele: cModele>=0 ? (row[cModele]||'') : '',
+      mec: cMec>=0 ? parserDateImport(row[cMec]) : null,
+      entree: dateEntree,
+      sortie: cSortie>=0 ? parserDateImport(row[cSortie]) : null,
+      km: cKm>=0 ? (parseInt(row[cKm],10)||null) : null,
+      pieces: pieces
+    });
+  }
+
+  importHistoData = {client:clientNom, typeClient:typeClient, entite:entite, tel:tel, lignes:lignesTraitees};
+  importHistoStats = {total: lignesTraitees.length, doublonsIgnores: doublonsIgnores, vehiculesUniques: new Set(lignesTraitees.map(function(l){return l.immat;})).size};
+
+  afficherApercuImportHisto();
+}
+
+function afficherApercuImportHisto(){
+  if(!importHistoData) return;
+  var html = '<div class="card" style="margin-top:10px">';
+  html += '<div class="card-head" style="display:flex;justify-content:space-between;align-items:center">';
+  html += '<span>Apercu avant import</span>';
+  html += '<button class="btn btn-primary btn-sm" onclick="validerImportHistorique()">&#x2714; Confirmer l\'import</button>';
+  html += '</div>';
+
+  html += '<div class="kgrid k3" style="padding:14px 16px 0">';
+  html += kpi('Visites a importer', importHistoStats.total, 'green');
+  html += kpi('Vehicules uniques', importHistoStats.vehiculesUniques, '');
+  html += kpi('Doublons ignores (deja presents)', importHistoStats.doublonsIgnores, importHistoStats.doublonsIgnores>0?'amber':'green');
+  html += '</div>';
+
+  if(!importHistoData.lignes.length){
+    html += '<div class="empty">Aucune nouvelle visite a importer (tout est deja present, ou le fichier est vide).</div></div>';
+    document.getElementById('ih_apercu').innerHTML = html;
+    return;
+  }
+
+  html += '<div class="tw" style="margin-top:10px"><table><thead><tr>';
+  html += '<th>Vehicule</th><th>Chassis</th><th>Date entree</th><th>Date sortie</th><th>Km</th><th>Pieces</th>';
+  html += '</tr></thead><tbody>';
+  importHistoData.lignes.slice(0,50).forEach(function(l){
+    html += '<tr>';
+    html += '<td><strong>'+l.immat+'</strong><br><span class="xs muted">'+l.marque+' '+l.modele+'</span></td>';
+    html += '<td class="xs" style="font-family:monospace">'+(l.chassis||'—')+'</td>';
+    html += '<td class="xs">'+new Date(l.entree).toLocaleDateString('fr-FR')+'</td>';
+    html += '<td class="xs">'+(l.sortie?new Date(l.sortie).toLocaleDateString('fr-FR'):'<span class="muted">En cours</span>')+'</td>';
+    html += '<td class="xs">'+(l.km?l.km.toLocaleString('fr-FR'):'—')+'</td>';
+    html += '<td class="xs">'+(l.pieces.length?l.pieces.length+' piece(s)':'<span class="muted">aucune</span>')+'</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+  if(importHistoData.lignes.length>50){
+    html += '<div class="xs muted" style="padding:8px 16px">+ '+(importHistoData.lignes.length-50)+' autre(s) ligne(s) non affichee(s) dans l\'apercu (mais bien incluses dans l\'import)</div>';
+  }
+  html += '</div>';
+  document.getElementById('ih_apercu').innerHTML = html;
+}
+
+function validerImportHistorique(){
+  if(!importHistoData || !importHistoData.lignes.length) return;
+  if(currentRole!=='direction') return;
+  if(!confirm('Importer '+importHistoData.lignes.length+' visite(s) pour "'+importHistoData.client+'" ?\nCette action cree de nouveaux dossiers vehicule, elle est irreversible (mais chaque dossier reste modifiable/supprimable individuellement ensuite).')) return;
+
+  var d = importHistoData;
+  d.lignes.forEach(function(l){
+    var lignesChiffrage = l.pieces.map(function(nom){
+      return {
+        libreId: 'lib_'+Date.now()+'_'+Math.random().toString(36).substr(2,4),
+        piece: nom, qte: 1, prixAchat: 0, prixVente: 0,
+        fournisseurId: '', source: 'import_historique', paiement: 'cash'
+      };
+    });
+    var v = {
+      id: 'imp_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),
+      immat: l.immat, marque: l.marque||'', modele: l.modele||'', vin: l.chassis||'',
+      client: d.client, tel: d.tel||'', email: '',
+      typeClient: d.typeClient, entite: d.entite,
+      entree: l.entree, livraison: l.sortie||null,
+      km: l.km||null, mec: l.mec ? new Date(l.mec).toISOString().slice(0,10) : null,
+      status: l.sortie ? 'dossier_cloture' : 'travaux_cours',
+      priorite: 'normal',
+      isImportHistorique: true,
+      chiffrage: lignesChiffrage.length ? {lignes: lignesChiffrage, soumisLe: l.entree, valideDirLe: l.entree} : null
+    };
+    vehicles.push(v);
+  });
+
+  saveV();
+  importHistoData = null;
+  importHistoStats = null;
+  alert('Import termine : '+d.lignes.length+' visite(s) ajoutee(s) pour '+d.client+'.');
+  navigate('clients');
+}
+
 function pageAccesClients(){
   var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Acces clients — Portail distant</h2>';
