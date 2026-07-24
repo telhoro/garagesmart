@@ -14321,6 +14321,13 @@ function renderClientsListe(clients){
     var dmClient=delaiMoyenClient(c.vehicules);
     var isOpen=(openClientKeys[key]===true);
     var nbDevis = vehicles.filter(function(v){ return v.isProspect && !v.archive && v.prospectStatut!=='archive' && ((v.tel||'').trim().replace(/\s/g,'')===(c.tel||'').trim().replace(/\s/g,'') && (v.client||'').trim().toLowerCase()===(c.nom||'').trim().toLowerCase()); }).length;
+    // Nombre de vehicules PHYSIQUES uniques (immatriculations distinctes),
+    // different du nombre de dossiers (c.vehicules.length compte une
+    // entree par visite — un meme vehicule revenu plusieurs fois cree
+    // plusieurs dossiers, il ne faut pas le compter plusieurs fois ici).
+    var immatsUniques = {};
+    c.vehicules.forEach(function(v){ if(v.immat) immatsUniques[v.immat.toUpperCase().replace(/[\s\-]/g,'')]=true; });
+    var nbVehiculesUniques = Object.keys(immatsUniques).length;
     html+='<div class="client-row">';
     html+='<div class="client-row-head'+(isOpen?' open':'')+'" data-ckey="'+key+'" onclick="toggleClientByEl(this)">';
     html+='<span style="font-size:10px;color:#aaa;margin-right:10px">'+(isOpen?'&#x25BC;':'&#x25B6;')+'</span>';
@@ -14329,7 +14336,10 @@ function renderClientsListe(clients){
     if(!c.vehicules.length){
       html+='<span class="badge b-gray" style="font-style:italic">Aucun vehicule</span>';
     } else {
-      html+='<span class="badge b-blue">'+c.vehicules.length+' veh.</span>';
+      html+='<span class="badge b-blue">'+nbVehiculesUniques+' veh.</span>';
+      if(c.vehicules.length!==nbVehiculesUniques){
+        html+='<span class="badge b-gray" title="Nombre total de dossiers, toutes visites confondues">'+c.vehicules.length+' dossier'+(c.vehicules.length>1?'s':'')+'</span>';
+      }
     }
     if(nbActifs>0)html+='<span class="badge b-amber">'+nbActifs+' en cours</span>';
     html+='<span class="badge b-gray">'+totalInterv+' interv.</span>';
@@ -18650,10 +18660,11 @@ function afficherApercuImportHisto(){
   document.getElementById('ih_apercu').innerHTML = html;
 }
 
+function normaliserNomClientGlobal(s){
+  return (s||'').replace(/\s+/g,' ').trim().toLowerCase();
+}
+
 function validerImportHistorique(){
-  console.log('DEBUG validerImportHistorique appelee');
-  console.log('DEBUG importHistoData=', importHistoData ? ('present, '+importHistoData.lignes.length+' lignes') : 'NULL');
-  console.log('DEBUG currentRole=', currentRole);
   if(!importHistoData || !importHistoData.lignes.length){
     alert('Aucune donnee a importer. Selectionnez a nouveau le fichier Excel.');
     return;
@@ -18662,13 +18673,33 @@ function validerImportHistorique(){
     alert('Cette action est reservee au role Direction.');
     return;
   }
-  console.log('DEBUG avant confirm()');
-  var reponse = confirm('Importer '+importHistoData.lignes.length+' visite(s) pour "'+importHistoData.client+'" ?\nCette action cree de nouveaux dossiers vehicule, elle est irreversible (mais chaque dossier reste modifiable/supprimable individuellement ensuite).');
-  console.log('DEBUG reponse confirm=', reponse);
-  if(!reponse) return;
-  console.log('DEBUG confirme, debut de la boucle d\'import');
 
   var d = importHistoData;
+
+  // Recherche d'un client existant correspondant (nom normalise : espaces
+  // et casse ignores), pour rattacher l'import au VRAI client existant
+  // plutot que d'en creer un nouveau a cause d'une simple difference de
+  // frappe (espace, majuscule...). Le nom exact deja stocke dans vehicles
+  // est utilise pour tous les vehicules importes, garantissant qu'ils
+  // rejoignent bien la fiche client existante.
+  var nomSaisiNorm = normaliserNomClientGlobal(d.client);
+  var clientExistant = vehicles.find(function(v){
+    return v.client && normaliserNomClientGlobal(v.client)===nomSaisiNorm && v.isProspect!==true;
+  });
+  if(!clientExistant){
+    var ficheExistante = CLIENTS_SANS_VEHICULE.find(function(c){
+      return normaliserNomClientGlobal(c.nom)===nomSaisiNorm;
+    });
+    if(ficheExistante) clientExistant = {client: ficheExistante.nom, tel: ficheExistante.tel};
+  }
+  var nomFinal = clientExistant ? clientExistant.client : d.client;
+  var telFinal = clientExistant ? (clientExistant.tel||d.tel||'') : (d.tel||'');
+
+  var messageConfirm = clientExistant
+    ? 'Importer '+d.lignes.length+' visite(s) pour le client existant "'+nomFinal+'" ?\nCette action cree de nouveaux dossiers vehicule, elle est irreversible (mais chaque dossier reste modifiable/supprimable individuellement ensuite).'
+    : 'Aucun client existant ne correspond exactement a "'+d.client+'" — un NOUVEAU client sera cree.\nImporter '+d.lignes.length+' visite(s) pour ce nouveau client "'+d.client+'" ?';
+  if(!confirm(messageConfirm)) return;
+
   d.lignes.forEach(function(l){
     var lignesChiffrage = l.pieces.map(function(nom){
       return {
@@ -18680,7 +18711,7 @@ function validerImportHistorique(){
     var v = {
       id: 'imp_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),
       immat: l.immat, marque: l.marque||'', modele: l.modele||'', vin: l.chassis||'',
-      client: d.client, tel: d.tel||'', email: '',
+      client: nomFinal, tel: telFinal, email: '',
       typeClient: d.typeClient, entite: d.entite,
       entree: l.entree, livraison: l.sortie||null,
       km: l.km||null, mec: l.mec ? new Date(l.mec).toISOString().slice(0,10) : null,
@@ -18691,13 +18722,11 @@ function validerImportHistorique(){
     };
     vehicles.push(v);
   });
-  console.log('DEBUG boucle terminee, vehicles.length total=', vehicles.length);
 
   saveV();
-  console.log('DEBUG saveV() execute');
   importHistoData = null;
   importHistoStats = null;
-  alert('Import termine : '+d.lignes.length+' visite(s) ajoutee(s) pour '+d.client+'.');
+  alert('Import termine : '+d.lignes.length+' visite(s) ajoutee(s) pour '+nomFinal+'.');
   navigate('clients');
 }
 
