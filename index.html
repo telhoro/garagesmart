@@ -2068,10 +2068,12 @@ var SEUIL_RECONNAISSANCE_FACIALE = 0.5; // distance euclidienne max (face-api.js
 function demarrerPointagePresence(){
   var statusMsg = document.getElementById('presenceStatusMsg');
   var video = document.getElementById('presenceVideo');
+  var placeholder = document.getElementById('presencePlaceholder');
   if(!video) return; // l'utilisateur a change de page entre temps
 
   if(Object.keys(DESCRIPTEURS_FACIAUX).length===0){
     if(statusMsg) statusMsg.textContent = 'Aucun employe enrole pour l\'instant. Utilisez l\'onglet Enrolement.';
+    remettreBoutonActiverPointage();
     return;
   }
 
@@ -2080,15 +2082,33 @@ function demarrerPointagePresence(){
     navigator.mediaDevices.getUserMedia({video:{width:480,height:360}, audio:false}).then(function(stream){
       presenceStream = stream;
       video.srcObject = stream;
+      video.style.display = 'block';
+      if(placeholder) placeholder.style.display = 'none';
       if(statusMsg) statusMsg.textContent = 'Placez votre visage face a la camera...';
       lancerBoucleReconnaissance();
     }).catch(function(err){
       console.error('Erreur camera:', err);
       if(statusMsg) statusMsg.textContent = 'Impossible d\'acceder a la camera. Utilisez le mode manuel ci-dessous.';
+      remettreBoutonActiverPointage();
     });
   }, function(msgErreur){
     if(statusMsg) statusMsg.textContent = msgErreur;
+    remettreBoutonActiverPointage();
   });
+}
+
+// Remet l'ecran de pointage dans son etat initial : placeholder visible,
+// video masquee, bouton "Activer" de nouveau disponible — appelee apres
+// une reconnaissance reussie, une erreur, ou un passage en mode manuel.
+function remettreBoutonActiverPointage(){
+  var video = document.getElementById('presenceVideo');
+  var placeholder = document.getElementById('presencePlaceholder');
+  var btnActiver = document.getElementById('presenceBtnActiver');
+  var btnManuel = document.getElementById('presenceBtnManuel');
+  if(video){ video.style.display = 'none'; video.srcObject = null; }
+  if(placeholder) placeholder.style.display = 'flex';
+  if(btnActiver) btnActiver.style.display = 'inline-block';
+  if(btnManuel) btnManuel.style.display = 'none';
 }
 
 function arreterPointagePresence(){
@@ -2165,25 +2185,22 @@ function enregistrerPointage(employe, methode, photoBase64){
   PRESENCES.push(pointage);
   savePresences();
 
-  // Masque l'affichage video (la camera reste active en arriere-plan) et
-  // affiche un ecran de confirmation bien visible a la place — plus clair
-  // qu'un simple message sous une video qui continue de tourner. La
-  // reconnaissance est mise en pause le temps du message, pour eviter
-  // qu'un second pointage se declenche par erreur sur la meme personne.
-  presenceEnPause = true;
+  // Coupe REELLEMENT la camera des la reconnaissance reussie (pas juste
+  // masquer l'affichage) : evite qu'un visage immobile devant la camera
+  // soit repointe plusieurs fois de suite. L'employe suivant doit
+  // reappuyer sur "Activer la camera" pour pointer a son tour.
+  arreterPointagePresence();
   var videoEl = document.getElementById('presenceVideo');
-  var canvasEl = document.getElementById('presenceCanvas');
   var conteneurVideo = videoEl ? videoEl.parentElement : null;
   if(conteneurVideo){
-    conteneurVideo.setAttribute('data-original-display', 'flex');
     var confirmationDiv = document.createElement('div');
     confirmationDiv.id = 'presenceConfirmationEcran';
-    confirmationDiv.style.cssText = 'background:#EAF3DE;border-radius:12px;padding:40px 20px;text-align:center';
+    confirmationDiv.style.cssText = 'background:#EAF3DE;border-radius:12px;padding:40px 20px;text-align:center;width:100%;aspect-ratio:4/3;display:flex;flex-direction:column;align-items:center;justify-content:center';
     confirmationDiv.innerHTML = '<div style="font-size:56px;margin-bottom:10px">&#x2714;</div>'
       + '<div style="font-size:18px;font-weight:700;color:#3B6D11">'+employe.nom+'</div>'
       + '<div style="font-size:14px;color:#3B6D11;margin-top:4px">'+(type==='arrivee'?'Arrivee':'Depart')+' enregistre a '+new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+'</div>';
-    if(videoEl) videoEl.style.display = 'none';
-    if(canvasEl) canvasEl.style.display = 'none';
+    var placeholder = document.getElementById('presencePlaceholder');
+    if(placeholder) placeholder.style.display = 'none';
     conteneurVideo.appendChild(confirmationDiv);
   }
 
@@ -2193,9 +2210,7 @@ function enregistrerPointage(employe, methode, photoBase64){
   setTimeout(function(){
     var confEcran = document.getElementById('presenceConfirmationEcran');
     if(confEcran) confEcran.remove();
-    if(videoEl) videoEl.style.display = '';
-    if(canvasEl) canvasEl.style.display = '';
-    presenceEnPause = false;
+    remettreBoutonActiverPointage();
   }, 3000);
 }
 
@@ -2205,6 +2220,13 @@ function basculerModeManuelPresence(){
   if(!zone) return;
   var estVisible = zone.style.display==='block';
   if(estVisible){ zone.style.display='none'; return; }
+
+  // Si la camera n'a pas encore ete activee (l'employe clique directement
+  // sur ce bouton sans etre passe par "Activer la camera"), on la demarre
+  // maintenant pour pouvoir prendre la photo de preuve du pointage manuel.
+  if(!presenceStream){
+    activerCameraPointage();
+  }
 
   var options = '<option value="">— Selectionner votre nom —</option>';
   PERSONNEL.forEach(function(p){ options += '<option value="'+p.id+'">'+p.nom+'</option>'; });
@@ -20155,22 +20177,39 @@ function pagePresences(){
 // vers le mode manuel (photo + selection du nom) sans etre bloque.
 function pagePresencesPointage(){
   var html = '<div class="card" style="padding:20px;text-align:center">';
-  html += '<div id="presenceStatusMsg" class="xs muted" style="margin-bottom:12px">Initialisation de la camera...</div>';
+  html += '<div id="presenceStatusMsg" class="xs muted" style="margin-bottom:12px">Appuyez sur le bouton pour pointer.</div>';
   html += '<div style="position:relative;max-width:480px;margin:0 auto">';
-  html += '<video id="presenceVideo" autoplay muted playsinline style="width:100%;border-radius:12px;background:#111"></video>';
+  html += '<div id="presencePlaceholder" style="width:100%;aspect-ratio:4/3;border-radius:12px;background:#f0ede8;display:flex;align-items:center;justify-content:center">';
+  html += '<div style="font-size:48px;opacity:.3">&#x1F4F7;</div>';
+  html += '</div>';
+  html += '<video id="presenceVideo" autoplay muted playsinline style="width:100%;border-radius:12px;background:#111;display:none"></video>';
   html += '<canvas id="presenceCanvas" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none"></canvas>';
   html += '</div>';
   html += '<div id="presenceResultat" style="margin-top:16px"></div>';
   html += '<div style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">';
-  html += '<button class="btn btn-sm" style="color:#854F0B;border-color:#E8A44A" onclick="basculerModeManuelPresence()">&#x270B; Je n\'arrive pas a etre reconnu</button>';
+  html += '<button class="btn btn-primary" id="presenceBtnActiver" onclick="activerCameraPointage()">&#x1F4F7; Activer la camera pour pointer</button>';
+  html += '<button class="btn btn-sm" id="presenceBtnManuel" style="color:#854F0B;border-color:#E8A44A;display:none" onclick="basculerModeManuelPresence()">&#x270B; Je n\'arrive pas a etre reconnu</button>';
   html += '</div>';
   html += '<div id="presenceModeManuel" style="margin-top:16px;display:none"></div>';
   html += '</div>';
 
-  // Demarre la camera et la boucle de reconnaissance des que le DOM est
-  // pret (setTimeout 0 pour laisser le rendu HTML s'achever avant).
-  setTimeout(function(){ demarrerPointagePresence(); }, 0);
+  // La camera ne demarre PLUS automatiquement : l'employe doit appuyer
+  // sur le bouton pour l'activer. Une fois reconnu (ou apres bascule
+  // manuelle), la camera se coupe et il faut reappuyer pour le suivant —
+  // evite qu'un visage immobile devant la camera soit pointe plusieurs
+  // fois de suite sans action volontaire.
   return html;
+}
+
+// Active la camera au clic sur le bouton, lance la boucle de
+// reconnaissance, et bascule l'affichage (placeholder -> video, bouton
+// masque tant que la camera est active).
+function activerCameraPointage(){
+  var btnActiver = document.getElementById('presenceBtnActiver');
+  var btnManuel = document.getElementById('presenceBtnManuel');
+  if(btnActiver) btnActiver.style.display = 'none';
+  if(btnManuel) btnManuel.style.display = 'inline-block';
+  demarrerPointagePresence();
 }
 
 // Liste des employes avec leur statut d'enrolement facial (deja enrole ou
