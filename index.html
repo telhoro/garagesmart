@@ -1848,7 +1848,7 @@ var NAV = {
     {l:'Suivi',items:[{id:'stats_tech',e:'S',l:'Statistiques'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'}]}
   ],
   testeur:[{l:'Test',items:[{id:'dashboard',e:'D',l:'Tableau de bord'}]}],
-  achats:[{l:'Achats',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'fournisseurs',e:'F',l:'Fournisseurs'}]},{l:'Stock',items:[{id:'stock',e:'St',l:'Gestion du stock'}]}]
+  achats:[{l:'Achats',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'historique',e:'H',l:'Historique'}]},{l:'Stock',items:[{id:'stock',e:'St',l:'Gestion du stock'}]}]
 };
 
 var TITLES = {
@@ -3008,9 +3008,10 @@ function renderHistoriqueResults(){
   }
   var GROUPES = [
     { label:'En cours de traitement', color:'#EBF3FB', textColor:'#185FA5',
-      statuts:['reception','attente_diag','diag_en_cours','devis_atelier','attente_chiffrage',
-               'devis_prep','devis_termine','devis_envoye','accord_client','attente_fin',
-               'valide_fin','travaux_attente','travaux_cours','travaux_termines','en_test',
+      statuts:['reception','attente_diag','diag_en_cours','devis_atelier','devis_valide','attente_chiffrage',
+               'devis_prep','devis_termine','devis_envoye','modifier_devis','accord_client','attente_fin',
+               'valide_fin','attente_appro','pieces_commande','appro_en_cours','pieces_partiel',
+               'pieces_livrees','travaux_attente','travaux_cours','travaux_termines','en_test',
                'attente_valid_chef','reprise_demandee'] },
     { label:'En cours de livraison', color:'#EAF6F4', textColor:'#0D7A78',
       statuts:['vehicule_termine','en_lavage','client_contacte','attente_client',
