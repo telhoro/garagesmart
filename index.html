@@ -20249,8 +20249,25 @@ var presencesHistoEmploye = '';
 var presencesHistoDateDebut = '';
 var presencesHistoDateFin = '';
 var HEURE_ARRIVEE_REFERENCE = 8; // heure de reference pour la ponctualite (8h00), reglable via l'UI
-var HEURE_DEPART_REFERENCE = 17; // heure de fin de reference (17h00), pour detecter un depart anticipe
+var HEURE_DEPART_REFERENCE = 17.5; // heure de fin de reference (17h30 par defaut), pour detecter un depart anticipe
 var PAUSE_REFERENCE_MINUTES = 60; // duree de pause de reference (1h), pour comparer a la pause reelle observee
+
+// Conversion entre "HH:MM" (format d'un <input type="time">, pour saisir
+// des minutes precises comme 17h30) et heure decimale (format utilise en
+// interne pour tous les calculs de ponctualite).
+function heureTexteVersDecimal(texte){
+  var parts = (texte||'').split(':');
+  var h = parseInt(parts[0],10)||0;
+  var m = parseInt(parts[1],10)||0;
+  return h + m/60;
+}
+function decimalVersHeureTexte(decimal){
+  if(decimal===null || decimal===undefined || isNaN(decimal)) return '08:00';
+  var h = Math.floor(decimal);
+  var m = Math.round((decimal-h)*60);
+  if(m===60){ h++; m=0; }
+  return (h<10?'0':'')+h+':'+(m<10?'0':'')+m;
+}
 
 // Etats d'affichage : le calendrier global (tous les employes) et le
 // detail/calendrier par employe individuel sont masques par defaut, et
@@ -20424,9 +20441,9 @@ function pagePresencesHistorique(){
   html += '<span class="xs muted">a</span>';
   html += '<input type="date" class="inp" style="width:150px" value="'+presencesHistoDateFin+'" onchange="presencesHistoDateFin=this.value;renderPage()">';
   html += '<span class="xs muted">Arrivee ref. :</span>';
-  html += '<input type="number" class="inp" style="width:60px" min="0" max="23" value="'+HEURE_ARRIVEE_REFERENCE+'" onchange="HEURE_ARRIVEE_REFERENCE=parseFloat(this.value)||8;renderPage()">h';
+  html += '<input type="time" class="inp" style="width:90px" value="'+decimalVersHeureTexte(HEURE_ARRIVEE_REFERENCE)+'" onchange="HEURE_ARRIVEE_REFERENCE=heureTexteVersDecimal(this.value);renderPage()">';
   html += '<span class="xs muted">Depart ref. :</span>';
-  html += '<input type="number" class="inp" style="width:60px" min="0" max="23" value="'+HEURE_DEPART_REFERENCE+'" onchange="HEURE_DEPART_REFERENCE=parseFloat(this.value)||17;renderPage()">h';
+  html += '<input type="time" class="inp" style="width:90px" value="'+decimalVersHeureTexte(HEURE_DEPART_REFERENCE)+'" onchange="HEURE_DEPART_REFERENCE=heureTexteVersDecimal(this.value);renderPage()">';
   html += '<span class="xs muted">Pause ref. :</span>';
   html += '<input type="number" class="inp" style="width:70px" min="0" value="'+PAUSE_REFERENCE_MINUTES+'" onchange="PAUSE_REFERENCE_MINUTES=parseInt(this.value,10)||60;renderPage()">min';
   if(presencesHistoEmploye || presencesHistoDateDebut || presencesHistoDateFin){
