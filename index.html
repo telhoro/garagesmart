@@ -2191,7 +2191,10 @@ function enregistrerPointage(employe, methode, photoBase64){
   // reappuyer sur "Activer la camera" pour pointer a son tour.
   arreterPointagePresence();
   var videoEl = document.getElementById('presenceVideo');
+  var canvasEl = document.getElementById('presenceCanvas');
   var conteneurVideo = videoEl ? videoEl.parentElement : null;
+  if(videoEl) videoEl.style.display = 'none';
+  if(canvasEl) canvasEl.style.display = 'none';
   if(conteneurVideo){
     var confirmationDiv = document.createElement('div');
     confirmationDiv.id = 'presenceConfirmationEcran';
@@ -20246,6 +20249,8 @@ var presencesHistoEmploye = '';
 var presencesHistoDateDebut = '';
 var presencesHistoDateFin = '';
 var HEURE_ARRIVEE_REFERENCE = 8; // heure de reference pour la ponctualite (8h00), reglable via l'UI
+var HEURE_DEPART_REFERENCE = 17; // heure de fin de reference (17h00), pour detecter un depart anticipe
+var PAUSE_REFERENCE_MINUTES = 60; // duree de pause de reference (1h), pour comparer a la pause reelle observee
 
 // Regroupe les pointages bruts en "journees de travail" : une entree par
 // employe/jour, avec la liste des segments {arrivee, depart} — permet de
@@ -20291,7 +20296,40 @@ function calculerStatsJournee(journee){
   var heureArriveeDecimal = dArrivee.getHours() + dArrivee.getMinutes()/60;
   var estEnRetard = heureArriveeDecimal > HEURE_ARRIVEE_REFERENCE;
   var minutesRetard = estEnRetard ? Math.round((heureArriveeDecimal - HEURE_ARRIVEE_REFERENCE)*60) : 0;
-  return {heuresTravaillees:heuresTravaillees, estEnRetard:estEnRetard, minutesRetard:minutesRetard};
+
+  // Depart anticipe : dernier depart connu de la journee, compare a
+  // HEURE_DEPART_REFERENCE.
+  var dernierSegmentAvecDepart = null;
+  for(var i=journee.segments.length-1; i>=0; i--){
+    if(journee.segments[i].depart){ dernierSegmentAvecDepart = journee.segments[i]; break; }
+  }
+  var estDepartAnticipe = false, minutesDepartAnticipe = 0;
+  if(dernierSegmentAvecDepart){
+    var dDepart = new Date(dernierSegmentAvecDepart.depart.date);
+    var heureDepartDecimal = dDepart.getHours() + dDepart.getMinutes()/60;
+    estDepartAnticipe = heureDepartDecimal < HEURE_DEPART_REFERENCE;
+    minutesDepartAnticipe = estDepartAnticipe ? Math.round((HEURE_DEPART_REFERENCE - heureDepartDecimal)*60) : 0;
+  }
+
+  // Pauses : temps ecoule entre chaque depart et l'arrivee suivante (dans
+  // la meme journee) — purement informatif, jamais soustrait du temps
+  // travaille (deja base uniquement sur les segments arrivee->depart
+  // reels). Comparees a PAUSE_REFERENCE_MINUTES pour signaler un
+  // depassement.
+  var pauses = [];
+  for(var j=0; j<journee.segments.length-1; j++){
+    if(journee.segments[j].depart){
+      var finPause = journee.segments[j].depart.date;
+      var debutSuivant = journee.segments[j+1].arrivee.date;
+      var dureePauseMinutes = Math.round((debutSuivant-finPause)/60000);
+      pauses.push({minutes:dureePauseMinutes, depassement:dureePauseMinutes>PAUSE_REFERENCE_MINUTES});
+    }
+  }
+
+  return {
+    heuresTravaillees:heuresTravaillees, estEnRetard:estEnRetard, minutesRetard:minutesRetard,
+    estDepartAnticipe:estDepartAnticipe, minutesDepartAnticipe:minutesDepartAnticipe, pauses:pauses
+  };
 }
 
 function formaterHeuresDecimal(h){
@@ -20299,6 +20337,59 @@ function formaterHeuresDecimal(h){
   var minutes = Math.round((h-heures)*60);
   if(minutes===60){ heures++; minutes=0; }
   return heures+'h'+(minutes<10?'0':'')+minutes;
+}
+
+// Genere un mini-calendrier mensuel (grille de 7 colonnes, lundi en
+// premier) pour un employe, avec chaque jour colore selon son statut :
+// vert = present a l'heure, orange = present mais en retard, gris = pas
+// de pointage ce jour-la (absent ou hors periode).
+function renderCalendrierEmploye(employeNom, journeesEmploye, annee, mois){
+  var statutParJour = {};
+  var heuresParJour = {};
+  journeesEmploye.forEach(function(j){
+    var d = new Date(j.jour);
+    if(d.getFullYear()!==annee || d.getMonth()!==mois) return; // hors du mois affiche
+    var cle = d.getDate();
+    var stats = calculerStatsJournee(j);
+    statutParJour[cle] = stats.estEnRetard ? 'retard' : 'present';
+    heuresParJour[cle] = stats.heuresTravaillees;
+  });
+
+  var premierJourMois = new Date(annee, mois, 1);
+  var dernierJourMois = new Date(annee, mois+1, 0);
+  var nbJours = dernierJourMois.getDate();
+  var jourSemaine1er = (premierJourMois.getDay()+6)%7; // lundi=0
+
+  var noms = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
+  var html = '<div class="card" style="margin-bottom:16px;padding:14px">';
+  html += '<div style="font-weight:700;margin-bottom:8px">'+employeNom+' — '+noms[mois]+' '+annee+'</div>';
+  html += '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;font-size:11px;margin-bottom:4px">';
+  ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].forEach(function(j){
+    html += '<div style="text-align:center;color:#999;font-weight:600">'+j+'</div>';
+  });
+  html += '</div>';
+
+  html += '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">';
+  for(var i=0;i<jourSemaine1er;i++) html += '<div></div>';
+  for(var jour=1; jour<=nbJours; jour++){
+    var statut = statutParJour[jour];
+    var couleurFond = statut==='retard' ? '#FAEEDA' : (statut==='present' ? '#EAF3DE' : '#f5f4f1');
+    var couleurTexte = statut==='retard' ? '#854F0B' : (statut==='present' ? '#3B6D11' : '#bbb');
+    var heures = heuresParJour[jour];
+    html += '<div style="background:'+couleurFond+';color:'+couleurTexte+';border-radius:6px;padding:4px 2px;text-align:center;font-size:11px">';
+    html += '<div style="font-weight:700">'+jour+'</div>';
+    if(heures>0) html += '<div style="font-size:9px">'+formaterHeuresDecimal(heures)+'</div>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  html += '<div style="display:flex;gap:12px;margin-top:10px;font-size:10px;color:#999">';
+  html += '<span><span style="display:inline-block;width:10px;height:10px;background:#EAF3DE;border-radius:2px;margin-right:3px"></span>Present a l\'heure</span>';
+  html += '<span><span style="display:inline-block;width:10px;height:10px;background:#FAEEDA;border-radius:2px;margin-right:3px"></span>Present en retard</span>';
+  html += '<span><span style="display:inline-block;width:10px;height:10px;background:#f5f4f1;border-radius:2px;margin-right:3px"></span>Absent</span>';
+  html += '</div>';
+  html += '</div>';
+  return html;
 }
 
 function pagePresencesHistorique(){
@@ -20312,8 +20403,12 @@ function pagePresencesHistorique(){
   html += '<input type="date" class="inp" style="width:150px" value="'+presencesHistoDateDebut+'" onchange="presencesHistoDateDebut=this.value;renderPage()">';
   html += '<span class="xs muted">a</span>';
   html += '<input type="date" class="inp" style="width:150px" value="'+presencesHistoDateFin+'" onchange="presencesHistoDateFin=this.value;renderPage()">';
-  html += '<span class="xs muted">Heure de reference :</span>';
-  html += '<input type="number" class="inp" style="width:70px" min="0" max="23" value="'+HEURE_ARRIVEE_REFERENCE+'" onchange="HEURE_ARRIVEE_REFERENCE=parseFloat(this.value)||8;renderPage()">h';
+  html += '<span class="xs muted">Arrivee ref. :</span>';
+  html += '<input type="number" class="inp" style="width:60px" min="0" max="23" value="'+HEURE_ARRIVEE_REFERENCE+'" onchange="HEURE_ARRIVEE_REFERENCE=parseFloat(this.value)||8;renderPage()">h';
+  html += '<span class="xs muted">Depart ref. :</span>';
+  html += '<input type="number" class="inp" style="width:60px" min="0" max="23" value="'+HEURE_DEPART_REFERENCE+'" onchange="HEURE_DEPART_REFERENCE=parseFloat(this.value)||17;renderPage()">h';
+  html += '<span class="xs muted">Pause ref. :</span>';
+  html += '<input type="number" class="inp" style="width:70px" min="0" value="'+PAUSE_REFERENCE_MINUTES+'" onchange="PAUSE_REFERENCE_MINUTES=parseInt(this.value,10)||60;renderPage()">min';
   if(presencesHistoEmploye || presencesHistoDateDebut || presencesHistoDateFin){
     html += '<button class="btn btn-sm" onclick="presencesHistoEmploye=\'\';presencesHistoDateDebut=\'\';presencesHistoDateFin=\'\';renderPage()">Reinitialiser</button>';
   }
@@ -20365,12 +20460,22 @@ function pagePresencesHistorique(){
   });
   html += '</tbody></table></div></div>';
 
+  // ── Calendrier visuel par employe : jours colores selon le statut de
+  // presence (present a l'heure / present en retard / absent), sur le
+  // mois du premier jour de la periode filtree (ou le mois en cours si
+  // aucun filtre de date n'est applique).
+  var moisReference = presencesHistoDateDebut ? new Date(presencesHistoDateDebut) : new Date();
+  Object.keys(parEmploye).forEach(function(employeId){
+    var e = parEmploye[employeId];
+    html += renderCalendrierEmploye(e.employeNom, e.jours, moisReference.getFullYear(), moisReference.getMonth());
+  });
+
   // ── Detail jour par jour : une ligne par employe/jour, arrivee+depart
   // regroupes sur la meme ligne (plusieurs segments affiches cote a cote
   // si l'employe a pointe plusieurs fois dans la journee, ex: pause).
   html += '<div class="section-title" style="font-weight:700;margin-bottom:8px">Detail jour par jour</div>';
   journees.sort(function(a,b){return b.jour-a.jour;});
-  html += '<div class="card"><div class="tw"><table><thead><tr><th>Employe</th><th>Date</th><th>Arrivee(s) / Depart(s)</th><th style="text-align:center">Ponctualite</th><th style="text-align:right">Heures</th><th>Photo</th></tr></thead><tbody>';
+  html += '<div class="card"><div class="tw"><table><thead><tr><th>Employe</th><th>Date</th><th>Arrivee(s) / Depart(s)</th><th style="text-align:center">Ponctualite</th><th style="text-align:center">Pause</th><th style="text-align:right">Heures</th><th>Photo</th></tr></thead><tbody>';
   journees.forEach(function(j){
     var stats = calculerStatsJournee(j);
     var segmentsTxt = j.segments.map(function(s){
@@ -20379,11 +20484,19 @@ function pagePresencesHistorique(){
       return hArr+' &rarr; '+hDep;
     }).join(' &middot; ');
     var premierPointage = j.segments[0].arrivee;
+    var badgesPonctualite = [];
+    if(stats.estEnRetard) badgesPonctualite.push('<span class="badge b-red">+'+stats.minutesRetard+' min</span>');
+    if(stats.estDepartAnticipe) badgesPonctualite.push('<span class="badge b-amber">-'+stats.minutesDepartAnticipe+' min</span>');
+    if(!badgesPonctualite.length) badgesPonctualite.push('<span class="badge b-green">A l\'heure</span>');
+    var badgesPause = stats.pauses.length
+      ? stats.pauses.map(function(p){ return '<span class="badge '+(p.depassement?'b-red':'b-gray')+'">'+p.minutes+' min</span>'; }).join(' ')
+      : '—';
     html += '<tr>';
     html += '<td><strong>'+j.employeNom+'</strong></td>';
     html += '<td>'+new Date(j.jour).toLocaleDateString('fr-FR')+'</td>';
     html += '<td class="xs">'+segmentsTxt+'</td>';
-    html += '<td style="text-align:center">'+(stats.estEnRetard?'<span class="badge b-red">+'+stats.minutesRetard+' min</span>':'<span class="badge b-green">A l\'heure</span>')+'</td>';
+    html += '<td style="text-align:center">'+badgesPonctualite.join(' ')+'</td>';
+    html += '<td style="text-align:center">'+badgesPause+'</td>';
     html += '<td style="text-align:right">'+(stats.heuresTravaillees>0?formaterHeuresDecimal(stats.heuresTravaillees):'—')+'</td>';
     html += '<td>'+(premierPointage.photo?'<img src="'+premierPointage.photo+'" style="width:40px;height:30px;object-fit:cover;border-radius:4px;cursor:pointer" onclick="window.open(this.src)">':'—')+'</td>';
     html += '</tr>';
