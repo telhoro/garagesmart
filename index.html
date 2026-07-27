@@ -142,6 +142,7 @@ tr:hover td{background:#faf9f7}
 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </head>
 <body>
 <!-- ECRAN LOGIN -->
@@ -1824,7 +1825,7 @@ function initFournisseurs(){
 
 var NAV = {
   direction:[
-    {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'},{id:'acces_clients',e:'AC',l:'Acces clients'},{id:'messages_clients',e:'MC',l:'Messages clients'},{id:'import_historique',e:'IH',l:'Import historique'}]},
+    {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'},{id:'acces_clients',e:'AC',l:'Acces clients'},{id:'messages_clients',e:'MC',l:'Messages clients'},{id:'import_historique',e:'IH',l:'Import historique'},{id:'presences',e:'Pr',l:'Presences'}]},
     {l:'Finances',items:[{id:'finances_dashboard',e:'FD',l:'Tableau de bord'},{id:'facturation',e:'F',l:'Facturation'},{id:'dettes_fournisseurs',e:'DF',l:'Dettes fournisseurs'},{id:'prevision_treso',e:'PT',l:'Prevision tresorerie'}]},
     {l:'Rentabilite',items:[{id:'rentabilite',e:'RD',l:'Clients Devis'},{id:'rentabilite_forfait',e:'RF',l:'Clients Forfait'},{id:'analyse_pieces',e:'AP',l:'Analyse pieces'}]},
     {l:'Gestion',items:[{id:'archives',e:'Ar',l:'Archives'},{id:'banques',e:'B',l:'Banques'},{id:'charges_fixes',e:'CF',l:'Charges fixes'},{id:'engagements_bancaires',e:'EB',l:'Engagements bancaires'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'stock',e:'St',l:'Gestion du stock'},{id:'travaux_prevoir',e:'TP',l:'Travaux a prevoir'},{id:'devis_differes',e:'DD',l:'Devis differes'},{id:'sinistres',e:'S',l:'Sinistres'},{id:'val_fin',e:'VF',l:'Validation financiere'},{id:'kpi',e:'K',l:'KPI'}]}
@@ -1832,7 +1833,8 @@ var NAV = {
   reception:[
     {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'historique',e:'H',l:'Historique'}]},
     {l:'Clients',items:[{id:'clients',e:'C',l:'Clients et vehicules'},{id:'messages_clients',e:'MC',l:'Messages clients'}]},
-    {l:'Suivi',items:[{id:'devis_differes',e:'DD',l:'Devis differes'}]}
+    {l:'Suivi',items:[{id:'devis_differes',e:'DD',l:'Devis differes'}]},
+    {l:'RH',items:[{id:'presences',e:'Pr',l:'Presences'}]}
   ],
   chef_atelier:[
     {l:'Atelier',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'}]},
@@ -1863,7 +1865,8 @@ var TITLES = {
   messages_clients:'Messages clients',
   import_historique:'Import historique',
   vue_portail_client:'Vue portail client',
-  vue_portail_stats:'Statistiques portail client'
+  vue_portail_stats:'Statistiques portail client',
+  presences:'Presences'
 };
 
 var SAMPLE = [];
@@ -1962,6 +1965,301 @@ function vehiclesActifs(){
     return true;
   });
 }
+// ── Presences employes (pointage arrivee/depart) ─────────────────────────
+// Un pointage = {id, employeId, employeNom, type:'arrivee'|'depart', date,
+// methode:'reconnaissance'|'manuel', photo (base64, preuve visuelle)}.
+// Les descripteurs faciaux (signatures d'enrolement) sont stockes
+// separement, car volumineux et sensibles — jamais mélangés avec le
+// personnel lui-meme.
+var PRESENCES = [];
+function savePresences(){
+  localStorage.setItem('gos_presences', JSON.stringify(PRESENCES));
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_presences').set(JSON.stringify(PRESENCES)).catch(function(e){
+      console.error('Firebase presences save error:', e);
+    });
+  }
+}
+function loadPresences(){
+  var raw = localStorage.getItem('gos_presences');
+  if(raw){ try{ PRESENCES = JSON.parse(raw)||[]; }catch(e){ PRESENCES=[]; } }
+}
+function syncPresencesFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_presences').once('value').then(function(snap){
+    var val = snap.val();
+    if(val){ try{ PRESENCES = JSON.parse(val)||[]; localStorage.setItem('gos_presences', val); }catch(e){} }
+    else if(PRESENCES.length && fbConnected){ fbDb.ref('gos_presences').set(JSON.stringify(PRESENCES)); }
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
+}
+
+// Descripteurs faciaux d'enrolement : {employeId: [128 floats]}. Stockage
+// separe de PERSONNEL — un descripteur est une donnee biometrique
+// sensible, jamais affichee ni exportee, uniquement utilisee pour la
+// comparaison lors de la reconnaissance.
+var DESCRIPTEURS_FACIAUX = {};
+function saveDescripteursFaciaux(){
+  localStorage.setItem('gos_descripteurs_faciaux', JSON.stringify(DESCRIPTEURS_FACIAUX));
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_descripteurs_faciaux').set(JSON.stringify(DESCRIPTEURS_FACIAUX)).catch(function(e){
+      console.error('Firebase descripteurs faciaux save error:', e);
+    });
+  }
+}
+function loadDescripteursFaciaux(){
+  var raw = localStorage.getItem('gos_descripteurs_faciaux');
+  if(raw){ try{ DESCRIPTEURS_FACIAUX = JSON.parse(raw)||{}; }catch(e){ DESCRIPTEURS_FACIAUX={}; } }
+}
+function syncDescripteursFaciauxFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_descripteurs_faciaux').once('value').then(function(snap){
+    var val = snap.val();
+    if(val){ try{ DESCRIPTEURS_FACIAUX = JSON.parse(val)||{}; localStorage.setItem('gos_descripteurs_faciaux', val); }catch(e){} }
+    else if(Object.keys(DESCRIPTEURS_FACIAUX).length && fbConnected){ fbDb.ref('gos_descripteurs_faciaux').set(JSON.stringify(DESCRIPTEURS_FACIAUX)); }
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
+}
+
+// ── Chargement des modeles de reconnaissance faciale (face-api.js) ──────
+// Charge a la demande (pas au demarrage de l'app) pour ne pas ralentir le
+// chargement general si personne n'utilise cette fonctionnalite. Les
+// modeles sont volumineux (plusieurs Mo) et charges une seule fois par
+// session grace au flag faceApiModelsCharges.
+var faceApiModelsCharges = false;
+var faceApiModelsEnChargement = false;
+var FACE_API_MODELS_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
+
+function chargerModelesFaceApi(callback, onError){
+  if(faceApiModelsCharges){ if(callback) callback(); return; }
+  if(typeof faceapi === 'undefined'){
+    if(onError) onError('La librairie de reconnaissance faciale ne s\'est pas chargee (verifiez la connexion internet).');
+    return;
+  }
+  if(faceApiModelsEnChargement){
+    // Deja en cours de chargement (ex: double-clic) : attendre sa fin.
+    var attente = setInterval(function(){
+      if(faceApiModelsCharges){ clearInterval(attente); if(callback) callback(); }
+    }, 200);
+    return;
+  }
+  faceApiModelsEnChargement = true;
+  Promise.all([
+    faceapi.nets.tinyFaceDetector.loadFromUri(FACE_API_MODELS_URL),
+    faceapi.nets.faceLandmark68Net.loadFromUri(FACE_API_MODELS_URL),
+    faceapi.nets.faceRecognitionNet.loadFromUri(FACE_API_MODELS_URL)
+  ]).then(function(){
+    faceApiModelsCharges = true;
+    faceApiModelsEnChargement = false;
+    if(callback) callback();
+  }).catch(function(err){
+    faceApiModelsEnChargement = false;
+    console.error('Erreur chargement modeles face-api:', err);
+    if(onError) onError('Impossible de charger les modeles de reconnaissance faciale. Vérifiez la connexion internet.');
+  });
+}
+
+// ── Logique de pointage (reconnaissance faciale en boucle) ──────────────
+var presenceStream = null;         // flux camera actif, pour pouvoir l'arreter proprement
+var presenceIntervalId = null;     // boucle de detection en cours
+var presenceDerniereReconnaissance = 0; // anti-rebond : evite de pointer 10x en 2 secondes
+var SEUIL_RECONNAISSANCE_FACIALE = 0.5; // distance euclidienne max (face-api.js) — plus bas = plus strict
+
+function demarrerPointagePresence(){
+  var statusMsg = document.getElementById('presenceStatusMsg');
+  var video = document.getElementById('presenceVideo');
+  if(!video) return; // l'utilisateur a change de page entre temps
+
+  if(Object.keys(DESCRIPTEURS_FACIAUX).length===0){
+    if(statusMsg) statusMsg.textContent = 'Aucun employe enrole pour l\'instant. Utilisez l\'onglet Enrolement.';
+    return;
+  }
+
+  chargerModelesFaceApi(function(){
+    if(statusMsg) statusMsg.textContent = 'Demande d\'acces a la camera...';
+    navigator.mediaDevices.getUserMedia({video:{width:480,height:360}, audio:false}).then(function(stream){
+      presenceStream = stream;
+      video.srcObject = stream;
+      if(statusMsg) statusMsg.textContent = 'Placez votre visage face a la camera...';
+      lancerBoucleReconnaissance();
+    }).catch(function(err){
+      console.error('Erreur camera:', err);
+      if(statusMsg) statusMsg.textContent = 'Impossible d\'acceder a la camera. Utilisez le mode manuel ci-dessous.';
+    });
+  }, function(msgErreur){
+    if(statusMsg) statusMsg.textContent = msgErreur;
+  });
+}
+
+function arreterPointagePresence(){
+  if(presenceIntervalId){ clearInterval(presenceIntervalId); presenceIntervalId = null; }
+  if(presenceStream){ presenceStream.getTracks().forEach(function(t){t.stop();}); presenceStream = null; }
+}
+
+function lancerBoucleReconnaissance(){
+  var video = document.getElementById('presenceVideo');
+  if(!video) return;
+  // Construit le "faceMatcher" (comparateur) a partir de tous les
+  // descripteurs enroles, une seule fois avant la boucle (recalcule a
+  // chaque appel de demarrerPointagePresence, donc a jour si un nouvel
+  // employe vient d'etre enrole).
+  var labeledDescriptors = Object.keys(DESCRIPTEURS_FACIAUX).map(function(employeId){
+    var descripteur = new Float32Array(DESCRIPTEURS_FACIAUX[employeId]);
+    return new faceapi.LabeledFaceDescriptors(employeId, [descripteur]);
+  });
+  var faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, SEUIL_RECONNAISSANCE_FACIALE);
+
+  presenceIntervalId = setInterval(function(){
+    if(!document.getElementById('presenceVideo')) { arreterPointagePresence(); return; } // page quittee
+    faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+      .withFaceLandmarks().withFaceDescriptor()
+      .then(function(detection){
+        if(!detection) return; // aucun visage detecte ce cycle, on reessaie au prochain
+        var match = faceMatcher.findBestMatch(detection.descriptor);
+        if(match.label!=='unknown' && (Date.now()-presenceDerniereReconnaissance)>3000){
+          presenceDerniereReconnaissance = Date.now();
+          traiterReconnaissanceReussie(match.label, video);
+        }
+      }).catch(function(err){ console.error('Erreur detection:', err); });
+  }, 800); // ~1.25 detection/seconde, suffisant et raisonnable en charge CPU
+}
+
+function traiterReconnaissanceReussie(employeId, video){
+  var employe = PERSONNEL.find(function(p){return p.id===employeId;});
+  if(!employe) return;
+  var photoBase64 = capturerPhotoDepuisVideo(video);
+  enregistrerPointage(employe, 'reconnaissance', photoBase64);
+}
+
+// Capture une image fixe (base64 JPEG compresse) depuis le flux video en
+// cours, utilisee comme preuve visuelle du pointage — jamais pour la
+// reconnaissance elle-meme (deja faite via le descripteur).
+function capturerPhotoDepuisVideo(video){
+  var canvas = document.createElement('canvas');
+  canvas.width = 320; canvas.height = 240;
+  var ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, 320, 240);
+  return canvas.toDataURL('image/jpeg', 0.6);
+}
+
+function enregistrerPointage(employe, methode, photoBase64){
+  // Determine si c'est une arrivee ou un depart : si le dernier pointage
+  // du jour pour cet employe est une arrivee sans depart, ce nouveau
+  // pointage est un depart — sinon c'est une arrivee.
+  var aujourdhui = new Date(); aujourdhui.setHours(0,0,0,0);
+  var pointagesDuJour = PRESENCES.filter(function(p){
+    return p.employeId===employe.id && p.date>=aujourdhui.getTime();
+  }).sort(function(a,b){return a.date-b.date;});
+  var dernierType = pointagesDuJour.length ? pointagesDuJour[pointagesDuJour.length-1].type : null;
+  var type = (dernierType==='arrivee') ? 'depart' : 'arrivee';
+
+  var pointage = {
+    id: 'pres_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),
+    employeId: employe.id, employeNom: employe.nom,
+    type: type, date: Date.now(), methode: methode, photo: photoBase64
+  };
+  PRESENCES.push(pointage);
+  savePresences();
+
+  var zone = document.getElementById('presenceResultat');
+  if(zone){
+    zone.innerHTML = '<div style="background:#EAF3DE;border-radius:9px;padding:14px;font-weight:600;color:#3B6D11">'
+      + '&#x2714; '+employe.nom+' — '+(type==='arrivee'?'Arrivee':'Depart')+' enregistre a '+new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})
+      + '</div>';
+    setTimeout(function(){ if(zone) zone.innerHTML=''; }, 4000);
+  }
+}
+
+// ── Mode manuel de secours (photo + selection du nom) ────────────────────
+function basculerModeManuelPresence(){
+  var zone = document.getElementById('presenceModeManuel');
+  if(!zone) return;
+  var estVisible = zone.style.display==='block';
+  if(estVisible){ zone.style.display='none'; return; }
+
+  var options = '<option value="">— Selectionner votre nom —</option>';
+  PERSONNEL.forEach(function(p){ options += '<option value="'+p.id+'">'+p.nom+'</option>'; });
+  zone.innerHTML = '<div class="card" style="padding:14px;text-align:left">'
+    + '<label class="fl">Votre nom</label>'
+    + '<select class="inp" id="presenceManuelSelect" style="margin-bottom:10px">'+options+'</select>'
+    + '<button class="btn btn-primary btn-sm" onclick="pointerManuellement()">&#x1F4F7; Pointer avec photo</button>'
+    + '</div>';
+  zone.style.display = 'block';
+}
+
+function pointerManuellement(){
+  var select = document.getElementById('presenceManuelSelect');
+  var employeId = select ? select.value : '';
+  if(!employeId){ alert('Selectionnez votre nom.'); return; }
+  var employe = PERSONNEL.find(function(p){return p.id===employeId;});
+  if(!employe) return;
+  var video = document.getElementById('presenceVideo');
+  var photoBase64 = video ? capturerPhotoDepuisVideo(video) : null;
+  enregistrerPointage(employe, 'manuel', photoBase64);
+  document.getElementById('presenceModeManuel').style.display = 'none';
+}
+
+// ── Enrolement facial (associer un visage a un employe) ──────────────────
+var enrolementStream = null;
+var enrolementEmployeIdActuel = null;
+
+function ouvrirEnrolementFacial(employeId){
+  var employe = PERSONNEL.find(function(p){return p.id===employeId;});
+  if(!employe) return;
+  enrolementEmployeIdActuel = employeId;
+  document.getElementById('enrolNomEmploye').textContent = employe.nom;
+  document.getElementById('enrolStatusMsg').textContent = 'Chargement des modeles de reconnaissance...';
+  document.getElementById('modalEnrolementFacial').style.display = 'flex';
+
+  chargerModelesFaceApi(function(){
+    var video = document.getElementById('enrolVideo');
+    if(!video) return; // modale refermee entre temps
+    document.getElementById('enrolStatusMsg').textContent = 'Demande d\'acces a la camera...';
+    navigator.mediaDevices.getUserMedia({video:{width:400,height:300}, audio:false}).then(function(stream){
+      enrolementStream = stream;
+      video.srcObject = stream;
+      document.getElementById('enrolStatusMsg').textContent = 'Placez le visage bien en face, puis cliquez sur Capturer.';
+    }).catch(function(err){
+      console.error('Erreur camera enrolement:', err);
+      document.getElementById('enrolStatusMsg').textContent = 'Impossible d\'acceder a la camera.';
+    });
+  }, function(msgErreur){
+    document.getElementById('enrolStatusMsg').textContent = msgErreur;
+  });
+}
+
+function fermerEnrolementFacial(){
+  if(enrolementStream){ enrolementStream.getTracks().forEach(function(t){t.stop();}); enrolementStream = null; }
+  enrolementEmployeIdActuel = null;
+  document.getElementById('modalEnrolementFacial').style.display = 'none';
+}
+
+function capturerEnrolementFacial(){
+  var video = document.getElementById('enrolVideo');
+  var statusMsg = document.getElementById('enrolStatusMsg');
+  if(!video || !enrolementEmployeIdActuel) return;
+  statusMsg.textContent = 'Analyse du visage en cours...';
+
+  faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+    .withFaceLandmarks().withFaceDescriptor()
+    .then(function(detection){
+      if(!detection){
+        statusMsg.textContent = 'Aucun visage detecte. Rapprochez-vous et reessayez.';
+        return;
+      }
+      // Stocke le descripteur (128 valeurs) comme tableau simple, pour
+      // rester serialisable en JSON (Float32Array ne l'est pas telle
+      // quelle).
+      DESCRIPTEURS_FACIAUX[enrolementEmployeIdActuel] = Array.from(detection.descriptor);
+      saveDescripteursFaciaux();
+      statusMsg.textContent = '\u2714 Enrolement reussi !';
+      setTimeout(function(){ fermerEnrolementFacial(); renderPage(); }, 1200);
+    }).catch(function(err){
+      console.error('Erreur capture enrolement:', err);
+      statusMsg.textContent = 'Erreur lors de l\'analyse. Reessayez.';
+    });
+}
+
 function savePersonnel(){
   localStorage.setItem('gos_personnel', JSON.stringify(PERSONNEL));
   if(fbDb && fbConnected){
@@ -4432,6 +4730,7 @@ function renderPage(){
   else if(r==='direction' && p==='import_historique') html=pageImportHistorique();
   else if(r==='direction' && p==='vue_portail_client') html=pageVuePortailClient();
   else if(r==='direction' && p==='vue_portail_stats') html=pageVuePortailStats();
+  else if((r==='direction' || r==='reception') && p==='presences') html=pagePresences();
   else if(r==='direction') html=pageDashDir();
   else if(r==='testeur') html=pageDashTesteur();
   else html='<div class="empty">Page non trouvee</div>';
@@ -19787,6 +20086,135 @@ function validerImportHistorique(){
   navigate('clients');
 }
 
+// ── Presences employes (pointage arrivee/depart avec reconnaissance faciale) ──
+// Page a onglets : Pointage (poste partage, webcam en direct), Enrolement
+// (associer un visage a un employe), Historique (Direction/Reception).
+var presencesOnglet = 'pointage';
+
+function pagePresences(){
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+  html += '<h2 style="font-size:16px;font-weight:700;margin:0">&#x1F4CB; Presences</h2>';
+  html += '</div>';
+
+  html += '<div class="tabs" style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid #e8e6e1;padding-bottom:8px">';
+  html += '<button class="btn btn-sm'+(presencesOnglet==='pointage'?' btn-primary':'')+'" onclick="presencesOnglet=\'pointage\';renderPage()">&#x1F4F7; Pointage</button>';
+  html += '<button class="btn btn-sm'+(presencesOnglet==='enrolement'?' btn-primary':'')+'" onclick="presencesOnglet=\'enrolement\';renderPage()">&#x1F464; Enrolement</button>';
+  html += '<button class="btn btn-sm'+(presencesOnglet==='historique'?' btn-primary':'')+'" onclick="presencesOnglet=\'historique\';renderPage()">&#x1F4CA; Historique</button>';
+  html += '</div>';
+
+  if(presencesOnglet==='pointage') html += pagePresencesPointage();
+  else if(presencesOnglet==='enrolement') html += pagePresencesEnrolement();
+  else html += pagePresencesHistorique();
+
+  return html;
+}
+
+// Ecran de pointage : webcam en direct, tentative de reconnaissance en
+// boucle continue (reessais illimites). Un bouton "Je n'arrive pas a etre
+// reconnu" est TOUJOURS visible des le debut, pour basculer volontairement
+// vers le mode manuel (photo + selection du nom) sans etre bloque.
+function pagePresencesPointage(){
+  var html = '<div class="card" style="padding:20px;text-align:center">';
+  html += '<div id="presenceStatusMsg" class="xs muted" style="margin-bottom:12px">Initialisation de la camera...</div>';
+  html += '<div style="position:relative;max-width:480px;margin:0 auto">';
+  html += '<video id="presenceVideo" autoplay muted playsinline style="width:100%;border-radius:12px;background:#111"></video>';
+  html += '<canvas id="presenceCanvas" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none"></canvas>';
+  html += '</div>';
+  html += '<div id="presenceResultat" style="margin-top:16px"></div>';
+  html += '<div style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">';
+  html += '<button class="btn btn-sm" style="color:#854F0B;border-color:#E8A44A" onclick="basculerModeManuelPresence()">&#x270B; Je n\'arrive pas a etre reconnu</button>';
+  html += '</div>';
+  html += '<div id="presenceModeManuel" style="margin-top:16px;display:none"></div>';
+  html += '</div>';
+
+  // Demarre la camera et la boucle de reconnaissance des que le DOM est
+  // pret (setTimeout 0 pour laisser le rendu HTML s'achever avant).
+  setTimeout(function(){ demarrerPointagePresence(); }, 0);
+  return html;
+}
+
+// Liste des employes avec leur statut d'enrolement facial (deja enrole ou
+// pas), et un bouton pour lancer/refaire l'enrolement de chacun.
+function pagePresencesEnrolement(){
+  var html = '<div class="info-box" style="margin-bottom:16px">Enrolez chaque employe une seule fois : la camera capture son visage et enregistre sa signature, utilisee ensuite pour le reconnaitre automatiquement au pointage. Refaire l\'enrolement remplace l\'ancienne signature.</div>';
+  html += '<div class="tw"><table><thead><tr><th>Employe</th><th>Role</th><th>Statut</th><th></th></tr></thead><tbody>';
+  PERSONNEL.forEach(function(p){
+    var estEnrole = !!DESCRIPTEURS_FACIAUX[p.id];
+    html += '<tr><td><strong>'+p.nom+'</strong></td>';
+    html += '<td class="xs muted">'+(p.role||'')+'</td>';
+    html += '<td>'+(estEnrole?'<span class="badge b-green">&#x2714; Enrole</span>':'<span class="badge b-gray">Non enrole</span>')+'</td>';
+    html += '<td><button class="btn btn-sm" onclick="ouvrirEnrolementFacial(\''+p.id+'\')">'+(estEnrole?'&#x1F504; Refaire':'&#x1F4F7; Enroler')+'</button></td></tr>';
+  });
+  html += '</tbody></table></div>';
+
+  // Modale d'enrolement, cachee par defaut
+  html += '<div class="overlay" id="modalEnrolementFacial" style="display:none" onclick="if(event.target===this)fermerEnrolementFacial()">';
+  html += '<div class="modal" style="max-width:480px">';
+  html += '<div class="mhead"><h2>&#x1F4F7; Enrolement — <span id="enrolNomEmploye"></span></h2><button class="btn btn-sm" onclick="fermerEnrolementFacial()">X</button></div>';
+  html += '<div class="mbody" style="text-align:center">';
+  html += '<div id="enrolStatusMsg" class="xs muted" style="margin-bottom:12px">Initialisation de la camera...</div>';
+  html += '<div style="position:relative;max-width:400px;margin:0 auto">';
+  html += '<video id="enrolVideo" autoplay muted playsinline style="width:100%;border-radius:12px;background:#111"></video>';
+  html += '</div>';
+  html += '<button class="btn btn-primary" style="margin-top:14px" onclick="capturerEnrolementFacial()">&#x1F4F8; Capturer le visage</button>';
+  html += '</div></div></div>';
+
+  return html;
+}
+
+// Etats de filtre pour l'historique des presences
+var presencesHistoEmploye = '';
+var presencesHistoDateDebut = '';
+var presencesHistoDateFin = '';
+
+function pagePresencesHistorique(){
+  var html = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px">';
+  html += '<select class="inp" style="width:200px" onchange="presencesHistoEmploye=this.value;renderPage()">';
+  html += '<option value="">Tous les employes</option>';
+  PERSONNEL.forEach(function(p){
+    html += '<option value="'+p.id+'"'+(presencesHistoEmploye===p.id?' selected':'')+'>'+p.nom+'</option>';
+  });
+  html += '</select>';
+  html += '<input type="date" class="inp" style="width:150px" value="'+presencesHistoDateDebut+'" onchange="presencesHistoDateDebut=this.value;renderPage()">';
+  html += '<span class="xs muted">a</span>';
+  html += '<input type="date" class="inp" style="width:150px" value="'+presencesHistoDateFin+'" onchange="presencesHistoDateFin=this.value;renderPage()">';
+  if(presencesHistoEmploye || presencesHistoDateDebut || presencesHistoDateFin){
+    html += '<button class="btn btn-sm" onclick="presencesHistoEmploye=\'\';presencesHistoDateDebut=\'\';presencesHistoDateFin=\'\';renderPage()">Reinitialiser</button>';
+  }
+  html += '</div>';
+
+  var liste = PRESENCES.slice();
+  if(presencesHistoEmploye) liste = liste.filter(function(p){return p.employeId===presencesHistoEmploye;});
+  if(presencesHistoDateDebut){
+    var deb = new Date(presencesHistoDateDebut).setHours(0,0,0,0);
+    liste = liste.filter(function(p){return p.date>=deb;});
+  }
+  if(presencesHistoDateFin){
+    var fin = new Date(presencesHistoDateFin).setHours(23,59,59,999);
+    liste = liste.filter(function(p){return p.date<=fin;});
+  }
+  liste.sort(function(a,b){return b.date-a.date;});
+
+  if(!liste.length){
+    html += '<div class="card"><div class="empty">Aucun pointage sur ces criteres.</div></div>';
+    return html;
+  }
+
+  html += '<div class="card"><div class="tw"><table><thead><tr><th>Employe</th><th>Date</th><th>Heure</th><th>Type</th><th>Methode</th><th>Photo</th></tr></thead><tbody>';
+  liste.forEach(function(p){
+    html += '<tr>';
+    html += '<td><strong>'+p.employeNom+'</strong></td>';
+    html += '<td>'+new Date(p.date).toLocaleDateString('fr-FR')+'</td>';
+    html += '<td>'+new Date(p.date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+'</td>';
+    html += '<td><span class="badge '+(p.type==='arrivee'?'b-green':'b-amber')+'">'+(p.type==='arrivee'?'Arrivee':'Depart')+'</span></td>';
+    html += '<td class="xs muted">'+(p.methode==='reconnaissance'?'&#x1F4F7; Auto':'&#x270B; Manuel')+'</td>';
+    html += '<td>'+(p.photo?'<img src="'+p.photo+'" style="width:40px;height:30px;object-fit:cover;border-radius:4px;cursor:pointer" onclick="window.open(this.src)">':'—')+'</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+  return html;
+}
+
 function pageAccesClients(){
   var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Acces clients — Portail distant</h2>';
@@ -20621,6 +21049,10 @@ function tryInitFirebase(){
       syncClientsSansVehiculeFromFirebase(function(){
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       });
+      syncPresencesFromFirebase(function(){
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      });
+      syncDescripteursFaciauxFromFirebase(function(){});
       syncPersonnelFromFirebase(function(){
         syncComptesFromFirebase(function(comptes){
           syncApiKeyFromFirebase(function(){
