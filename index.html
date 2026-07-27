@@ -2149,7 +2149,7 @@ function lancerBoucleReconnaissance(){
 var presenceEnPause = false; // true pendant l'affichage du message de confirmation, pour ignorer les detections
 
 function traiterReconnaissanceReussie(employeId, video){
-  var employe = PERSONNEL.find(function(p){return p.id===employeId;});
+  var employe = loadComptes().find(function(c){return c.id===employeId;});
   if(!employe) return;
   var photoBase64 = capturerPhotoDepuisVideo(video);
   enregistrerPointage(employe, 'reconnaissance', photoBase64);
@@ -2232,7 +2232,7 @@ function basculerModeManuelPresence(){
   }
 
   var options = '<option value="">— Selectionner votre nom —</option>';
-  PERSONNEL.forEach(function(p){ options += '<option value="'+p.id+'">'+p.nom+'</option>'; });
+  loadComptes().forEach(function(c){ options += '<option value="'+c.id+'">'+c.nom+'</option>'; });
   zone.innerHTML = '<div class="card" style="padding:14px;text-align:left">'
     + '<label class="fl">Votre nom</label>'
     + '<select class="inp" id="presenceManuelSelect" style="margin-bottom:10px">'+options+'</select>'
@@ -2245,7 +2245,7 @@ function pointerManuellement(){
   var select = document.getElementById('presenceManuelSelect');
   var employeId = select ? select.value : '';
   if(!employeId){ alert('Selectionnez votre nom.'); return; }
-  var employe = PERSONNEL.find(function(p){return p.id===employeId;});
+  var employe = loadComptes().find(function(c){return c.id===employeId;});
   if(!employe) return;
   var video = document.getElementById('presenceVideo');
   var photoBase64 = video ? capturerPhotoDepuisVideo(video) : null;
@@ -2258,7 +2258,7 @@ var enrolementStream = null;
 var enrolementEmployeIdActuel = null;
 
 function ouvrirEnrolementFacial(employeId){
-  var employe = PERSONNEL.find(function(p){return p.id===employeId;});
+  var employe = loadComptes().find(function(c){return c.id===employeId;});
   if(!employe) return;
   enrolementEmployeIdActuel = employeId;
   document.getElementById('enrolNomEmploye').textContent = employe.nom;
@@ -20218,14 +20218,19 @@ function activerCameraPointage(){
 // Liste des employes avec leur statut d'enrolement facial (deja enrole ou
 // pas), et un bouton pour lancer/refaire l'enrolement de chacun.
 function pagePresencesEnrolement(){
+  // Utilise la liste des COMPTES de connexion (Direction, Reception,
+  // Achats, techniciens...) plutot que PERSONNEL, qui ne couvre que les
+  // roles atelier — le module Presences doit pouvoir enroler et pointer
+  // n'importe quel employe du garage, tous roles confondus.
+  var employes = loadComptes();
   var html = '<div class="info-box" style="margin-bottom:16px">Enrolez chaque employe une seule fois : la camera capture son visage et enregistre sa signature, utilisee ensuite pour le reconnaitre automatiquement au pointage. Refaire l\'enrolement remplace l\'ancienne signature.</div>';
   html += '<div class="tw"><table><thead><tr><th>Employe</th><th>Role</th><th>Statut</th><th></th></tr></thead><tbody>';
-  PERSONNEL.forEach(function(p){
-    var estEnrole = !!DESCRIPTEURS_FACIAUX[p.id];
-    html += '<tr><td><strong>'+p.nom+'</strong></td>';
-    html += '<td class="xs muted">'+(p.role||'')+'</td>';
+  employes.forEach(function(c){
+    var estEnrole = !!DESCRIPTEURS_FACIAUX[c.id];
+    html += '<tr><td><strong>'+c.nom+'</strong></td>';
+    html += '<td class="xs muted">'+(c.role||'')+'</td>';
     html += '<td>'+(estEnrole?'<span class="badge b-green">&#x2714; Enrole</span>':'<span class="badge b-gray">Non enrole</span>')+'</td>';
-    html += '<td><button class="btn btn-sm" onclick="ouvrirEnrolementFacial(\''+p.id+'\')">'+(estEnrole?'&#x1F504; Refaire':'&#x1F4F7; Enroler')+'</button></td></tr>';
+    html += '<td><button class="btn btn-sm" onclick="ouvrirEnrolementFacial(\''+c.id+'\')">'+(estEnrole?'&#x1F504; Refaire':'&#x1F4F7; Enroler')+'</button></td></tr>';
   });
   html += '</tbody></table></div>';
 
@@ -20687,8 +20692,8 @@ function pagePresencesHistorique(){
   var html = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px">';
   html += '<select class="inp" style="width:200px" onchange="presencesHistoEmploye=this.value;renderPage()">';
   html += '<option value="">Tous les employes</option>';
-  PERSONNEL.forEach(function(p){
-    html += '<option value="'+p.id+'"'+(presencesHistoEmploye===p.id?' selected':'')+'>'+p.nom+'</option>';
+  loadComptes().forEach(function(c){
+    html += '<option value="'+c.id+'"'+(presencesHistoEmploye===c.id?' selected':'')+'>'+c.nom+'</option>';
   });
   html += '</select>';
   html += '<input type="date" class="inp" style="width:150px" value="'+presencesHistoDateDebut+'" onchange="presencesHistoDateDebut=this.value;renderPage()">';
