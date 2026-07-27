@@ -14440,6 +14440,35 @@ function pageVuePortailClient(){
     return html + '<div class="empty">Aucun vehicule pour ce client.</div>';
   }
 
+  var estForfaitGlobal = groupes.every(function(g){return g.typeClient==='forfait';});
+  var estMixteGlobal = groupes.some(function(g){return g.typeClient==='forfait';}) && groupes.some(function(g){return g.typeClient!=='forfait';});
+  var ages = groupes.filter(function(g){return g.ageAnnees!==null;}).map(function(g){return g.ageAnnees;});
+  var ageMoyen = ages.length ? (ages.reduce(function(s,a){return s+a;},0)/ages.length) : null;
+  var kms = groupes.filter(function(g){return g.dernierKm;}).map(function(g){return g.dernierKm;});
+  var kmMoyen = kms.length ? Math.round(kms.reduce(function(s,k){return s+k;},0)/kms.length) : null;
+  var totalRetoursGlobal = groupes.reduce(function(s,g){return s+g.nbRetours;},0);
+  var totalDepenseGlobal = groupes.reduce(function(s,g){return s+g.coutTotal;},0);
+  var nbEnCoursGlobal = groupes.filter(function(g){return estEnCours(g.dernierPassage);}).length;
+  var totalInterventionsGlobal = groupes.reduce(function(s,g){return s+g.passages.reduce(function(ss,p){return ss+((p.chiffrage&&p.chiffrage.lignes)?p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).length:0);},0);},0);
+
+  // KPI harmonises : identiques (memes 6 indicateurs) sur le Tableau de
+  // bord ET la page Statistiques, pour une coherence visuelle entre les
+  // deux vues.
+  html += '<div class="kgrid k4" style="margin-bottom:8px">';
+  html += kpi('Vehicules', groupes.length, '');
+  html += kpi('En cours', nbEnCoursGlobal, nbEnCoursGlobal>0?'amber':'green');
+  html += kpi('Age moyen', ageMoyen!==null?ageMoyen.toFixed(1)+' an'+(ageMoyen>=2?'s':''):'—', '');
+  html += kpi('Kilometrage moyen', kmMoyen!==null?kmMoyen.toLocaleString('fr-FR')+' km':'—', '');
+  html += '</div>';
+  html += '<div class="kgrid k2" style="margin-bottom:20px">';
+  if(!estForfaitGlobal || estMixteGlobal){
+    html += kpi('Total depense', totalDepenseGlobal.toLocaleString('fr-FR')+' FCFA', 'blue');
+  } else {
+    html += kpi('Interventions', totalInterventionsGlobal, '');
+  }
+  html += kpi('Retours', totalRetoursGlobal, totalRetoursGlobal>0?'amber':'green');
+  html += '</div>';
+
   var vehiculesDevis = groupes.filter(function(g){return g.typeClient!=='forfait';});
   var vehiculesForfait = groupes.filter(function(g){return g.typeClient==='forfait';});
 
@@ -14448,17 +14477,6 @@ function pageVuePortailClient(){
     var enCours = liste.filter(function(g){return estEnCours(g.dernierPassage);});
     var autres = liste.filter(function(g){return !estEnCours(g.dernierPassage);});
     var b = '<div class="section-title" style="font-weight:700;margin:16px 0 8px">'+titre+'</div>';
-
-    // KPI du bloc
-    var coutTotal = liste.reduce(function(s,g){return s+g.coutTotal;},0);
-    var totalRetours = liste.reduce(function(s,g){return s+g.nbRetours;},0);
-    b += '<div class="kgrid k4" style="margin-bottom:14px">';
-    b += kpi('Vehicules', liste.length, '');
-    b += kpi('En cours', enCours.length, enCours.length>0?'amber':'green');
-    if(!estForfait) b += kpi('Cout total', coutTotal.toLocaleString('fr-FR')+' FCFA', 'blue');
-    else b += kpi('Interventions', liste.reduce(function(s,g){return s+g.passages.reduce(function(ss,p){return ss+((p.chiffrage&&p.chiffrage.lignes)?p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).length:0);},0);},0), '');
-    b += kpi('Retours', totalRetours, totalRetours>0?'amber':'green');
-    b += '</div>';
 
     if(enCours.length){
       b += '<div class="xs muted" style="margin-bottom:6px">Vehicules en cours</div>';
@@ -14514,7 +14532,6 @@ function pageVuePortailClient(){
     html += '</tbody></table></div>';
   }
 
-  html += '<div id="vuePortailHistorique" style="margin-top:16px"></div>';
   return html;
 }
 
@@ -14564,9 +14581,12 @@ function pageVuePortailStats(){
   html += kpi('Age moyen', ageMoyen!==null?ageMoyen.toFixed(1)+' an'+(ageMoyen>=2?'s':''):'—', '');
   html += kpi('Kilometrage moyen', kmMoyen!==null?kmMoyen.toLocaleString('fr-FR')+' km':'—', '');
   html += '</div>';
-  html += '<div class="kgrid k'+(estForfait?'2':'2')+'" style="margin-bottom:20px">';
-  if(!estForfait){
+  html += '<div class="kgrid k2" style="margin-bottom:20px">';
+  if(!estForfait || estMixte){
     html += kpi('Total depense', totalDepense.toLocaleString('fr-FR')+' FCFA', 'blue');
+  } else {
+    var totalInterventions = groupes.reduce(function(s,g){return s+g.passages.reduce(function(ss,p){return ss+((p.chiffrage&&p.chiffrage.lignes)?p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).length:0);},0);},0);
+    html += kpi('Interventions', totalInterventions, '');
   }
   html += kpi('Retours', totalRetours, totalRetours>0?'amber':'green');
   html += '</div>';
@@ -14608,9 +14628,10 @@ function pageVuePortailStats(){
   });
   html += '</tbody></table></div>';
 
-  html += '<div id="vuePortailHistorique" style="margin-top:16px"></div>';
   return html;
 }
+
+var _vpHistImmatActuel = null; // immat affiche dans la modale historique, pour l'impression
 
 function ouvrirHistoriqueVuePortail(immat){
   if(!_vuePortailClientRef) return;
@@ -14619,9 +14640,11 @@ function ouvrirHistoriqueVuePortail(immat){
   var g = groupes.find(function(x){return x.immat===immat;});
   if(!g) return;
   var estForfait = g.typeClient==='forfait';
+  _vpHistImmatActuel = immat;
 
-  var html = '<div class="card" style="padding:16px">';
-  html += '<div style="font-weight:700;margin-bottom:10px">Historique — '+g.immat+' ('+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+')</div>';
+  document.getElementById('vpHistImmat').textContent = g.immat+' — '+(g.marque||'')+' '+(g.modele||'')+' ('+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+')';
+
+  var html = '';
   g.passages.forEach(function(p){
     var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '—';
     var dateSortie = (p.livraison && LIV_ST.indexOf(p.status)>=0) ? new Date(p.livraison).toLocaleDateString('fr-FR') : 'En cours';
@@ -14636,11 +14659,52 @@ function ouvrirHistoriqueVuePortail(immat){
         html += '<span class="badge b-gray" style="margin:2px">'+txt+'</span>';
       });
       html += '</div>';
+    } else {
+      html += '<div class="xs muted" style="margin-top:4px">Aucune intervention enregistree.</div>';
     }
     html += '</div>';
   });
-  html += '</div>';
-  document.getElementById('vuePortailHistorique').innerHTML = html;
+
+  document.getElementById('vpHistContenu').innerHTML = html;
+  document.getElementById('modalHistoriqueVuePortail').style.display = 'flex';
+}
+
+function imprimerHistoriqueVuePortail(){
+  if(!_vpHistImmatActuel || !_vuePortailClientRef) return;
+  var vehiculesFiltres = vpGetVehiculesFiltres();
+  var groupes = regrouperParImmatriculationVuePortail(vehiculesFiltres);
+  var g = groupes.find(function(x){return x.immat===_vpHistImmatActuel;});
+  if(!g) return;
+  var estForfait = g.typeClient==='forfait';
+  var nomClient = _vuePortailClientRef.nom;
+
+  var html = '<html><head><meta charset="utf-8"><title>Historique '+g.immat+'</title>';
+  html += '<style>body{font-family:Arial,sans-serif;padding:24px;color:#1a1a1a}h1{font-size:18px}h2{font-size:13px;margin-top:18px;border-bottom:1px solid #ccc;padding-bottom:4px}.piece{display:inline-block;background:#f0ede8;border-radius:6px;padding:3px 9px;font-size:12px;margin:2px}</style></head><body>';
+  html += '<h1>Historique vehicule — '+g.immat+' '+(g.marque||'')+' '+(g.modele||'')+'</h1>';
+  html += '<div>Client : '+nomClient+'</div>';
+  html += '<div>'+g.nbVisites+' visite(s) au total — Edite le '+new Date().toLocaleDateString('fr-FR')+'</div>';
+
+  g.passages.forEach(function(p){
+    var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '—';
+    var dateSortie = (p.livraison && LIV_ST.indexOf(p.status)>=0) ? new Date(p.livraison).toLocaleDateString('fr-FR') : 'En cours';
+    var lignes = (p.chiffrage && p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
+    html += '<h2>Visite du '+dateEntree+' au '+dateSortie+'</h2>';
+    if(p.motif) html += '<div>Motif : '+p.motif+'</div>';
+    if(lignes.length){
+      lignes.forEach(function(cl){
+        var txt = cl.piece + (estForfait?'':' — '+((parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1)).toLocaleString('fr-FR')+' FCFA');
+        html += '<span class="piece">'+txt+'</span>';
+      });
+    } else {
+      html += '<div>Aucune intervention enregistree.</div>';
+    }
+  });
+
+  html += '</body></html>';
+  var w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+  setTimeout(function(){ w.print(); }, 300);
 }
 
 function vpExporterExcel(){
@@ -20722,6 +20786,19 @@ window.onload=function(){
   </div>
 </div>
 </div>
+
+<div class="overlay" id="modalHistoriqueVuePortail" style="display:none" onclick="if(event.target===this)this.style.display='none'">
+<div class="modal modal-lg" style="max-width:640px;max-height:85vh;display:flex;flex-direction:column">
+  <div class="mhead"><h2>&#x1F4CB; Historique — <span id="vpHistImmat"></span></h2>
+    <div class="flex gap6">
+      <button class="btn btn-sm" onclick="imprimerHistoriqueVuePortail()">&#128424; Imprimer</button>
+      <button class="btn btn-sm" onclick="document.getElementById('modalHistoriqueVuePortail').style.display='none'">X</button>
+    </div>
+  </div>
+  <div class="mbody" id="vpHistContenu" style="overflow-y:auto"></div>
+</div>
+</div>
+
 
 <div class="overlay" id="modalCreationCompteClient" style="display:none" onclick="if(event.target===this)this.style.display='none'">
 <div class="modal" style="max-width:460px">
