@@ -155,13 +155,27 @@ function joursOuvrablesEntre(debut, fin){
   return count;
 }
 
-// Verifie si une date d'echeance tombe dans le mois calendaire EN COURS.
-function estEcheanceCeMois(dateEcheance){
-  if(!dateEcheance) return false;
+// Determine le statut d'echeance d'un controle technique :
+// - 'ce_mois' : echeance tombe dans le mois calendaire en cours
+// - 'retard'  : echeance deja passee (avant le debut du mois en cours)
+// - null      : pas concerne (echeance future, ou aucune date connue)
+function statutEcheanceCt(dateEcheance){
+  if(!dateEcheance) return null;
   var d = new Date(dateEcheance);
-  if(isNaN(d.getTime())) return false;
+  if(isNaN(d.getTime())) return null;
   var maintenant = new Date();
-  return d.getFullYear()===maintenant.getFullYear() && d.getMonth()===maintenant.getMonth();
+  var debutMoisCourant = new Date(maintenant.getFullYear(), maintenant.getMonth(), 1);
+  var finMoisCourant = new Date(maintenant.getFullYear(), maintenant.getMonth()+1, 0, 23,59,59,999);
+  if(d>=debutMoisCourant && d<=finMoisCourant) return 'ce_mois';
+  if(d<debutMoisCourant) return 'retard';
+  return null;
+}
+
+// Verifie si une date d'echeance tombe dans le mois calendaire EN COURS
+// OU est deja en retard.
+function estEcheanceCeMois(dateEcheance){
+  var statut = statutEcheanceCt(dateEcheance);
+  return statut==='ce_mois' || statut==='retard';
 }
 
 function formaterDelai(jours){
@@ -396,12 +410,14 @@ function renderDashboard(){
   }
 
   // KPI global (commun devis/forfait) : controle technique a echeance ce
-  // mois — affiche une seule fois, au-dessus des deux blocs, puisqu'il
-  // concerne l'ensemble de la flotte du client.
+  // mois OU deja en retard — affiche une seule fois, au-dessus des deux
+  // blocs, puisqu'il concerne l'ensemble de la flotte du client.
   var vehiculesCtEcheance = vehiculesUniques.filter(function(g){return estEcheanceCeMois(g.ctEcheance);});
+  var nbCtCeMois = vehiculesCtEcheance.filter(function(g){return statutEcheanceCt(g.ctEcheance)==='ce_mois';}).length;
+  var nbCtRetard = vehiculesCtEcheance.filter(function(g){return statutEcheanceCt(g.ctEcheance)==='retard';}).length;
   html += '<div class="kgrid k2" style="margin-bottom:16px">';
   html += '<div class="kpi"><div class="kpi-lbl">Vehicules</div><div class="kpi-val">'+vehiculesUniques.length+'</div></div>';
-  html += '<div class="kpi"'+(vehiculesCtEcheance.length>0?' style="cursor:pointer;border-color:#E8A44A;background:#FFF8E8" onclick="ouvrirListeCtEcheance()"':'')+'><div class="kpi-lbl">CT a echeance ce mois</div><div class="kpi-val"'+(vehiculesCtEcheance.length>0?' style="color:#854F0B"':'')+'>'+vehiculesCtEcheance.length+'</div></div>';
+  html += '<div class="kpi"'+(vehiculesCtEcheance.length>0?' style="cursor:pointer;border-color:#E8A44A;background:#FFF8E8" onclick="ouvrirListeCtEcheance()"':'')+'><div class="kpi-lbl">CT a echeance / en retard</div><div class="kpi-val"'+(vehiculesCtEcheance.length>0?' style="color:#854F0B"':'')+'>'+nbCtCeMois+' ce mois'+(nbCtRetard>0?' <span style="color:#A32D2D">&middot; '+nbCtRetard+' en retard</span>':'')+'</div></div>';
   html += '</div>';
 
   if(vehiculesDevis.length){
@@ -686,7 +702,8 @@ function ouvrirHistoriqueVehicule(immat){
   if(g.delaiMoyenJours!==null) html += '<span class="badge b-gray">Immobilisation moyenne : '+formaterDelai(g.delaiMoyenJours)+'</span>';
   html += '<span class="badge '+(g.nbRetours>0?'b-red':'b-green')+'">Taux de retour : '+tauxRetour+'%'+(g.nbRetours>0?' ('+g.nbRetours+'/'+g.nbVisites+')':'')+'</span>';
   if(g.ctEcheance && estEcheanceCeMois(g.ctEcheance)){
-    html += '<span class="badge b-amber">CT a echeance : '+new Date(g.ctEcheance).toLocaleDateString('fr-FR')+'</span>';
+    var statutCt = statutEcheanceCt(g.ctEcheance);
+    html += '<span class="badge '+(statutCt==='retard'?'b-red':'b-amber')+'">CT '+(statutCt==='retard'?'en retard depuis':'a echeance :')+' '+new Date(g.ctEcheance).toLocaleDateString('fr-FR')+'</span>';
   }
   if(!estForfait && coutTotalVehicule>0){
     html += '<span class="badge b-blue" style="font-weight:700">Total depense : '+coutTotalVehicule.toLocaleString('fr-FR')+' FCFA</span>';
@@ -994,14 +1011,17 @@ function ouvrirListeCtEcheance(){
   concernes.sort(function(a,b){ return new Date(a.ctEcheance) - new Date(b.ctEcheance); });
 
   var html = '<button class="detail-close" onclick="fermerDetail()">&#10005;</button>';
-  html += '<h3>Controle technique a echeance ce mois</h3>';
+  html += '<h3>Controle technique a echeance ou en retard</h3>';
   if(!concernes.length){
     html += '<div class="empty">Aucun vehicule concerne.</div>';
   } else {
-    html += '<table><thead><tr><th>Vehicule</th><th>Echeance CT</th><th></th></tr></thead><tbody>';
+    html += '<table><thead><tr><th>Vehicule</th><th>Echeance CT</th><th>Statut</th><th></th></tr></thead><tbody>';
     concernes.forEach(function(g){
+      var statut = statutEcheanceCt(g.ctEcheance);
+      var badgeStatut = statut==='retard' ? '<span class="badge b-red">En retard</span>' : '<span class="badge b-amber">Ce mois</span>';
       html += '<tr><td>'+g.immat+' <span class="xs muted">'+(g.marque||'')+' '+(g.modele||'')+'</span></td>';
-      html += '<td>'+new Date(g.ctEcheance).toLocaleDateString('fr-FR')+'</td>';
+      html += '<td'+(statut==='retard'?' style="color:#A32D2D;font-weight:600"':'')+'>'+new Date(g.ctEcheance).toLocaleDateString('fr-FR')+'</td>';
+      html += '<td>'+badgeStatut+'</td>';
       html += '<td><button class="btn-detail" onclick="ouvrirHistoriqueVehicule(\''+g.immat+'\')">Historique</button></td></tr>';
     });
     html += '</tbody></table>';
