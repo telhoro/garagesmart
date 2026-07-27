@@ -1861,7 +1861,8 @@ var TITLES = {
   equipes:'Equipes et techniciens',chiffrage:'Chiffrage achats',stats_tech:'Mes statistiques',fournisseurs:'Gestion des fournisseurs',tresorerie:'Tresorerie',rentabilite:'Rentabilite clients Devis',rentabilite_forfait:'Rentabilite clients Forfait',analyse_pieces:'Analyse des pieces',facturation:'Facturation',creances:'Creances clients',archives:'Archives vehicules',facturation_forfait:'Facturation forfaits',banques:'Gestion des banques',testeur:'Tableau de bord testeur',
   appro:'Approvisionnement',val_fin:'Validation financiere',kpi:'KPI et Analyses',
   messages_clients:'Messages clients',
-  import_historique:'Import historique'
+  import_historique:'Import historique',
+  vue_portail_client:'Vue portail client'
 };
 
 var SAMPLE = [];
@@ -4428,6 +4429,7 @@ function renderPage(){
   else if(r==='direction' && p==='comptes') html=pageComptes();
   else if(r==='direction' && p==='acces_clients') html=pageAccesClients();
   else if(r==='direction' && p==='import_historique') html=pageImportHistorique();
+  else if(r==='direction' && p==='vue_portail_client') html=pageVuePortailClient();
   else if(r==='direction') html=pageDashDir();
   else if(r==='testeur') html=pageDashTesteur();
   else html='<div class="empty">Page non trouvee</div>';
@@ -14269,6 +14271,158 @@ function delaiMoyenClient(vehicules){
   return avg.toFixed(2)+'j';
 }
 
+// ── Vue portail client (cote Direction) ──────────────────────────────────
+// Reproduit fidelement ce que le client voit sur son propre portail
+// (client-dashboard.html) mais directement dans GarageOS, sans jamais se
+// connecter au compte du client. Aucun risque de securite lie a
+// l'authentification : Direction a deja acces a toutes ces donnees
+// ailleurs dans l'app, ceci n'en est qu'une presentation alternative.
+var _vuePortailClientRef = null;
+
+function ouvrirVuePortailClient(btn){
+  var cnom = btn.getAttribute('data-cnom');
+  var ctel = btn.getAttribute('data-ctel');
+  _vuePortailClientRef = { nom: cnom, tel: ctel };
+  navigate('vue_portail_client');
+}
+
+// Regroupement par immatriculation, identique a celui du portail client
+// (client-dashboard.html), pour garantir une coherence visuelle et de
+// calcul entre les deux vues.
+function regrouperParImmatriculationVuePortail(liste){
+  var groupes = {};
+  liste.forEach(function(v){
+    var key = (v.immat||'sans-immat').toUpperCase();
+    if(!groupes[key]) groupes[key] = [];
+    groupes[key].push(v);
+  });
+  return Object.keys(groupes).map(function(key){
+    var passages = groupes[key].sort(function(a,b){return (b.entree||0)-(a.entree||0);});
+    var dernierKm = null;
+    for(var i=0;i<passages.length;i++){
+      if(passages[i].km){ dernierKm = passages[i].km; break; }
+    }
+    var delais = [];
+    passages.forEach(function(p){
+      if(p.entree && p.livraison && p.livraison>=p.entree){
+        var jours = joursOuvrablesEntre(p.entree, p.livraison);
+        if(jours>0 && jours<365) delais.push(jours);
+      }
+    });
+    var delaiMoyenJours = delais.length ? (delais.reduce(function(s,d){return s+d;},0)/delais.length) : null;
+    var nbRetours = passages.filter(function(p){return p.nature==='Retour client';}).length;
+    var coutTotal = 0;
+    if(passages[0].typeClient!=='forfait'){
+      passages.forEach(function(p){
+        if(p.chiffrage && p.chiffrage.lignes){
+          coutTotal += p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();})
+            .reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+        }
+      });
+    }
+    return {
+      immat: key==='sans-immat' ? '' : key,
+      marque: passages[0].marque, modele: passages[0].modele, typeClient: passages[0].typeClient,
+      passages: passages, dernierPassage: passages[0], nbVisites: passages.length,
+      dernierKm: dernierKm, delaiMoyenJours: delaiMoyenJours, nbRetours: nbRetours, coutTotal: coutTotal
+    };
+  });
+}
+
+function pageVuePortailClient(){
+  if(!_vuePortailClientRef) return '<div class="empty">Aucun client selectionne. Retournez sur Clients et vehicules.</div>';
+  var ref = _vuePortailClientRef;
+  var vehiculesClient = vehicles.filter(function(v){
+    return !v.isProspect && (v.client||'')===ref.nom && (v.tel||'')===ref.tel;
+  });
+  if(!vehiculesClient.length){
+    return '<div class="empty">Aucun vehicule trouve pour ce client.</div>';
+  }
+
+  var groupes = regrouperParImmatriculationVuePortail(vehiculesClient);
+  var estForfait = groupes.every(function(g){return g.typeClient==='forfait';});
+  var estEnCours = function(v){ return LIV_ST.indexOf(v.status)<0; };
+
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+  html += '<h2 style="font-size:16px;font-weight:700;margin:0">&#x1F4F1; Vue portail — '+ref.nom+'</h2>';
+  html += '<button class="btn btn-sm" onclick="navigate(\'clients\')">&larr; Retour</button>';
+  html += '</div>';
+  html += '<div class="info-box" style="margin-bottom:16px">Cette vue reproduit ce que ce client voit sur son propre portail. Aucune connexion au compte du client n\'est effectuee — donnees affichees directement depuis GarageOS.</div>';
+
+  var ages = groupes.filter(function(g){return g.dernierKm;}).length; // placeholder non utilise
+  var totalRetours = groupes.reduce(function(s,g){return s+g.nbRetours;},0);
+  var totalDepense = groupes.reduce(function(s,g){return s+g.coutTotal;},0);
+
+  html += '<div class="kgrid k4" style="margin-bottom:20px">';
+  html += kpi('Vehicules', groupes.length, '');
+  html += kpi('En cours', groupes.filter(function(g){return estEnCours(g.dernierPassage);}).length, 'amber');
+  if(!estForfait){
+    html += kpi('Total depense', totalDepense.toLocaleString('fr-FR')+' FCFA', 'blue');
+  } else {
+    html += kpi('Interventions', groupes.reduce(function(s,g){return s+g.passages.reduce(function(ss,p){return ss+((p.chiffrage&&p.chiffrage.lignes)?p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).length:0);},0);},0), '');
+  }
+  html += kpi('Retours', totalRetours, totalRetours>0?'amber':'green');
+  html += '</div>';
+
+  html += '<div class="tw"><table><thead><tr>';
+  html += '<th>Vehicule</th><th>Statut</th><th style="text-align:center">Visites</th><th style="text-align:right">Km</th><th style="text-align:center">Immob. moy.</th><th style="text-align:center">Retours</th>'+(estForfait?'':'<th style="text-align:right">Montant</th>')+'<th></th>';
+  html += '</tr></thead><tbody>';
+  groupes.forEach(function(g){
+    var enCours = estEnCours(g.dernierPassage);
+    html += '<tr>';
+    html += '<td><strong>'+g.immat+'</strong> <span class="xs muted">'+(g.marque||'')+' '+(g.modele||'')+'</span></td>';
+    html += '<td><span class="badge '+(enCours?'b-blue':'b-green')+'">'+(STATUSES[g.dernierPassage.status]||{l:g.dernierPassage.status}).l+'</span></td>';
+    html += '<td style="text-align:center">'+g.nbVisites+'</td>';
+    html += '<td style="text-align:right">'+(g.dernierKm?g.dernierKm.toLocaleString('fr-FR'):'—')+'</td>';
+    html += '<td style="text-align:center">'+(g.delaiMoyenJours!==null?g.delaiMoyenJours.toFixed(2)+'j':'—')+'</td>';
+    html += '<td style="text-align:center">'+(g.nbRetours>0?'<span style="color:#A32D2D;font-weight:600">'+g.nbRetours+'</span>':'—')+'</td>';
+    if(!estForfait){
+      html += '<td style="text-align:right">'+(g.coutTotal?g.coutTotal.toLocaleString('fr-FR')+' FCFA':'—')+'</td>';
+    }
+    html += '<td><button class="btn btn-sm" style="font-size:11px" onclick="ouvrirHistoriqueVuePortail(\''+g.immat+'\')">Historique</button></td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+
+  html += '<div id="vuePortailHistorique" style="margin-top:16px"></div>';
+
+  return html;
+}
+
+function ouvrirHistoriqueVuePortail(immat){
+  if(!_vuePortailClientRef) return;
+  var ref = _vuePortailClientRef;
+  var vehiculesClient = vehicles.filter(function(v){
+    return !v.isProspect && (v.client||'')===ref.nom && (v.tel||'')===ref.tel;
+  });
+  var groupes = regrouperParImmatriculationVuePortail(vehiculesClient);
+  var g = groupes.find(function(x){return x.immat===immat;});
+  if(!g) return;
+  var estForfait = g.typeClient==='forfait';
+
+  var html = '<div class="card" style="padding:16px">';
+  html += '<div style="font-weight:700;margin-bottom:10px">Historique — '+g.immat+' ('+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+')</div>';
+  g.passages.forEach(function(p){
+    var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '—';
+    var dateSortie = (p.livraison && LIV_ST.indexOf(p.status)>=0) ? new Date(p.livraison).toLocaleDateString('fr-FR') : 'En cours';
+    var lignes = (p.chiffrage && p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
+    html += '<div style="border-top:1px solid #e8e6e1;padding:10px 0">';
+    html += '<div style="font-weight:600">Visite du '+dateEntree+' au '+dateSortie+'</div>';
+    if(p.motif) html += '<div class="xs muted">Motif : '+p.motif+'</div>';
+    if(lignes.length){
+      html += '<div class="pieces-list" style="margin-top:4px">';
+      lignes.forEach(function(cl){
+        var txt = cl.piece + (estForfait?'':' — '+((parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1)).toLocaleString('fr-FR')+' FCFA');
+        html += '<span class="badge b-gray" style="margin:2px">'+txt+'</span>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+  document.getElementById('vuePortailHistorique').innerHTML = html;
+}
+
 function buildClients(q){
   var map={};
   vehiclesActifs().forEach(function(v){
@@ -14526,6 +14680,7 @@ function renderClientsListe(clients, q){
       html+='<button class="btn btn-sm" title="Gerer les departements" onclick="event.stopPropagation();ouvrirGestionDepartements(this)" data-cnom="'+c.nom.replace(/"/g,'&quot;')+'" data-ctel="'+(c.tel||'')+'" style="padding:4px 8px;font-size:12px;color:#185FA5;border-color:#B5D4F4">&#x1F3E2; Departements</button>';
     }
     html+='<button class="btn btn-sm" title="Rapport client" onclick="event.stopPropagation();ouvrirRapportCli(this)" data-ck="'+key+'" style="padding:4px 8px;font-size:12px">&#x1F4CB;</button>';
+    html+='<button class="btn btn-sm" title="Voir comme le client (vue portail)" onclick="event.stopPropagation();ouvrirVuePortailClient(this)" data-cnom="'+c.nom.replace(/"/g,'&quot;')+'" data-ctel="'+(c.tel||'')+'" style="padding:4px 8px;font-size:12px;color:#3B6D11;border-color:#8FBF6E">&#x1F4F1;</button>';
     if(currentRole==='direction'){
       if(c.sansVehiculeId){
         html+='<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();supprimerClientSansVehiculeByEl(this)" data-scv-id="'+c.sansVehiculeId+'" style="font-size:11px">&#x1F5D1; Supprimer</button>';
