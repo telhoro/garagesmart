@@ -20429,6 +20429,238 @@ function renderCalendrierEmploye(employeNom, journeesEmploye, annee, mois){
   return html;
 }
 
+// Reconstruit les memes donnees filtrees (liste, journees, regroupement
+// par employe) que celles affichees sur la page — reutilisee par toutes
+// les fonctions d'export/impression pour rester coherentes avec les
+// filtres actuellement appliques (employe, periode).
+function presencesDonneesFiltrees(){
+  var liste = PRESENCES.slice();
+  if(presencesHistoEmploye) liste = liste.filter(function(p){return p.employeId===presencesHistoEmploye;});
+  if(presencesHistoDateDebut){
+    var deb = new Date(presencesHistoDateDebut).setHours(0,0,0,0);
+    liste = liste.filter(function(p){return p.date>=deb;});
+  }
+  if(presencesHistoDateFin){
+    var fin = new Date(presencesHistoDateFin).setHours(23,59,59,999);
+    liste = liste.filter(function(p){return p.date<=fin;});
+  }
+  var journees = construireJourneesTravail(liste);
+  var parEmploye = {};
+  journees.forEach(function(j){
+    if(!parEmploye[j.employeId]) parEmploye[j.employeId] = {employeNom:j.employeNom, jours:[]};
+    parEmploye[j.employeId].jours.push(j);
+  });
+  return {journees:journees, parEmploye:parEmploye};
+}
+
+function presencesCalculerRecapEmploye(jours){
+  var nbJours = jours.length;
+  var totalHeures = 0, nbRetards = 0;
+  jours.forEach(function(j){
+    var stats = calculerStatsJournee(j);
+    totalHeures += stats.heuresTravaillees;
+    if(stats.estEnRetard) nbRetards++;
+  });
+  var tauxPonctualite = nbJours ? Math.round(((nbJours-nbRetards)/nbJours)*100) : 100;
+  return {nbJours:nbJours, totalHeures:totalHeures, nbRetards:nbRetards, tauxPonctualite:tauxPonctualite};
+}
+
+// ── Export Excel : global (tous les employes, recap + calendriers en
+// texte) et par employe (recap + detail jour par jour). ──────────────────
+function presencesExporterExcelGlobal(){
+  var donnees = presencesDonneesFiltrees();
+  if(!donnees.journees.length){ alert('Aucune donnee a exporter.'); return; }
+
+  var rows = [['Recapitulatif par employe'], ['Employe','Jours presents','Ponctualite (%)','Retards','Heures travaillees']];
+  Object.keys(donnees.parEmploye).forEach(function(employeId){
+    var e = donnees.parEmploye[employeId];
+    var recap = presencesCalculerRecapEmploye(e.jours);
+    rows.push([e.employeNom, recap.nbJours, recap.tauxPonctualite, recap.nbRetards, Number(recap.totalHeures.toFixed(2))]);
+  });
+  rows.push([]);
+
+  var moisReference = presencesHistoDateDebut ? new Date(presencesHistoDateDebut) : new Date();
+  Object.keys(donnees.parEmploye).forEach(function(employeId){
+    var e = donnees.parEmploye[employeId];
+    rows.push(['Calendrier — '+e.employeNom]);
+    rows = rows.concat(presencesConstruireLignesCalendrier(e.jours, moisReference.getFullYear(), moisReference.getMonth()));
+    rows.push([]);
+  });
+
+  var ws = XLSX.utils.aoa_to_sheet(rows);
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Presences');
+  XLSX.writeFile(wb, 'Presences_'+new Date().toISOString().slice(0,10)+'.xlsx');
+}
+
+function presencesExporterExcelEmploye(employeId){
+  var donnees = presencesDonneesFiltrees();
+  var e = donnees.parEmploye[employeId];
+  if(!e){ alert('Aucune donnee a exporter pour cet employe.'); return; }
+  var recap = presencesCalculerRecapEmploye(e.jours);
+
+  var rows = [['Recapitulatif — '+e.employeNom]];
+  rows.push(['Jours presents','Ponctualite (%)','Retards','Heures travaillees']);
+  rows.push([recap.nbJours, recap.tauxPonctualite, recap.nbRetards, Number(recap.totalHeures.toFixed(2))]);
+  rows.push([]);
+  rows.push(['Detail jour par jour']);
+  rows.push(['Date','Arrivee(s)/Depart(s)','Ponctualite','Pause (min)','Heures']);
+  e.jours.sort(function(a,b){return b.jour-a.jour;}).forEach(function(j){
+    var stats = calculerStatsJournee(j);
+    var segmentsTxt = j.segments.map(function(s){
+      var hArr = new Date(s.arrivee.date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+      var hDep = s.depart ? new Date(s.depart.date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}) : 'en cours';
+      return hArr+'->'+hDep;
+    }).join(' / ');
+    var ponctualiteTxt = stats.estEnRetard ? '+'+stats.minutesRetard+' min' : (stats.estDepartAnticipe ? '-'+stats.minutesDepartAnticipe+' min' : 'A l\'heure');
+    var pauseTxt = stats.pauses.length ? stats.pauses.map(function(p){return p.minutes;}).join('/') : '';
+    rows.push([new Date(j.jour).toLocaleDateString('fr-FR'), segmentsTxt, ponctualiteTxt, pauseTxt, Number(stats.heuresTravaillees.toFixed(2))]);
+  });
+
+  var ws = XLSX.utils.aoa_to_sheet(rows);
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, e.employeNom.substring(0,31));
+  XLSX.writeFile(wb, 'Presences_'+e.employeNom.replace(/[^a-zA-Z0-9_-]/g,'_')+'.xlsx');
+}
+
+// Construit une grille de calendrier au format tableau de tableaux (pour
+// export Excel), reprenant la meme logique que renderCalendrierEmploye.
+function presencesConstruireLignesCalendrier(joursEmploye, annee, mois){
+  var statutParJour = {};
+  joursEmploye.forEach(function(j){
+    var d = new Date(j.jour);
+    if(d.getFullYear()!==annee || d.getMonth()!==mois) return;
+    var stats = calculerStatsJournee(j);
+    statutParJour[d.getDate()] = stats.estEnRetard ? 'Retard' : 'Present';
+  });
+  var noms = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
+  var dernierJourMois = new Date(annee, mois+1, 0).getDate();
+  var rows = [[noms[mois]+' '+annee]];
+  for(var jour=1; jour<=dernierJourMois; jour++){
+    rows.push([jour, statutParJour[jour] || 'Absent']);
+  }
+  return rows;
+}
+
+// ── Impression : global (recap + calendriers), par employe (recap +
+// detail), et calendriers seuls. ─────────────────────────────────────────
+function presencesImprimerGlobal(){
+  var donnees = presencesDonneesFiltrees();
+  if(!donnees.journees.length){ alert('Aucune donnee a imprimer.'); return; }
+  var moisReference = presencesHistoDateDebut ? new Date(presencesHistoDateDebut) : new Date();
+
+  var html = '<html><head><meta charset="utf-8"><title>Presences</title>';
+  html += presencesStyleImpression();
+  html += '</head><body>';
+  html += '<h1>Recapitulatif des presences</h1>';
+  html += '<div>Edite le '+new Date().toLocaleDateString('fr-FR')+'</div>';
+  html += '<table><thead><tr><th>Employe</th><th>Jours presents</th><th>Ponctualite</th><th>Heures travaillees</th></tr></thead><tbody>';
+  Object.keys(donnees.parEmploye).forEach(function(employeId){
+    var e = donnees.parEmploye[employeId];
+    var recap = presencesCalculerRecapEmploye(e.jours);
+    html += '<tr><td>'+e.employeNom+'</td><td>'+recap.nbJours+'</td><td>'+recap.tauxPonctualite+'% ('+recap.nbRetards+' retard(s))</td><td>'+formaterHeuresDecimal(recap.totalHeures)+'</td></tr>';
+  });
+  html += '</tbody></table>';
+
+  Object.keys(donnees.parEmploye).forEach(function(employeId){
+    var e = donnees.parEmploye[employeId];
+    html += presencesHtmlCalendrierImpression(e.employeNom, e.jours, moisReference.getFullYear(), moisReference.getMonth());
+  });
+
+  html += '</body></html>';
+  presencesOuvrirEtImprimer(html);
+}
+
+function presencesImprimerEmploye(employeId){
+  var donnees = presencesDonneesFiltrees();
+  var e = donnees.parEmploye[employeId];
+  if(!e){ alert('Aucune donnee a imprimer pour cet employe.'); return; }
+  var recap = presencesCalculerRecapEmploye(e.jours);
+
+  var html = '<html><head><meta charset="utf-8"><title>Presences — '+e.employeNom+'</title>';
+  html += presencesStyleImpression();
+  html += '</head><body>';
+  html += '<h1>Presences — '+e.employeNom+'</h1>';
+  html += '<div>'+recap.nbJours+' jour(s) — Ponctualite : '+recap.tauxPonctualite+'% ('+recap.nbRetards+' retard(s)) — Total : '+formaterHeuresDecimal(recap.totalHeures)+'</div>';
+  html += '<h2>Detail jour par jour</h2>';
+  html += '<table><thead><tr><th>Date</th><th>Arrivee(s)/Depart(s)</th><th>Ponctualite</th><th>Pause</th><th>Heures</th></tr></thead><tbody>';
+  e.jours.sort(function(a,b){return b.jour-a.jour;}).forEach(function(j){
+    var stats = calculerStatsJournee(j);
+    var segmentsTxt = j.segments.map(function(s){
+      var hArr = new Date(s.arrivee.date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+      var hDep = s.depart ? new Date(s.depart.date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}) : 'en cours';
+      return hArr+' &rarr; '+hDep;
+    }).join(' &middot; ');
+    var ponctualiteTxt = stats.estEnRetard ? '+'+stats.minutesRetard+' min' : (stats.estDepartAnticipe ? '-'+stats.minutesDepartAnticipe+' min' : 'A l\'heure');
+    var pauseTxt = stats.pauses.length ? stats.pauses.map(function(p){return p.minutes+' min';}).join(', ') : '—';
+    html += '<tr><td>'+new Date(j.jour).toLocaleDateString('fr-FR')+'</td><td>'+segmentsTxt+'</td><td>'+ponctualiteTxt+'</td><td>'+pauseTxt+'</td><td>'+(stats.heuresTravaillees>0?formaterHeuresDecimal(stats.heuresTravaillees):'—')+'</td></tr>';
+  });
+  html += '</tbody></table></body></html>';
+  presencesOuvrirEtImprimer(html);
+}
+
+function presencesImprimerCalendriersGlobal(){
+  var donnees = presencesDonneesFiltrees();
+  if(!donnees.journees.length){ alert('Aucune donnee a imprimer.'); return; }
+  var moisReference = presencesHistoDateDebut ? new Date(presencesHistoDateDebut) : new Date();
+
+  var html = '<html><head><meta charset="utf-8"><title>Calendriers de presence</title>';
+  html += presencesStyleImpression();
+  html += '</head><body>';
+  html += '<h1>Calendriers de presence</h1>';
+  html += '<div>Edite le '+new Date().toLocaleDateString('fr-FR')+'</div>';
+  Object.keys(donnees.parEmploye).forEach(function(employeId){
+    var e = donnees.parEmploye[employeId];
+    html += presencesHtmlCalendrierImpression(e.employeNom, e.jours, moisReference.getFullYear(), moisReference.getMonth());
+  });
+  html += '</body></html>';
+  presencesOuvrirEtImprimer(html);
+}
+
+function presencesStyleImpression(){
+  return '<style>body{font-family:Arial,sans-serif;padding:24px;color:#1a1a1a}h1{font-size:18px}h2{font-size:14px;margin-top:20px}'
+    +'table{width:100%;border-collapse:collapse;margin-top:10px;font-size:12px}td,th{border:1px solid #ccc;padding:5px 8px;text-align:left}'
+    +'.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-top:8px}'
+    +'.cal div{border:1px solid #ddd;border-radius:4px;padding:4px 2px;text-align:center;font-size:11px}'
+    +'.cal .present{background:#EAF3DE}.cal .retard{background:#FAEEDA}.cal .absent{background:#f5f4f1;color:#bbb}'
+    +'.cal-bloc{page-break-inside:avoid}</style>';
+}
+
+// Genere le HTML imprimable d'un calendrier (grille CSS simple, pas de
+// JS necessaire une fois imprime), reprenant la meme logique de statut
+// que renderCalendrierEmploye.
+function presencesHtmlCalendrierImpression(employeNom, joursEmploye, annee, mois){
+  var statutParJour = {};
+  joursEmploye.forEach(function(j){
+    var d = new Date(j.jour);
+    if(d.getFullYear()!==annee || d.getMonth()!==mois) return;
+    var stats = calculerStatsJournee(j);
+    statutParJour[d.getDate()] = stats.estEnRetard ? 'retard' : 'present';
+  });
+  var noms = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
+  var premierJourMois = new Date(annee, mois, 1);
+  var dernierJourMois = new Date(annee, mois+1, 0);
+  var nbJours = dernierJourMois.getDate();
+  var jourSemaine1er = (premierJourMois.getDay()+6)%7;
+
+  var html = '<div class="cal-bloc"><h2>'+employeNom+' — '+noms[mois]+' '+annee+'</h2><div class="cal">';
+  ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].forEach(function(j){ html += '<div style="font-weight:bold;border:none">'+j+'</div>'; });
+  for(var i=0;i<jourSemaine1er;i++) html += '<div style="border:none"></div>';
+  for(var jour=1; jour<=nbJours; jour++){
+    var statut = statutParJour[jour] || 'absent';
+    html += '<div class="'+statut+'">'+jour+'</div>';
+  }
+  html += '</div></div>';
+  return html;
+}
+
+function presencesOuvrirEtImprimer(html){
+  var w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+  setTimeout(function(){ w.print(); }, 300);
+}
+
 function pagePresencesHistorique(){
   var html = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px">';
   html += '<select class="inp" style="width:200px" onchange="presencesHistoEmploye=this.value;renderPage()">';
@@ -20450,6 +20682,12 @@ function pagePresencesHistorique(){
     html += '<button class="btn btn-sm" onclick="presencesHistoEmploye=\'\';presencesHistoDateDebut=\'\';presencesHistoDateFin=\'\';renderPage()">Reinitialiser</button>';
   }
   html += '<button class="btn btn-sm'+(presencesVueCalendrierGlobale?' btn-primary':'')+'" onclick="togglePresenceCalendrierGlobal()">&#x1F4C5; '+(presencesVueCalendrierGlobale?'Masquer':'Voir')+' calendrier (tous)</button>';
+  html += '</div>';
+
+  html += '<div style="display:flex;gap:8px;margin-bottom:16px">';
+  html += '<button class="btn btn-sm" style="background:#185FA5;color:#fff" onclick="presencesExporterExcelGlobal()">&#128202; Exporter tout en Excel</button>';
+  html += '<button class="btn btn-sm" style="background:#3B6D11;color:#fff" onclick="presencesImprimerGlobal()">&#128424; Imprimer tout</button>';
+  html += '<button class="btn btn-sm" style="background:#854F0B;color:#fff" onclick="presencesImprimerCalendriersGlobal()">&#128197; Imprimer les calendriers</button>';
   html += '</div>';
 
   var liste = PRESENCES.slice();
@@ -20497,6 +20735,8 @@ function pagePresencesHistorique(){
     html += '<td><div class="flex gap6">';
     html += '<button class="btn btn-sm'+(presencesCalendrierParEmploye[employeId]?' btn-primary':'')+'" style="font-size:11px" onclick="togglePresenceCalendrierEmploye(\''+employeId+'\')">&#x1F4C5; Calendrier</button>';
     html += '<button class="btn btn-sm'+(presencesDetailParEmploye[employeId]?' btn-primary':'')+'" style="font-size:11px" onclick="togglePresenceDetailEmploye(\''+employeId+'\')">&#x1F4CB; Detail</button>';
+    html += '<button class="btn btn-sm" style="font-size:11px" onclick="presencesExporterExcelEmploye(\''+employeId+'\')">&#128202; Excel</button>';
+    html += '<button class="btn btn-sm" style="font-size:11px" onclick="presencesImprimerEmploye(\''+employeId+'\')">&#128424; Imprimer</button>';
     html += '</div></td>';
     html += '</tr>';
   });
