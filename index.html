@@ -14436,6 +14436,18 @@ function pageVuePortailClient(){
   html += '</div>';
   html += '<div class="info-box" style="margin-bottom:16px">Cette vue reproduit ce que ce client voit sur son propre portail. Aucune connexion au compte du client n\'est effectuee — donnees affichees directement depuis GarageOS.</div>';
 
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px">';
+  html += '<input class="inp" type="text" id="vp_recherche" placeholder="Rechercher par marque ou immatriculation..." value="'+vpRechercheTexte.replace(/"/g,'&quot;')+'" oninput="vpAppliquerRecherche()" style="flex:1;min-width:200px">';
+  html += '<span class="xs muted">Periode :</span>';
+  html += '<input type="date" class="inp" id="vp_periodeDebut" style="width:150px" value="'+(vpPeriodeDebut?new Date(vpPeriodeDebut).toISOString().slice(0,10):'')+'">';
+  html += '<span class="xs muted">a</span>';
+  html += '<input type="date" class="inp" id="vp_periodeFin" style="width:150px" value="'+(vpPeriodeFin?new Date(vpPeriodeFin).toISOString().slice(0,10):'')+'">';
+  html += '<button class="btn btn-sm" onclick="vpAppliquerPeriode()">Appliquer</button>';
+  if(vpPeriodeFiltre==='custom') html += '<button class="btn btn-sm" onclick="vpReinitialiserPeriode()">Reinitialiser</button>';
+  html += '<button class="btn btn-sm" style="background:#185FA5;color:#fff" onclick="vpExporterToutHistoriqueExcel()">&#128202; Exporter tout en Excel</button>';
+  html += '<button class="btn btn-sm" style="background:#3B6D11;color:#fff" onclick="vpImprimerToutHistorique()">&#128424; Imprimer tout l\'historique</button>';
+  html += '</div>';
+
   if(!groupes.length){
     return html + '<div class="empty">Aucun vehicule pour ce client.</div>';
   }
@@ -14698,6 +14710,152 @@ function imprimerHistoriqueVuePortail(){
     } else {
       html += '<div>Aucune intervention enregistree.</div>';
     }
+  });
+
+  html += '</body></html>';
+  var w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+  setTimeout(function(){ w.print(); }, 300);
+}
+
+// Export Excel de l'historique d'UN SEUL vehicule (celui affiche dans la
+// modale historique), reutilise la meme construction de lignes que
+// l'export global (vpConstruireLignesExcelVehicule, definie plus bas).
+function exporterHistoriqueVuePortailExcel(){
+  if(!_vpHistImmatActuel || !_vuePortailClientRef) return;
+  var vehiculesFiltres = vpGetVehiculesFiltres();
+  var groupes = regrouperParImmatriculationVuePortail(vehiculesFiltres);
+  var g = groupes.find(function(x){return x.immat===_vpHistImmatActuel;});
+  if(!g) return;
+
+  var rows = vpConstruireLignesExcelVehicule(g);
+  var ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{wch:32},{wch:10},{wch:18},{wch:16}];
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, g.immat.substring(0,31));
+  XLSX.writeFile(wb, 'Historique_'+g.immat+'.xlsx');
+}
+
+// Construit les lignes (tableau de tableaux) pour un vehicule, reproduisant
+// la mise en page de client-dashboard.html : titre, taux de retour, puis
+// pour chaque visite un mini-tableau Piece/Qte.
+function vpConstruireLignesExcelVehicule(g){
+  var estForfait = g.typeClient==='forfait';
+  var rows = [];
+  rows.push([g.immat+' — '+(g.marque||'')+' '+(g.modele||'')+' ('+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+')']);
+  var tauxRetour = g.nbVisites ? Math.round((g.nbRetours/g.nbVisites)*100) : 0;
+  var ligneInfos = 'Taux de retour : '+tauxRetour+'%'+(g.nbRetours>0?' ('+g.nbRetours+'/'+g.nbVisites+')':'');
+  if(g.dernierKm) ligneInfos = g.dernierKm.toLocaleString('fr-FR')+' km — '+ligneInfos;
+  rows.push([ligneInfos]);
+  rows.push([]);
+
+  g.passages.forEach(function(p){
+    var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '—';
+    var dateSortie = (p.livraison && LIV_ST.indexOf(p.status)>=0) ? new Date(p.livraison).toLocaleDateString('fr-FR') : 'En cours';
+    rows.push(['Visite du '+dateEntree+' au '+dateSortie]);
+    if(p.motif) rows.push(['Motif : '+p.motif+(p.km?' — '+p.km.toLocaleString('fr-FR')+' km':'')]);
+    else if(p.km) rows.push([p.km.toLocaleString('fr-FR')+' km']);
+
+    var lignes = (p.chiffrage && p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
+    if(lignes.length){
+      var entete = estForfait ? ['Piece','Qte'] : ['Piece','Qte','Prix unitaire (FCFA)','Total (FCFA)'];
+      rows.push(entete);
+      lignes.forEach(function(cl){
+        var ligneTab = [cl.piece, cl.qte||1];
+        if(!estForfait){
+          var pu = parseFloat(cl.prixVente)||0;
+          ligneTab.push(pu, pu*(parseInt(cl.qte)||1));
+        }
+        rows.push(ligneTab);
+      });
+    } else {
+      rows.push(['Aucune intervention enregistree.']);
+    }
+    rows.push([]);
+  });
+  rows.push([]);
+  return rows;
+}
+
+// Export Excel de TOUT l'historique (visite par visite, pas juste le
+// resume statistique) — respecte le filtre de periode actif ; si aucun
+// filtre n'est applique, exporte l'integralite de l'historique du client.
+function vpExporterToutHistoriqueExcel(){
+  var vehiculesFiltres = vpGetVehiculesFiltres();
+  var groupes = regrouperParImmatriculationVuePortail(vehiculesFiltres);
+  if(!groupes.length){ alert('Aucune donnee a exporter.'); return; }
+
+  var toutesLesLignes = [];
+  groupes.forEach(function(g){
+    toutesLesLignes = toutesLesLignes.concat(vpConstruireLignesExcelVehicule(g));
+  });
+
+  var ws = XLSX.utils.aoa_to_sheet(toutesLesLignes);
+  ws['!cols'] = [{wch:32},{wch:10},{wch:18},{wch:16}];
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Historique');
+  XLSX.writeFile(wb, 'Historique_'+(_vuePortailClientRef.nom||'client').replace(/[^a-zA-Z0-9_-]/g,'_')+'.xlsx');
+}
+
+// Impression de TOUT l'historique (un vehicule par page), meme logique que
+// l'export : respecte le filtre de periode actif, ou couvre tout si aucun
+// filtre n'est applique.
+function vpImprimerToutHistorique(){
+  var vehiculesFiltres = vpGetVehiculesFiltres();
+  var groupes = regrouperParImmatriculationVuePortail(vehiculesFiltres);
+  if(!groupes.length){ alert('Aucune donnee a imprimer.'); return; }
+  var nomClient = _vuePortailClientRef.nom;
+
+  var html = '<html><head><meta charset="utf-8"><title>Historique complet — '+nomClient+'</title>';
+  html += '<style>body{font-family:Arial,sans-serif;padding:24px;color:#1a1a1a}';
+  html += 'h1{font-size:18px}h2{font-size:14px;margin-top:14px}h3{font-size:12.5px;margin-top:14px;border-bottom:1px solid #ccc;padding-bottom:4px}';
+  html += 'table{width:100%;border-collapse:collapse;margin-top:6px;font-size:12px}td,th{border:1px solid #ccc;padding:5px 8px;text-align:left}';
+  html += '.tot{text-align:right;font-weight:700;margin-top:6px}';
+  html += '.vehicule-bloc{page-break-after:always;break-after:page;padding-bottom:20px}';
+  html += '.vehicule-bloc:last-child{page-break-after:auto;break-after:auto}';
+  html += '@media print{.vehicule-bloc{page-break-after:always;break-after:page}.vehicule-bloc:last-child{page-break-after:avoid;break-after:avoid}}';
+  html += '</style></head><body>';
+
+  html += '<h1>Historique complet — '+nomClient+'</h1>';
+  html += '<div>'+groupes.length+' vehicule(s) — Edite le '+new Date().toLocaleDateString('fr-FR')+'</div>';
+  if(vpPeriodeFiltre==='custom'){
+    html += '<div>Periode : '+new Date(vpPeriodeDebut).toLocaleDateString('fr-FR')+' au '+new Date(vpPeriodeFin).toLocaleDateString('fr-FR')+'</div>';
+  }
+
+  groupes.forEach(function(g){
+    var estForfait = g.typeClient==='forfait';
+    html += '<div class="vehicule-bloc">';
+    html += '<h2>'+g.immat+' — '+(g.marque||'')+' '+(g.modele||'')+' ('+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+')</h2>';
+
+    var tauxRetour = g.nbVisites ? Math.round((g.nbRetours/g.nbVisites)*100) : 0;
+    var elementsResumeGroupe = [];
+    if(g.dernierKm) elementsResumeGroupe.push(g.dernierKm.toLocaleString('fr-FR')+' km');
+    if(g.delaiMoyenJours!==null) elementsResumeGroupe.push('Immobilisation moyenne : '+g.delaiMoyenJours.toFixed(2)+'j');
+    elementsResumeGroupe.push('Taux de retour : '+tauxRetour+'%'+(g.nbRetours>0?' ('+g.nbRetours+'/'+g.nbVisites+')':''));
+    html += '<div style="font-size:12px;color:#444;margin-bottom:8px">'+elementsResumeGroupe.join(' &middot; ')+'</div>';
+
+    g.passages.forEach(function(p){
+      var dateEntree = p.entree ? new Date(p.entree).toLocaleDateString('fr-FR') : '—';
+      var dateSortie = (p.livraison && LIV_ST.indexOf(p.status)>=0) ? new Date(p.livraison).toLocaleDateString('fr-FR') : 'En cours';
+      var lignes = (p.chiffrage && p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
+      html += '<h3>Visite du '+dateEntree+' au '+dateSortie+'</h3>';
+      if(p.motif) html += '<div>Motif : '+p.motif+'</div>';
+      if(lignes.length){
+        html += '<table><thead><tr><th>Piece</th><th>Qte</th>'+(estForfait?'':'<th>Prix</th>')+'</tr></thead><tbody>';
+        var total = 0;
+        lignes.forEach(function(cl){
+          var lt = (parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);
+          total += lt;
+          html += '<tr><td>'+cl.piece+'</td><td>'+(cl.qte||1)+'</td>'+(estForfait?'':'<td>'+lt.toLocaleString('fr-FR')+' FCFA</td>')+'</tr>';
+        });
+        html += '</tbody></table>';
+        if(!estForfait) html += '<div class="tot">Total visite : '+total.toLocaleString('fr-FR')+' FCFA</div>';
+      } else {
+        html += '<div>Aucune intervention enregistree.</div>';
+      }
+    });
+    html += '</div>';
   });
 
   html += '</body></html>';
@@ -20791,6 +20949,7 @@ window.onload=function(){
 <div class="modal modal-lg" style="max-width:640px;max-height:85vh;display:flex;flex-direction:column">
   <div class="mhead"><h2>&#x1F4CB; Historique — <span id="vpHistImmat"></span></h2>
     <div class="flex gap6">
+      <button class="btn btn-sm" onclick="exporterHistoriqueVuePortailExcel()">&#128202; Exporter Excel</button>
       <button class="btn btn-sm" onclick="imprimerHistoriqueVuePortail()">&#128424; Imprimer</button>
       <button class="btn btn-sm" onclick="document.getElementById('modalHistoriqueVuePortail').style.display='none'">X</button>
     </div>
