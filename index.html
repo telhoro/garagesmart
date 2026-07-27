@@ -14265,6 +14265,19 @@ function joursOuvrablesEntre(debut, fin){
   return count;
 }
 
+// Verifie si une date d'echeance (chaine 'YYYY-MM-DD' ou timestamp) tombe
+// dans le mois calendaire EN COURS (meme mois, meme annee que maintenant).
+// Utilisee pour le KPI "controle technique a echeance ce mois", partage
+// entre le tableau de bord Direction/Reception/Achats/Atelier et la vue
+// portail client.
+function estEcheanceCeMois(dateEcheance){
+  if(!dateEcheance) return false;
+  var d = new Date(dateEcheance);
+  if(isNaN(d.getTime())) return false;
+  var maintenant = new Date();
+  return d.getFullYear()===maintenant.getFullYear() && d.getMonth()===maintenant.getMonth();
+}
+
 function delaiMoyenClient(vehicules){
   var vals=[];
   vehicules.forEach(function(v){if(v.entree&&v.livraison&&v.livraison>=v.entree){var j=joursOuvrablesEntre(v.entree,v.livraison);if(j>0&&j<365)vals.push(j);}});
@@ -14297,6 +14310,10 @@ function regrouperParImmatriculationVuePortail(liste){
     var dernierKm = null;
     for(var i=0;i<passages.length;i++){
       if(passages[i].km){ dernierKm = passages[i].km; break; }
+    }
+    var ctEcheance = null;
+    for(var k=0;k<passages.length;k++){
+      if(passages[k].ct_echeance){ ctEcheance = passages[k].ct_echeance; break; }
     }
     var delais = [];
     passages.forEach(function(p){
@@ -14332,7 +14349,7 @@ function regrouperParImmatriculationVuePortail(liste){
       marque: passages[0].marque, modele: passages[0].modele, typeClient: passages[0].typeClient,
       passages: passages, dernierPassage: passages[0], nbVisites: passages.length,
       dernierKm: dernierKm, delaiMoyenJours: delaiMoyenJours, nbRetours: nbRetours,
-      coutTotal: coutTotal, ageAnnees: ageAnnees
+      coutTotal: coutTotal, ageAnnees: ageAnnees, ctEcheance: ctEcheance
     };
   });
 }
@@ -14472,13 +14489,15 @@ function pageVuePortailClient(){
   html += kpi('Age moyen', ageMoyen!==null?ageMoyen.toFixed(1)+' an'+(ageMoyen>=2?'s':''):'—', '');
   html += kpi('Kilometrage moyen', kmMoyen!==null?kmMoyen.toLocaleString('fr-FR')+' km':'—', '');
   html += '</div>';
-  html += '<div class="kgrid k2" style="margin-bottom:20px">';
+  var vehiculesCtEcheanceGlobal = groupes.filter(function(g){return estEcheanceCeMois(g.ctEcheance);});
+  html += '<div class="kgrid k3" style="margin-bottom:20px">';
   if(!estForfaitGlobal || estMixteGlobal){
     html += kpi('Total depense', totalDepenseGlobal.toLocaleString('fr-FR')+' FCFA', 'blue');
   } else {
     html += kpi('Interventions', totalInterventionsGlobal, '');
   }
   html += kpi('Retours', totalRetoursGlobal, totalRetoursGlobal>0?'amber':'green');
+  html += '<div class="kpi'+(vehiculesCtEcheanceGlobal.length>0?' amber':'')+'" style="'+(vehiculesCtEcheanceGlobal.length>0?'cursor:pointer':'')+'"'+(vehiculesCtEcheanceGlobal.length>0?' onclick="ouvrirListeCtEcheanceVuePortail()"':'')+'><div class="kpi-lbl">CT a echeance ce mois</div><div class="kpi-val">'+vehiculesCtEcheanceGlobal.length+'</div></div>';
   html += '</div>';
 
   var vehiculesDevis = groupes.filter(function(g){return g.typeClient!=='forfait';});
@@ -14593,7 +14612,8 @@ function pageVuePortailStats(){
   html += kpi('Age moyen', ageMoyen!==null?ageMoyen.toFixed(1)+' an'+(ageMoyen>=2?'s':''):'—', '');
   html += kpi('Kilometrage moyen', kmMoyen!==null?kmMoyen.toLocaleString('fr-FR')+' km':'—', '');
   html += '</div>';
-  html += '<div class="kgrid k2" style="margin-bottom:20px">';
+  var vehiculesCtEcheance = groupes.filter(function(g){return estEcheanceCeMois(g.ctEcheance);});
+  html += '<div class="kgrid k3" style="margin-bottom:20px">';
   if(!estForfait || estMixte){
     html += kpi('Total depense', totalDepense.toLocaleString('fr-FR')+' FCFA', 'blue');
   } else {
@@ -14601,6 +14621,7 @@ function pageVuePortailStats(){
     html += kpi('Interventions', totalInterventions, '');
   }
   html += kpi('Retours', totalRetours, totalRetours>0?'amber':'green');
+  html += '<div class="kpi'+(vehiculesCtEcheance.length>0?' amber':'')+'" style="'+(vehiculesCtEcheance.length>0?'cursor:pointer':'')+'"'+(vehiculesCtEcheance.length>0?' onclick="ouvrirListeCtEcheanceVuePortail()"':'')+'><div class="kpi-lbl">CT a echeance ce mois</div><div class="kpi-val">'+vehiculesCtEcheance.length+'</div></div>';
   html += '</div>';
 
   function thSort(label, colonne){
@@ -14654,7 +14675,9 @@ function ouvrirHistoriqueVuePortail(immat){
   var estForfait = g.typeClient==='forfait';
   _vpHistImmatActuel = immat;
 
-  document.getElementById('vpHistImmat').textContent = g.immat+' — '+(g.marque||'')+' '+(g.modele||'')+' ('+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+')';
+  document.getElementById('vpHistImmat').textContent = 'Historique — '+g.immat+' — '+(g.marque||'')+' '+(g.modele||'')+' ('+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+')';
+  document.getElementById('vpHistBtnExport').style.display = 'inline-block';
+  document.getElementById('vpHistBtnPrint').style.display = 'inline-block';
 
   var html = '';
   g.passages.forEach(function(p){
@@ -14722,6 +14745,36 @@ function imprimerHistoriqueVuePortail(){
 // Export Excel de l'historique d'UN SEUL vehicule (celui affiche dans la
 // modale historique), reutilise la meme construction de lignes que
 // l'export global (vpConstruireLignesExcelVehicule, definie plus bas).
+// Affiche la liste des vehicules de ce client dont le controle technique
+// arrive a echeance ce mois-ci, dans la meme modale que l'historique (pour
+// ne pas multiplier les composants) — reutilise vpGetVehiculesFiltres pour
+// rester coherent avec la recherche/periode actuellement appliquee.
+function ouvrirListeCtEcheanceVuePortail(){
+  if(!_vuePortailClientRef) return;
+  var vehiculesFiltres = vpGetVehiculesFiltres();
+  var groupes = regrouperParImmatriculationVuePortail(vehiculesFiltres);
+  var concernes = groupes.filter(function(g){return estEcheanceCeMois(g.ctEcheance);});
+  _vpHistImmatActuel = null; // pas d'export/impression individuelle depuis cette vue liste
+
+  document.getElementById('vpHistImmat').textContent = 'Controle technique a echeance ce mois';
+  document.getElementById('vpHistBtnExport').style.display = 'none';
+  document.getElementById('vpHistBtnPrint').style.display = 'none';
+  var html = '';
+  if(!concernes.length){
+    html = '<div class="empty">Aucun vehicule concerne.</div>';
+  } else {
+    html += '<div class="tw"><table><thead><tr><th>Vehicule</th><th>Echeance CT</th><th></th></tr></thead><tbody>';
+    concernes.forEach(function(g){
+      html += '<tr><td><strong>'+g.immat+'</strong> <span class="xs muted">'+(g.marque||'')+' '+(g.modele||'')+'</span></td>';
+      html += '<td>'+new Date(g.ctEcheance).toLocaleDateString('fr-FR')+'</td>';
+      html += '<td><button class="btn btn-sm" style="font-size:11px" onclick="ouvrirHistoriqueVuePortail(\''+g.immat+'\')">Historique</button></td></tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+  document.getElementById('vpHistContenu').innerHTML = html;
+  document.getElementById('modalHistoriqueVuePortail').style.display = 'flex';
+}
+
 function exporterHistoriqueVuePortailExcel(){
   if(!_vpHistImmatActuel || !_vuePortailClientRef) return;
   var vehiculesFiltres = vpGetVehiculesFiltres();
@@ -20947,10 +21000,10 @@ window.onload=function(){
 
 <div class="overlay" id="modalHistoriqueVuePortail" style="display:none" onclick="if(event.target===this)this.style.display='none'">
 <div class="modal modal-lg" style="max-width:640px;max-height:85vh;display:flex;flex-direction:column">
-  <div class="mhead"><h2>&#x1F4CB; Historique — <span id="vpHistImmat"></span></h2>
+  <div class="mhead"><h2>&#x1F4CB; <span id="vpHistImmat"></span></h2>
     <div class="flex gap6">
-      <button class="btn btn-sm" onclick="exporterHistoriqueVuePortailExcel()">&#128202; Exporter Excel</button>
-      <button class="btn btn-sm" onclick="imprimerHistoriqueVuePortail()">&#128424; Imprimer</button>
+      <button class="btn btn-sm" id="vpHistBtnExport" onclick="exporterHistoriqueVuePortailExcel()">&#128202; Exporter Excel</button>
+      <button class="btn btn-sm" id="vpHistBtnPrint" onclick="imprimerHistoriqueVuePortail()">&#128424; Imprimer</button>
       <button class="btn btn-sm" onclick="document.getElementById('modalHistoriqueVuePortail').style.display='none'">X</button>
     </div>
   </div>
