@@ -155,6 +155,15 @@ function joursOuvrablesEntre(debut, fin){
   return count;
 }
 
+// Verifie si une date d'echeance tombe dans le mois calendaire EN COURS.
+function estEcheanceCeMois(dateEcheance){
+  if(!dateEcheance) return false;
+  var d = new Date(dateEcheance);
+  if(isNaN(d.getTime())) return false;
+  var maintenant = new Date();
+  return d.getFullYear()===maintenant.getFullYear() && d.getMonth()===maintenant.getMonth();
+}
+
 function formaterDelai(jours){
   if(jours===null || jours===undefined) return null;
   return jours.toFixed(2)+'j';
@@ -234,6 +243,10 @@ function regrouperParImmatriculation(liste){
     for(var i=0;i<passages.length;i++){
       if(passages[i].km){ dernierKm = passages[i].km; break; }
     }
+    var ctEcheance = null;
+    for(var k=0;k<passages.length;k++){
+      if(passages[k].ct_echeance){ ctEcheance = passages[k].ct_echeance; break; }
+    }
 
     // Delai moyen d'immobilisation EN JOURS OUVRABLES : uniquement sur les
     // passages termines (entree ET livraison connues, livraison posterieure
@@ -284,7 +297,8 @@ function regrouperParImmatriculation(liste){
       nbVisites: passages.length,
       dernierKm: dernierKm,
       delaiMoyenJours: delaiMoyenJours,
-      nbRetours: nbRetours
+      nbRetours: nbRetours,
+      ctEcheance: ctEcheance
     };
   });
 }
@@ -380,6 +394,15 @@ function renderDashboard(){
     document.getElementById('mainContent').innerHTML = html;
     return;
   }
+
+  // KPI global (commun devis/forfait) : controle technique a echeance ce
+  // mois — affiche une seule fois, au-dessus des deux blocs, puisqu'il
+  // concerne l'ensemble de la flotte du client.
+  var vehiculesCtEcheance = vehiculesUniques.filter(function(g){return estEcheanceCeMois(g.ctEcheance);});
+  html += '<div class="kgrid k2" style="margin-bottom:16px">';
+  html += '<div class="kpi"><div class="kpi-lbl">Vehicules</div><div class="kpi-val">'+vehiculesUniques.length+'</div></div>';
+  html += '<div class="kpi"'+(vehiculesCtEcheance.length>0?' style="cursor:pointer;border-color:#E8A44A;background:#FFF8E8" onclick="ouvrirListeCtEcheance()"':'')+'><div class="kpi-lbl">CT a echeance ce mois</div><div class="kpi-val"'+(vehiculesCtEcheance.length>0?' style="color:#854F0B"':'')+'>'+vehiculesCtEcheance.length+'</div></div>';
+  html += '</div>';
 
   if(vehiculesDevis.length){
     var coutTotalFlotte = 0;
@@ -662,6 +685,9 @@ function ouvrirHistoriqueVehicule(immat){
   if(g.dernierKm) html += '<span class="badge b-gray">'+g.dernierKm.toLocaleString('fr-FR')+' km</span>';
   if(g.delaiMoyenJours!==null) html += '<span class="badge b-gray">Immobilisation moyenne : '+formaterDelai(g.delaiMoyenJours)+'</span>';
   html += '<span class="badge '+(g.nbRetours>0?'b-red':'b-green')+'">Taux de retour : '+tauxRetour+'%'+(g.nbRetours>0?' ('+g.nbRetours+'/'+g.nbVisites+')':'')+'</span>';
+  if(g.ctEcheance && estEcheanceCeMois(g.ctEcheance)){
+    html += '<span class="badge b-amber">CT a echeance : '+new Date(g.ctEcheance).toLocaleDateString('fr-FR')+'</span>';
+  }
   if(!estForfait && coutTotalVehicule>0){
     html += '<span class="badge b-blue" style="font-weight:700">Total depense : '+coutTotalVehicule.toLocaleString('fr-FR')+' FCFA</span>';
   }
@@ -957,6 +983,32 @@ function imprimerFacture(passageId){
   w.document.write(html);
   w.document.close();
   setTimeout(function(){ w.print(); }, 300);
+}
+
+// Affiche la liste des vehicules du client dont le controle technique
+// arrive a echeance ce mois-ci, dans la meme modale que l'historique d'un
+// vehicule (reutilise detailOverlay/detailModal, pas de nouveau composant).
+function ouvrirListeCtEcheance(){
+  var groupes = regrouperParImmatriculation(mesVehicules);
+  var concernes = groupes.filter(function(g){return estEcheanceCeMois(g.ctEcheance);});
+  concernes.sort(function(a,b){ return new Date(a.ctEcheance) - new Date(b.ctEcheance); });
+
+  var html = '<button class="detail-close" onclick="fermerDetail()">&#10005;</button>';
+  html += '<h3>Controle technique a echeance ce mois</h3>';
+  if(!concernes.length){
+    html += '<div class="empty">Aucun vehicule concerne.</div>';
+  } else {
+    html += '<table><thead><tr><th>Vehicule</th><th>Echeance CT</th><th></th></tr></thead><tbody>';
+    concernes.forEach(function(g){
+      html += '<tr><td>'+g.immat+' <span class="xs muted">'+(g.marque||'')+' '+(g.modele||'')+'</span></td>';
+      html += '<td>'+new Date(g.ctEcheance).toLocaleDateString('fr-FR')+'</td>';
+      html += '<td><button class="btn-detail" onclick="ouvrirHistoriqueVehicule(\''+g.immat+'\')">Historique</button></td></tr>';
+    });
+    html += '</tbody></table>';
+  }
+
+  document.getElementById('detailModal').innerHTML = html;
+  document.getElementById('detailOverlay').style.display = 'flex';
 }
 
 function fermerDetail(){

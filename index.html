@@ -4725,6 +4725,21 @@ var K = computeKPIs(vehicleList, allV);
   h += kpiAdv('taux','Taux de retour', tauxVal, tauxVal!=='—'&&parseFloat(tauxVal)>5?'red':'green', STD_P);
   h += kpi('Delai moyen rec -> livraison', K.immoMoy, '');
   h += '</div>';
+
+  // Ligne 4 : controle technique a echeance ce mois, sur toute la flotte
+  // active (regroupee par immatriculation pour ne pas compter plusieurs
+  // fois un meme vehicule s'il a plusieurs dossiers).
+  var immatsVus = {};
+  var vehiculesCtEcheanceFlotte = [];
+  vehicleList.forEach(function(v){
+    if(!v.immat || v.isProspect) return;
+    var key = v.immat.toUpperCase();
+    if(immatsVus[key]) return;
+    if(estEcheanceCeMois(v.ct_echeance)){ immatsVus[key]=true; vehiculesCtEcheanceFlotte.push(v); }
+  });
+  h += '<div class="kgrid k4">';
+  h += '<div class="kpi'+(vehiculesCtEcheanceFlotte.length>0?' amber':'')+'" style="'+(vehiculesCtEcheanceFlotte.length>0?'cursor:pointer':'')+'"'+(vehiculesCtEcheanceFlotte.length>0?' onclick="ouvrirListeCtEcheanceFlotte()"':'')+'><div class="kpi-lbl">CT a echeance ce mois</div><div class="kpi-val">'+vehiculesCtEcheanceFlotte.length+'</div></div>';
+  h += '</div>';
   return h;
 }
 
@@ -10003,6 +10018,21 @@ function pageDashChefAtelier(role){
   html += kpiAdv('taux','Taux de retour', K.tauxRetour, K.tauxRetour!=='—'&&parseFloat(K.tauxRetour)>5?'red':'green', STD_P);
   html += '</div>';
 
+  // Controle technique a echeance ce mois, dans le perimetre du chef
+  // (toute la flotte pour chef_atelier, uniquement son equipe pour
+  // chef_equipe — utilise scopedVehicles, deja filtre plus haut).
+  var immatsVusChef = {};
+  var vehiculesCtEcheanceChef = [];
+  scopedVehicles.forEach(function(v){
+    if(!v.immat || v.isProspect) return;
+    var key = v.immat.toUpperCase();
+    if(immatsVusChef[key]) return;
+    if(estEcheanceCeMois(v.ct_echeance)){ immatsVusChef[key]=true; vehiculesCtEcheanceChef.push(v); }
+  });
+  html += '<div class="kgrid k4">';
+  html += '<div class="kpi'+(vehiculesCtEcheanceChef.length>0?' amber':'')+'" style="'+(vehiculesCtEcheanceChef.length>0?'cursor:pointer':'')+'"'+(vehiculesCtEcheanceChef.length>0?' onclick="ouvrirListeCtEcheanceFlotte(true)"':'')+'><div class="kpi-lbl">CT a echeance ce mois</div><div class="kpi-val">'+vehiculesCtEcheanceChef.length+'</div></div>';
+  html += '</div>';
+
   // ── KPI par equipe (uniquement pour chef_atelier : il a plusieurs equipes) ──
   if(!monEquipe){
     html += '<div class="kgrid" style="grid-template-columns:repeat('+EQUIPES.length+',1fr);margin-bottom:16px">';
@@ -13639,6 +13669,19 @@ function pageDashAchats(){
   html += '<div class="kpi"><div class="kpi-lbl">Tps moyen commande</div><div class="kpi-val">'+tpsMoyCmd+'</div></div>';
   html += '</div>';
 
+  // Ligne KPI 3 : controle technique a echeance ce mois (toute la flotte)
+  var immatsVusAchats = {};
+  var vehiculesCtEcheanceAchats = [];
+  vehiclesActifs().forEach(function(v){
+    if(!v.immat) return;
+    var key = v.immat.toUpperCase();
+    if(immatsVusAchats[key]) return;
+    if(estEcheanceCeMois(v.ct_echeance)){ immatsVusAchats[key]=true; vehiculesCtEcheanceAchats.push(v); }
+  });
+  html += '<div class="kgrid k4">';
+  html += '<div class="kpi'+(vehiculesCtEcheanceAchats.length>0?' amber':'')+'" style="'+(vehiculesCtEcheanceAchats.length>0?'cursor:pointer':'')+'"'+(vehiculesCtEcheanceAchats.length>0?' onclick="ouvrirListeCtEcheanceFlotte()"':'')+'><div class="kpi-lbl">CT a echeance ce mois</div><div class="kpi-val">'+vehiculesCtEcheanceAchats.length+'</div></div>';
+  html += '</div>';
+
   // ── Filtre actif ─────────────────────────────────────────────────────────
   if(achatsFilter){
     var filteredA = getAchatsFiltered();
@@ -14276,6 +14319,57 @@ function estEcheanceCeMois(dateEcheance){
   if(isNaN(d.getTime())) return false;
   var maintenant = new Date();
   return d.getFullYear()===maintenant.getFullYear() && d.getMonth()===maintenant.getMonth();
+}
+
+// Ouvre la liste des vehicules (toute la flotte, tous clients confondus)
+// dont le controle technique arrive a echeance ce mois-ci. Utilisee par
+// les KPI cliquables de Direction, Reception, Achats et Chef d'atelier —
+// regroupement par immatriculation pour eviter de compter plusieurs fois
+// un meme vehicule s'il a plusieurs dossiers/visites.
+function ouvrirListeCtEcheanceFlotte(perimetreEquipe){
+  var perimetre = vehiclesActifs();
+  // Pour un chef d'equipe, restreint la liste a son propre perimetre —
+  // recalcule directement ici (meme logique que pageDashChefAtelier)
+  // plutot que de dependre d'une variable locale capturee au moment du
+  // rendu HTML, qui n'existerait plus au moment du clic.
+  if(perimetreEquipe && currentRole==='chef_equipe'){
+    var monEquipe = currentChefEquipeNom;
+    var membresEquipe = PERSONNEL.filter(function(p){return p.equipe===monEquipe;});
+    var nomsEquipe = membresEquipe.map(function(p){return p.nom;});
+    perimetre = perimetre.filter(function(v){
+      if(v.equipe_affectee === monEquipe) return true;
+      if(v.technicien && nomsEquipe){
+        var tech = v.technicien.toLowerCase();
+        if(nomsEquipe.some(function(n){ return n.toLowerCase()===tech || n.toLowerCase().indexOf(tech)>=0 || tech.indexOf(n.toLowerCase().split(' ')[0])>=0; })) return true;
+      }
+      return false;
+    });
+  }
+  var immatsVus = {};
+  var concernes = [];
+  perimetre.forEach(function(v){
+    if(!v.immat || v.isProspect) return;
+    var key = v.immat.toUpperCase();
+    if(immatsVus[key]) return;
+    if(estEcheanceCeMois(v.ct_echeance)){ immatsVus[key]=true; concernes.push(v); }
+  });
+  concernes.sort(function(a,b){ return new Date(a.ct_echeance) - new Date(b.ct_echeance); });
+
+  var html = '';
+  if(!concernes.length){
+    html = '<div class="empty">Aucun vehicule concerne.</div>';
+  } else {
+    html += '<div class="tw"><table><thead><tr><th>Vehicule</th><th>Client</th><th>Echeance CT</th><th></th></tr></thead><tbody>';
+    concernes.forEach(function(v){
+      html += '<tr><td><strong>'+v.immat+'</strong> <span class="xs muted">'+(v.marque||'')+' '+(v.modele||'')+'</span></td>';
+      html += '<td>'+(v.client||'—')+'</td>';
+      html += '<td>'+new Date(v.ct_echeance).toLocaleDateString('fr-FR')+'</td>';
+      html += '<td><button class="btn btn-sm" data-vid="'+v.id+'" onclick="openDetById(this)">&#x1F441;</button></td></tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+  document.getElementById('ctEcheanceContenu').innerHTML = html;
+  document.getElementById('modalCtEcheance').style.display = 'flex';
 }
 
 function delaiMoyenClient(vehicules){
@@ -21008,6 +21102,15 @@ window.onload=function(){
     </div>
   </div>
   <div class="mbody" id="vpHistContenu" style="overflow-y:auto"></div>
+</div>
+</div>
+
+<div class="overlay" id="modalCtEcheance" style="display:none" onclick="if(event.target===this)this.style.display='none'">
+<div class="modal modal-lg" style="max-width:640px;max-height:85vh;display:flex;flex-direction:column">
+  <div class="mhead"><h2>&#x1F4C5; Controle technique a echeance ce mois</h2>
+    <button class="btn btn-sm" onclick="document.getElementById('modalCtEcheance').style.display='none'">X</button>
+  </div>
+  <div class="mbody" id="ctEcheanceContenu" style="overflow-y:auto"></div>
 </div>
 </div>
 
