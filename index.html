@@ -2065,6 +2065,8 @@ var presenceIntervalId = null;     // boucle de detection en cours
 var presenceDerniereReconnaissance = 0; // anti-rebond : evite de pointer 10x en 2 secondes
 var SEUIL_RECONNAISSANCE_FACIALE = 0.5; // distance euclidienne max (face-api.js) — plus bas = plus strict
 
+var presenceCameraFace = 'user'; // 'user' = camera avant (selfie), 'environment' = camera arriere
+
 function demarrerPointagePresence(){
   var statusMsg = document.getElementById('presenceStatusMsg');
   var video = document.getElementById('presenceVideo');
@@ -2079,12 +2081,13 @@ function demarrerPointagePresence(){
 
   chargerModelesFaceApi(function(){
     if(statusMsg) statusMsg.textContent = 'Demande d\'acces a la camera...';
-    navigator.mediaDevices.getUserMedia({video:{width:480,height:360}, audio:false}).then(function(stream){
+    navigator.mediaDevices.getUserMedia({video:{width:480,height:360,facingMode:presenceCameraFace}, audio:false}).then(function(stream){
       presenceStream = stream;
       video.srcObject = stream;
       video.style.display = 'block';
       if(placeholder) placeholder.style.display = 'none';
       if(statusMsg) statusMsg.textContent = 'Placez votre visage face a la camera...';
+      afficherBoutonBasculerCamera();
       lancerBoucleReconnaissance();
     }).catch(function(err){
       console.error('Erreur camera:', err);
@@ -2105,10 +2108,33 @@ function remettreBoutonActiverPointage(){
   var placeholder = document.getElementById('presencePlaceholder');
   var btnActiver = document.getElementById('presenceBtnActiver');
   var btnManuel = document.getElementById('presenceBtnManuel');
+  var btnBasculer = document.getElementById('presenceBtnBasculerCamera');
   if(video){ video.style.display = 'none'; video.srcObject = null; }
   if(placeholder) placeholder.style.display = 'flex';
   if(btnActiver) btnActiver.style.display = 'inline-block';
   if(btnManuel) btnManuel.style.display = 'none';
+  if(btnBasculer) btnBasculer.style.display = 'none';
+}
+
+// Affiche le bouton de bascule avant/arriere UNIQUEMENT sur smartphone
+// (mobile), une fois la camera active — inutile sur un poste fixe qui n'a
+// generalement qu'une seule webcam.
+function afficherBoutonBasculerCamera(){
+  var btnBasculer = document.getElementById('presenceBtnBasculerCamera');
+  if(!btnBasculer) return;
+  var estMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  if(estMobile) btnBasculer.style.display = 'inline-block';
+}
+
+// Inverse la camera avant/arriere et relance le flux avec la nouvelle
+// contrainte facingMode — coupe proprement l'ancien flux avant de
+// redemarrer, pour eviter que les deux caméras restent actives en meme
+// temps.
+function basculerCameraPointage(){
+  presenceCameraFace = (presenceCameraFace==='user') ? 'environment' : 'user';
+  if(presenceIntervalId){ clearInterval(presenceIntervalId); presenceIntervalId = null; }
+  if(presenceStream){ presenceStream.getTracks().forEach(function(t){t.stop();}); presenceStream = null; }
+  demarrerPointagePresence();
 }
 
 function arreterPointagePresence(){
@@ -2257,22 +2283,30 @@ function pointerManuellement(){
 var enrolementStream = null;
 var enrolementEmployeIdActuel = null;
 
+var enrolementCameraFace = 'user'; // 'user' = camera avant, 'environment' = camera arriere
+
 function ouvrirEnrolementFacial(employeId){
   var employe = loadComptes().find(function(c){return c.id===employeId;});
   if(!employe) return;
   enrolementEmployeIdActuel = employeId;
+  enrolementCameraFace = 'user';
   document.getElementById('enrolNomEmploye').textContent = employe.nom;
   document.getElementById('enrolStatusMsg').textContent = 'Chargement des modeles de reconnaissance...';
   document.getElementById('modalEnrolementFacial').style.display = 'flex';
+  demarrerCameraEnrolement();
+}
 
+function demarrerCameraEnrolement(){
   chargerModelesFaceApi(function(){
     var video = document.getElementById('enrolVideo');
     if(!video) return; // modale refermee entre temps
     document.getElementById('enrolStatusMsg').textContent = 'Demande d\'acces a la camera...';
-    navigator.mediaDevices.getUserMedia({video:{width:400,height:300}, audio:false}).then(function(stream){
+    navigator.mediaDevices.getUserMedia({video:{width:400,height:300,facingMode:enrolementCameraFace}, audio:false}).then(function(stream){
       enrolementStream = stream;
       video.srcObject = stream;
       document.getElementById('enrolStatusMsg').textContent = 'Placez le visage bien en face, puis cliquez sur Capturer.';
+      var btnBasculer = document.getElementById('enrolBtnBasculerCamera');
+      if(btnBasculer && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) btnBasculer.style.display = 'inline-block';
     }).catch(function(err){
       console.error('Erreur camera enrolement:', err);
       document.getElementById('enrolStatusMsg').textContent = 'Impossible d\'acceder a la camera.';
@@ -2282,10 +2316,19 @@ function ouvrirEnrolementFacial(employeId){
   });
 }
 
+// Inverse la camera avant/arriere pour l'enrolement et relance le flux.
+function basculerCameraEnrolement(){
+  enrolementCameraFace = (enrolementCameraFace==='user') ? 'environment' : 'user';
+  if(enrolementStream){ enrolementStream.getTracks().forEach(function(t){t.stop();}); enrolementStream = null; }
+  demarrerCameraEnrolement();
+}
+
 function fermerEnrolementFacial(){
   if(enrolementStream){ enrolementStream.getTracks().forEach(function(t){t.stop();}); enrolementStream = null; }
   enrolementEmployeIdActuel = null;
   document.getElementById('modalEnrolementFacial').style.display = 'none';
+  var btnBasculer = document.getElementById('enrolBtnBasculerCamera');
+  if(btnBasculer) btnBasculer.style.display = 'none';
 }
 
 function capturerEnrolementFacial(){
@@ -20191,6 +20234,7 @@ function pagePresencesPointage(){
   html += '<div id="presenceResultat" style="margin-top:16px"></div>';
   html += '<div style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">';
   html += '<button class="btn btn-primary" id="presenceBtnActiver" onclick="activerCameraPointage()">&#x1F4F7; Activer la camera pour pointer</button>';
+  html += '<button class="btn btn-sm" id="presenceBtnBasculerCamera" style="display:none" onclick="basculerCameraPointage()">&#x1F504; Changer de camera</button>';
   html += '<button class="btn btn-sm" id="presenceBtnManuel" style="color:#854F0B;border-color:#E8A44A;display:none" onclick="basculerModeManuelPresence()">&#x270B; Je n\'arrive pas a etre reconnu</button>';
   html += '</div>';
   html += '<div id="presenceModeManuel" style="margin-top:16px;display:none"></div>';
@@ -20244,6 +20288,7 @@ function pagePresencesEnrolement(){
   html += '<video id="enrolVideo" autoplay muted playsinline style="width:100%;border-radius:12px;background:#111"></video>';
   html += '</div>';
   html += '<button class="btn btn-primary" style="margin-top:14px" onclick="capturerEnrolementFacial()">&#x1F4F8; Capturer le visage</button>';
+  html += '<button class="btn btn-sm" id="enrolBtnBasculerCamera" style="margin-top:14px;margin-left:8px;display:none" onclick="basculerCameraEnrolement()">&#x1F504; Changer de camera</button>';
   html += '</div></div></div>';
 
   return html;
