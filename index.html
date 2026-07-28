@@ -719,7 +719,7 @@ tr:hover td{background:#faf9f7}
 <!-- MODAL DETAIL -->
 <div class="overlay" id="modalDet" style="display:none" onclick="if(event.target===this)confirmerFermetureDet()">
 <div class="modal modal-xl">
-  <div class="mhead"><h2 id="detTitle">Detail</h2><div class="flex gap6"><button class="btn btn-sm" id="btnPhotos" style="color:#185FA5;border-color:#B5D4F4" onclick="photosVisible=!photosVisible;openDetKeepEdit(detCurrentVid)">&#x1F4F7; Photos</button><button class="btn btn-sm" onclick="imprimerDetCourant()" title="Imprimer devis/facture">&#x1F5A8;</button><button class="btn btn-sm" onclick="imprimerFicheEntree(detCurrentVid)" title="Fiche d'entree" style="color:#3B6D11;border-color:#3B6D11">&#x1F4CB; Fiche</button><button class="btn btn-sm" id="btnCommentaires" onclick="ouvrirCommentaires(detCurrentVid)" title="Commentaires" style="color:#854F0B;border-color:#E8A44A">&#x1F4AC;</button><button class="btn btn-sm" id="btnMessageClient" onclick="ouvrirConversationDepuisFiche(detCurrentVid)" title="Message client" style="color:#185FA5;border-color:#B5D4F4">&#x1F310; Message client</button><button class="btn btn-sm" onclick="closeDet()">X</button></div></div>
+  <div class="mhead"><h2 id="detTitle">Detail</h2><div class="flex gap6"><button class="btn btn-sm" id="btnPhotos" style="color:#185FA5;border-color:#B5D4F4" onclick="photosVisible=!photosVisible;openDetKeepEdit(detCurrentVid)">&#x1F4F7; Photos</button><button class="btn btn-sm" onclick="imprimerDetCourant()" title="Imprimer devis/facture">&#x1F5A8;</button><button class="btn btn-sm" onclick="imprimerFicheEntree(detCurrentVid)" title="Fiche d'entree" style="color:#3B6D11;border-color:#3B6D11">&#x1F4CB; Fiche</button><button class="btn btn-sm" id="btnBonLivraison" style="display:none;color:#A32D2D;border-color:#E0A0A0" onclick="imprimerBonLivraison(detCurrentVid)" title="Bon de livraison">&#x1F4E6; Bon de livraison</button><button class="btn btn-sm" id="btnCommentaires" onclick="ouvrirCommentaires(detCurrentVid)" title="Commentaires" style="color:#854F0B;border-color:#E8A44A">&#x1F4AC;</button><button class="btn btn-sm" id="btnMessageClient" onclick="ouvrirConversationDepuisFiche(detCurrentVid)" title="Message client" style="color:#185FA5;border-color:#B5D4F4">&#x1F310; Message client</button><button class="btn btn-sm" onclick="closeDet()">X</button></div></div>
   <div class="mbody" id="detBody"></div>
   <div class="mfoot" id="detFoot"></div>
 </div>
@@ -16913,6 +16913,17 @@ function openDet(id){
   // Masquer bouton commentaires pour technicien et testeur
   var btnComm = document.getElementById('btnCommentaires');
   if(btnComm) btnComm.style.display = (currentRole==='technicien'||currentRole==='testeur') ? 'none' : '';
+  // Bon de livraison : disponible automatiquement une fois le vehicule
+  // livre (statuts livre/facture_deposee/dossier_cloture, qui succedent
+  // tous a une vraie livraison), et uniquement pour Reception, Direction,
+  // Chef d'atelier.
+  var btnBL = document.getElementById('btnBonLivraison');
+  if(btnBL){
+    var STATUTS_LIVRE_OU_APRES = ['livre','facture_deposee','dossier_cloture'];
+    var roleAutoriseBL = (currentRole==='reception'||currentRole==='direction'||currentRole==='chef_atelier');
+    var estLivre = STATUTS_LIVRE_OU_APRES.indexOf(v.status)>=0;
+    btnBL.style.display = (roleAutoriseBL && estLivre) ? 'inline-block' : 'none';
+  }
   detCurrentVid = id; // Stocker l'id courant pour les fonctions d'affectation
   var _vCurr = vehicles.find(function(x){return x.id===id;});
   var _possible=getTransitions(v,roleEffectif());
@@ -18659,6 +18670,138 @@ function imprimerDocument(vid, type){
   msg.innerHTML = '<strong>Fichier téléchargé !</strong><br>Ouvrez-le → Imprimer → Enregistrer en PDF<br><small>Décochez "En-têtes et pieds de page" dans les options</small>';
   document.body.appendChild(msg);
   setTimeout(function(){ msg.style.opacity='0'; msg.style.transition='opacity 0.5s'; setTimeout(function(){ if(msg.parentNode)msg.parentNode.removeChild(msg); },600); },4000);
+}
+
+// Bon de livraison : disponible automatiquement des qu'un vehicule est au
+// statut "livre" (ou dossiers ulterieurs facture_deposee/dossier_cloture,
+// puisque le vehicule reste livre a ce stade). Reprend la meme structure
+// A4 que imprimerDocument (facture/devis), avec le tampon LIVRE et les
+// deux signatures Client/Garage cote a cote, fidele au modele fourni.
+function imprimerBonLivraisonById(btn){ imprimerBonLivraison(btn.getAttribute('data-vid')); }
+
+function imprimerBonLivraison(vid){
+  var v = vehicles.find(function(x){return x.id===vid;});
+  if(!v) return;
+
+  var numFacture = genNumeroDoc(v, 'FACTURE');
+
+  var lignes = [];
+  if(v.chiffrage && v.chiffrage.lignes){
+    lignes = v.chiffrage.lignes.filter(function(l){ return (l.piece||'').trim(); });
+  }
+  var travauxHtml = lignes.length
+    ? lignes.map(function(l){ return '<div style="margin-bottom:3px">- '+(l.piece||'')+'</div>'; }).join('')
+    : '<div style="color:#888">Aucun travail enregistre.</div>';
+
+  var dateEdit = new Date().toLocaleDateString('fr-FR');
+  var dateLivraison = v.livraison ? new Date(v.livraison) : new Date();
+  var mec = v.mec ? new Date(v.mec).toLocaleDateString('fr-FR') : '';
+
+  var html = ''
+    +'<style>'
+    +'*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}'
+    +'@page{size:A4 portrait;margin:15mm}'
+    +'html,body{width:210mm;background:#fff;font-size:11px;color:#1a1a1a}'
+    +'body{padding:0;margin:0}'
+    +'table{width:100%;border-collapse:collapse}'
+    +'.page{min-height:247mm;padding:8mm 10mm;display:flex;flex-direction:column}'
+    +'.content{flex:1}'
+    +'@media print{'
+    +'  @page{size:A4 portrait;margin:15mm 15mm 20mm 15mm}'
+    +'  html,body{width:210mm}'
+    +'  .no-print{display:none!important}'
+    +'  footer{position:fixed;bottom:0;left:0;right:0;padding:6mm 15mm 4mm;border-top:2px solid #1a1a1a;text-align:center;font-size:9px;color:#555;background:#fff}'
+    +'}'
+    +'footer{margin-top:auto;border-top:2px solid #1a1a1a;padding-top:8px;text-align:center;font-size:9px;color:#555}'
+    +'</style>'
+
+    +'<div class="page"><div class="content">'
+
+    // En-tête : logo a gauche, titre centre (meme structure que la facture)
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px">'
+    +'<img src="'+LOGO_BASE64+'" style="height:65px;width:auto;display:block" alt="Smart Services">'
+    +'<div style="text-align:center;flex:1">'
+    +'<div style="border:2px solid #1a1a1a;border-radius:10px;padding:8px 20px;display:inline-block">'
+    +'<span style="font-size:20px;font-weight:900;letter-spacing:1px">BON DE LIVRAISON</span>'
+    +'</div>'
+    +'<div style="font-size:12px;font-weight:700;margin-top:6px">'+(v.typeClient==='forfait'?'N° '+numFacture:'Facture N° '+numFacture)+'</div>'
+    +'</div>'
+    +'<div style="width:65px"></div>'
+    +'</div>'
+
+    // CLIENT (gauche) + tampon LIVRE (droite)
+    +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px">'
+    +'<div>'
+    +'<div style="font-size:11px;font-weight:700;margin-bottom:3px">CLIENT</div>'
+    +'<div style="border-bottom:1.5px solid #888;padding-bottom:4px;margin-bottom:6px;width:180px"></div>'
+    +'<div style="font-size:13px;font-weight:700">'+(v.client||'')+'</div>'
+    +'</div>'
+    +'<div style="border:3px solid #A32D2D;color:#A32D2D;border-radius:6px;padding:8px 24px;font-size:22px;font-weight:900;letter-spacing:2px;transform:rotate(-3deg)">LIVRÉ</div>'
+    +'</div>'
+
+    +'<div style="text-align:right;font-size:11px;font-weight:700;margin-bottom:16px">Édité le '+dateEdit+'</div>'
+
+    // VEHICULE + Date/Technicien/N°serie/Energie/Genre/Couleur
+    +'<div style="display:flex;justify-content:space-between;margin-bottom:24px">'
+    +'<div>'
+    +'<div style="font-size:11px;font-weight:700;margin-bottom:3px">VEHICULE</div>'
+    +'<div style="border-bottom:1.5px solid #888;padding-bottom:4px;margin-bottom:8px;width:200px"></div>'
+    +'<table style="border:none;width:auto">'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px;white-space:nowrap">Immatriculation :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.immat||'')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Marque :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.marque||'')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Modèle :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.modele||'')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Kilométrage (Km) :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.km?v.km.toLocaleString('fr-FR'):'N/A')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Mise en circulation :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+mec+'</td></tr>'
+    +'</table>'
+    +'</div>'
+    +'<div style="text-align:left">'
+    +'<table style="border:none;width:auto">'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Date :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+dateLivraison.toLocaleDateString('fr-FR')+'</td><td style="border:none;padding:2px 0 2px 16px;color:#555;font-size:11px">Heure :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+dateLivraison.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Technicien :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.technicien||'N/A')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">N° série :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.vin||'')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Énergie :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.carburant||'').toUpperCase()+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Genre :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:11px"></td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Couleur :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:11px"></td></tr>'
+    +'</table>'
+    +'</div>'
+    +'</div>'
+
+    // Texte de livraison
+    +'<div style="font-size:12px;margin-bottom:6px;line-height:1.5">'
+    +'Le garage SMART a livré le véhicule <strong>'+(v.marque||'')+'</strong> immatriculé <strong>'+(v.immat||'')+'</strong> le <strong>'+dateLivraison.toLocaleDateString('fr-FR')+'</strong> dans ses locaux après avoir effectués ces travaux.'
+    +'</div>'
+    +'<div style="font-size:11px;font-style:italic;margin-bottom:20px">(Se référer à la facture en annexe.)</div>'
+
+    // TRAVAUX REALISES
+    +'<div style="border:1.5px solid #1a1a1a;border-radius:6px;padding:8px 14px;text-align:center;font-weight:700;font-size:12px;margin-bottom:12px">TRAVAUX RÉALISÉS</div>'
+    +'<div style="font-size:11px;margin-bottom:60px">'+travauxHtml+'</div>'
+
+    // Signatures Client / Garage cote a cote
+    +'<div style="display:flex;justify-content:space-between;margin-top:auto">'
+    +'<div style="font-size:13px;font-weight:700;text-decoration:underline">CLIENT</div>'
+    +'<div style="font-size:13px;font-weight:700;text-decoration:underline">LE GARAGE AUTO</div>'
+    +'</div>'
+
+    +'<div style="text-align:right;font-size:9px;color:#888;margin-top:16px">1 / 1</div>'
+
+    +'</div></div>'
+    +'<footer>CI -ABJ-2007-A6390 — 2345 ABJ 01 — 27 22 43 63 55 — 07 07 73 90 73</footer>';
+
+  var nom = ('BonLivraison_'+v.immat).replace(/[^a-zA-Z0-9_-]/g,'_');
+  var blob = new Blob([html], {type:'text/html;charset=utf-8'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = nom+'.html';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 2000);
+  var msg2 = document.createElement('div');
+  msg2.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1a1a;color:#fff;padding:10px 18px;border-radius:8px;font-size:12px;z-index:99999;text-align:center';
+  msg2.innerHTML = '<strong>Fichier téléchargé !</strong><br>Ouvrez-le → Imprimer → Enregistrer en PDF<br><small>Décochez "En-têtes et pieds de page" dans les options</small>';
+  document.body.appendChild(msg2);
+  setTimeout(function(){ msg2.style.opacity='0'; msg2.style.transition='opacity 0.5s'; setTimeout(function(){ if(msg2.parentNode)msg2.parentNode.removeChild(msg2); },600); },4000);
 }
 
 
