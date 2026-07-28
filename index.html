@@ -163,17 +163,6 @@ tr:hover td{background:#faf9f7}
     </div>
     <div id="loginError" style="display:none;background:#FCEBEB;color:#A32D2D;padding:8px 12px;border-radius:7px;font-size:12px;margin-bottom:12px">Identifiant ou mot de passe incorrect.</div>
     <button class="btn btn-primary" onclick="doLogin()" style="width:100%">Se connecter</button>
-    <div id="loginHint" style="margin-top:16px;padding:10px 12px;background:#f5f4f1;border-radius:7px;font-size:11px;color:#5a5956">
-      <div style="font-weight:600;margin-bottom:6px">Accès par défaut :</div>
-      <div><strong>direction</strong> / dir2024</div>
-      <div><strong>reception</strong> / rec2024</div>
-      <div><strong>achats</strong> / achat2024 &nbsp;|&nbsp; <strong>testeur</strong> / test2024</div>
-      <div><strong>technicien</strong> / tech2024 <span style="color:#999">(Equipe A)</span></div>
-      <div><strong>coulibaly.r</strong> / coul2024 <span style="color:#999">(chef atelier)</span></div>
-      <div style="margin-top:8px;border-top:1px solid #e8e5e0;padding-top:8px">
-        <button class="btn btn-sm" style="font-size:10px;width:100%" onclick="reinitComptes()">&#x21BA; Réinitialiser les comptes par défaut</button>
-      </div>
-    </div>
   </div>
 </div>
 
@@ -1343,6 +1332,7 @@ var TRANSITIONS = {
     'reprise_demandee':   ['travaux_cours'],
     'travaux_attente':    ['travaux_cours'],
     'travaux_cours':      ['travaux_termines'],
+    'travaux_termines':   ['en_test'],
     'en_test':            ['attente_valid_chef']
   },
   chef_equipe: {
@@ -1837,7 +1827,7 @@ var NAV = {
     {l:'RH',items:[{id:'presences',e:'Pr',l:'Presences'}]}
   ],
   chef_atelier:[
-    {l:'Atelier',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'}]},
+    {l:'Atelier',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'testeur',e:'Ts',l:'Testeur'}]},
     {l:'Equipes',items:[{id:'equipes',e:'E',l:'Equipes et techniciens'}]},
     {l:'Clients',items:[{id:'messages_clients',e:'MC',l:'Messages clients'}]}
   ],
@@ -17136,8 +17126,10 @@ function openDet(id){
   if(_showChiffrage){
     b += renderChiffrageSection(v);
   }
-  // ── Section Observations testeur — visible pour le testeur en mode reprise ──
-  if(currentRole==='testeur'){
+  // ── Section Observations testeur — visible pour le testeur, et pour le
+  // chef d'atelier qui doit avoir les memes acces que le testeur, en mode
+  // reprise ──
+  if(currentRole==='testeur' || currentRole==='chef_atelier'){
     b += '<div style="margin-top:14px"><div class="sdiv" style="color:#A32D2D">&#x1F50D; Observations du testeur</div>';
     if(v.commentaire_reprise_test){
       b += '<div style="background:#FAEEDA;color:#854F0B;padding:10px 12px;border-radius:8px;margin-bottom:8px;font-size:13px">';
