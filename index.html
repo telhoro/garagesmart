@@ -20646,11 +20646,13 @@ function presencesImprimerCalendrierEmploye(employeId){
 
 function presencesStyleImpression(){
   return '<style>body{font-family:Arial,sans-serif;padding:24px;color:#1a1a1a}h1{font-size:18px}h2{font-size:14px;margin-top:20px}'
+    +'*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}'
     +'table{width:100%;border-collapse:collapse;margin-top:10px;font-size:12px}td,th{border:1px solid #ccc;padding:5px 8px;text-align:left}'
     +'.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-top:8px}'
     +'.cal div{border:1px solid #ddd;border-radius:4px;padding:4px 2px;text-align:center;font-size:11px}'
     +'.cal .present{background:#EAF3DE}.cal .retard{background:#FAEEDA}.cal .absent{background:#f5f4f1;color:#bbb}'
-    +'.cal-bloc{page-break-inside:avoid}</style>';
+    +'.cal-bloc{page-break-inside:avoid}'
+    +'@media print{*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}</style>';
 }
 
 // Genere le HTML imprimable d'un calendrier (grille CSS simple, pas de
