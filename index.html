@@ -1816,7 +1816,7 @@ function initFournisseurs(){
 var NAV = {
   direction:[
     {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'},{id:'acces_clients',e:'AC',l:'Acces clients'},{id:'messages_clients',e:'MC',l:'Messages clients'},{id:'import_historique',e:'IH',l:'Import historique'},{id:'presences',e:'Pr',l:'Presences'}]},
-    {l:'Finances',items:[{id:'finances_dashboard',e:'FD',l:'Tableau de bord'},{id:'facturation',e:'F',l:'Facturation'},{id:'dettes_fournisseurs',e:'DF',l:'Dettes fournisseurs'},{id:'prevision_treso',e:'PT',l:'Prevision tresorerie'}]},
+    {l:'Finances',items:[{id:'finances_dashboard',e:'FD',l:'Tableau de bord'},{id:'facturation',e:'F',l:'Facturation'},{id:'caisse',e:'Ca',l:'Caisse'},{id:'dettes_fournisseurs',e:'DF',l:'Dettes fournisseurs'},{id:'prevision_treso',e:'PT',l:'Prevision tresorerie'}]},
     {l:'Rentabilite',items:[{id:'rentabilite',e:'RD',l:'Clients Devis'},{id:'rentabilite_forfait',e:'RF',l:'Clients Forfait'},{id:'analyse_pieces',e:'AP',l:'Analyse pieces'}]},
     {l:'Gestion',items:[{id:'archives',e:'Ar',l:'Archives'},{id:'banques',e:'B',l:'Banques'},{id:'charges_fixes',e:'CF',l:'Charges fixes'},{id:'engagements_bancaires',e:'EB',l:'Engagements bancaires'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'stock',e:'St',l:'Gestion du stock'},{id:'travaux_prevoir',e:'TP',l:'Travaux a prevoir'},{id:'devis_differes',e:'DD',l:'Devis differes'},{id:'sinistres',e:'S',l:'Sinistres'},{id:'val_fin',e:'VF',l:'Validation financiere'},{id:'kpi',e:'K',l:'KPI'}]}
   ],
@@ -1824,6 +1824,7 @@ var NAV = {
     {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'historique',e:'H',l:'Historique'}]},
     {l:'Clients',items:[{id:'clients',e:'C',l:'Clients et vehicules'},{id:'messages_clients',e:'MC',l:'Messages clients'}]},
     {l:'Suivi',items:[{id:'devis_differes',e:'DD',l:'Devis differes'}]},
+    {l:'Finances',items:[{id:'caisse',e:'Ca',l:'Caisse'}]},
     {l:'RH',items:[{id:'presences',e:'Pr',l:'Presences'}]}
   ],
   chef_atelier:[
@@ -1856,7 +1857,8 @@ var TITLES = {
   import_historique:'Import historique',
   vue_portail_client:'Vue portail client',
   vue_portail_stats:'Statistiques portail client',
-  presences:'Presences'
+  presences:'Presences',
+  caisse:'Caisse'
 };
 
 var SAMPLE = [];
@@ -2010,6 +2012,60 @@ function syncDescripteursFaciauxFromFirebase(callback){
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
+
+// ── Caisse (petites depenses/entrees du quotidien) ───────────────────────
+// Une session par jour calendaire : {id, date (YYYY-MM-DD), soldeOuverture,
+// soldeFermeture (calcule a la fermeture), statut:'ouverte'|'fermee',
+// ouvertePar, fermeePar, ouvertureLe, fermetureLe}.
+var CAISSE_JOURNEES = [];
+function saveCaisseJournees(){
+  localStorage.setItem('gos_caisse_journees', JSON.stringify(CAISSE_JOURNEES));
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_caisse_journees').set(JSON.stringify(CAISSE_JOURNEES)).catch(function(e){
+      console.error('Firebase caisse journees save error:', e);
+    });
+  }
+}
+function loadCaisseJournees(){
+  var raw = localStorage.getItem('gos_caisse_journees');
+  if(raw){ try{ CAISSE_JOURNEES = JSON.parse(raw)||[]; }catch(e){ CAISSE_JOURNEES=[]; } }
+}
+function syncCaisseJourneesFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_caisse_journees').once('value').then(function(snap){
+    var val = snap.val();
+    if(val){ try{ CAISSE_JOURNEES = JSON.parse(val)||[]; localStorage.setItem('gos_caisse_journees', val); }catch(e){} }
+    else if(CAISSE_JOURNEES.length && fbConnected){ fbDb.ref('gos_caisse_journees').set(JSON.stringify(CAISSE_JOURNEES)); }
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
+}
+
+// Mouvements : {id, journeeId, date, type:'entree'|'sortie', montant,
+// categorie (texte libre, autosuggestion via l'historique), motif,
+// vehiculeId (optionnel), auteur}.
+var CAISSE_MOUVEMENTS = [];
+function saveCaisseMouvements(){
+  localStorage.setItem('gos_caisse_mouvements', JSON.stringify(CAISSE_MOUVEMENTS));
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_caisse_mouvements').set(JSON.stringify(CAISSE_MOUVEMENTS)).catch(function(e){
+      console.error('Firebase caisse mouvements save error:', e);
+    });
+  }
+}
+function loadCaisseMouvements(){
+  var raw = localStorage.getItem('gos_caisse_mouvements');
+  if(raw){ try{ CAISSE_MOUVEMENTS = JSON.parse(raw)||[]; }catch(e){ CAISSE_MOUVEMENTS=[]; } }
+}
+function syncCaisseMouvementsFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_caisse_mouvements').once('value').then(function(snap){
+    var val = snap.val();
+    if(val){ try{ CAISSE_MOUVEMENTS = JSON.parse(val)||[]; localStorage.setItem('gos_caisse_mouvements', val); }catch(e){} }
+    else if(CAISSE_MOUVEMENTS.length && fbConnected){ fbDb.ref('gos_caisse_mouvements').set(JSON.stringify(CAISSE_MOUVEMENTS)); }
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
+}
+
 
 // ── Chargement des modeles de reconnaissance faciale (face-api.js) ──────
 // Charge a la demande (pas au demarrage de l'app) pour ne pas ralentir le
@@ -4824,6 +4880,7 @@ function renderPage(){
   else if(p==='testeur') html=pageDashTesteur();
   else if((r==='direction' || r==='reception' || r==='chef_atelier' || r==='chef_equipe') && p==='messages_clients') html=pageMessagesClients();
   else if((r==='direction' || r==='reception') && p==='presences') html=pagePresences();
+  else if((r==='direction' || r==='reception') && p==='caisse') html=pageCaisse();
   else if(r==='reception') html=pageDashReception();
   else if((r==='chef_atelier'||r==='chef_equipe') && agirCommeTech) html=pageDashTech();
   else if(r==='chef_atelier'||r==='chef_equipe') html=pageDashChefAtelier(r);
@@ -21072,6 +21129,443 @@ function pagePresencesHistorique(){
   return html;
 }
 
+// ── Caisse (petites depenses/entrees du quotidien) ───────────────────────
+// Page a onglets : Jour (ouverture/fermeture, mouvements du jour),
+// Historique (jours passes), Analyse (financiere, par categorie/vehicule).
+var caisseOnglet = 'jour';
+
+// ── Fonctions utilitaires de gestion de caisse ───────────────────────────
+function dateJourStr(timestamp){
+  var d = timestamp ? new Date(timestamp) : new Date();
+  return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);
+}
+
+function trouverJourneeCaisse(dateStr){
+  return CAISSE_JOURNEES.find(function(j){ return j.date===dateStr; });
+}
+
+function ouvrirJourneeCaisse(dateStr, auteur){
+  var existante = trouverJourneeCaisse(dateStr);
+  if(existante) return existante;
+  // Solde d'ouverture par defaut = solde de fermeture du dernier jour ferme
+  var dernierFerme = CAISSE_JOURNEES.filter(function(j){return j.statut==='fermee';})
+    .sort(function(a,b){return b.date.localeCompare(a.date);})[0];
+  var soldeDepart = dernierFerme ? dernierFerme.soldeFermeture : 0;
+  var journee = {
+    id: 'cj_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),
+    date: dateStr, soldeOuverture: soldeDepart,
+    soldeFermeture: null, statut: 'ouverte', ouvertePar: auteur, fermeePar: null,
+    ouvertureLe: Date.now(), fermetureLe: null
+  };
+  CAISSE_JOURNEES.push(journee);
+  saveCaisseJournees();
+  return journee;
+}
+
+function calculerSoldeJournee(journee){
+  var mvtsJournee = CAISSE_MOUVEMENTS.filter(function(m){ return m.journeeId===journee.id; });
+  var totalEntrees = mvtsJournee.filter(function(m){return m.type==='entree';}).reduce(function(s,m){return s+m.montant;},0);
+  var totalSorties = mvtsJournee.filter(function(m){return m.type==='sortie';}).reduce(function(s,m){return s+m.montant;},0);
+  return {
+    soldeOuverture: journee.soldeOuverture,
+    totalEntrees: totalEntrees,
+    totalSorties: totalSorties,
+    soldeCalcule: journee.soldeOuverture + totalEntrees - totalSorties,
+    mouvements: mvtsJournee.sort(function(a,b){return b.date-a.date;})
+  };
+}
+
+// Liste des categories deja utilisees, par ordre de frequence decroissante
+// (pour l'autosuggestion) — se construit au fil des saisies, sans liste
+// figee a l'avance.
+function categoriesCaisseConnues(){
+  var compteur = {};
+  CAISSE_MOUVEMENTS.forEach(function(m){
+    var cat = (m.categorie||'').trim();
+    if(!cat) return;
+    compteur[cat] = (compteur[cat]||0)+1;
+  });
+  return Object.keys(compteur).sort(function(a,b){ return compteur[b]-compteur[a]; });
+}
+
+function ouvrirCaisseAujourdhui(){
+  var auteur = currentUser ? (currentUser.login||currentUser.nom) : currentRole;
+  ouvrirJourneeCaisse(dateJourStr(), auteur);
+  renderPage();
+}
+
+// Recherche live par immatriculation, pour attribuer un mouvement a un
+// vehicule precis — optionnelle, comme convenu (le mouvement reste une
+// depense generale si aucun vehicule n'est choisi).
+function rechercherVehiculeCaisse(texte){
+  var zone = document.getElementById('cm_vehicule_resultats');
+  if(!zone) return;
+  document.getElementById('cm_vehicule_id').value = ''; // reinitialise la selection si on retape
+  var champSelectionne = document.getElementById('cm_vehicule_selectionne');
+  if(champSelectionne) champSelectionne.innerHTML = '';
+  if(!texte || texte.trim().length<2){ zone.innerHTML=''; return; }
+  var q = texte.trim().toLowerCase();
+  var resultats = vehicles.filter(function(v){
+    return !v.isProspect && (v.immat||'').toLowerCase().indexOf(q)>=0;
+  }).slice(0,6);
+  if(!resultats.length){ zone.innerHTML = '<div class="xs muted">Aucun vehicule trouve.</div>'; return; }
+  var html = '<div style="border:1px solid #e8e6e1;border-radius:7px;overflow:hidden">';
+  resultats.forEach(function(v){
+    html += '<div style="padding:6px 10px;cursor:pointer;border-bottom:1px solid #f0ede8" onclick="selectionnerVehiculeCaisse(\''+v.id+'\',\''+v.immat+'\')">'
+      + '<strong>'+v.immat+'</strong> <span class="xs muted">'+(v.marque||'')+' '+(v.modele||'')+' — '+(v.client||'')+'</span></div>';
+  });
+  html += '</div>';
+  zone.innerHTML = html;
+}
+
+function selectionnerVehiculeCaisse(vid, immat){
+  document.getElementById('cm_vehicule_id').value = vid;
+  document.getElementById('cm_vehicule_recherche').value = '';
+  document.getElementById('cm_vehicule_resultats').innerHTML = '';
+  document.getElementById('cm_vehicule_selectionne').innerHTML =
+    '<span class="badge b-blue">'+immat+' <a href="#" onclick="event.preventDefault();document.getElementById(\'cm_vehicule_id\').value=\'\';document.getElementById(\'cm_vehicule_selectionne\').innerHTML=\'\';" style="color:#fff;margin-left:6px">&times;</a></span>';
+}
+
+function ajouterMouvementCaisse(){
+  var aujourdhui = dateJourStr();
+  var journee = trouverJourneeCaisse(aujourdhui);
+  if(!journee || journee.statut!=='ouverte'){ alert('La caisse n\'est pas ouverte.'); return; }
+
+  var type = document.getElementById('cm_type').value;
+  var montant = parseFloat(document.getElementById('cm_montant').value);
+  var categorie = document.getElementById('cm_categorie').value.trim();
+  var motif = document.getElementById('cm_motif').value.trim();
+  var vehiculeId = document.getElementById('cm_vehicule_id').value || null;
+
+  if(!montant || montant<=0){ alert('Indiquez un montant valide.'); return; }
+  if(!categorie){ alert('Indiquez une categorie.'); return; }
+
+  var auteur = currentUser ? (currentUser.login||currentUser.nom) : currentRole;
+  CAISSE_MOUVEMENTS.push({
+    id: 'cm_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),
+    journeeId: journee.id, date: Date.now(), type: type, montant: montant,
+    categorie: categorie, motif: motif, vehiculeId: vehiculeId, auteur: auteur
+  });
+  saveCaisseMouvements();
+  renderPage();
+}
+
+function supprimerMouvementCaisse(mid){
+  if(!confirm('Supprimer ce mouvement de caisse ?')) return;
+  CAISSE_MOUVEMENTS = CAISSE_MOUVEMENTS.filter(function(m){ return m.id!==mid; });
+  saveCaisseMouvements();
+  renderPage();
+}
+
+function ouvrirFermetureCaisse(){
+  var journee = trouverJourneeCaisse(dateJourStr());
+  if(!journee) return;
+  var stats = calculerSoldeJournee(journee);
+  document.getElementById('fermetureCaisseInfo').innerHTML =
+    'Solde calcule (ouverture + entrees - sorties) : <strong>'+stats.soldeCalcule.toLocaleString('fr-FR')+' FCFA</strong><br>'
+    + '<span class="xs muted">Indiquez le montant reellement compte en caisse pour detecter un eventuel ecart.</span>';
+  document.getElementById('cf_solde_reel').value = stats.soldeCalcule;
+  document.getElementById('modalFermetureCaisse').style.display = 'flex';
+}
+
+function confirmerFermetureCaisse(){
+  var journee = trouverJourneeCaisse(dateJourStr());
+  if(!journee) return;
+  var soldeReel = parseFloat(document.getElementById('cf_solde_reel').value);
+  if(isNaN(soldeReel)){ alert('Indiquez le solde reellement compte.'); return; }
+
+  var stats = calculerSoldeJournee(journee);
+  var auteur = currentUser ? (currentUser.login||currentUser.nom) : currentRole;
+  journee.statut = 'fermee';
+  journee.soldeFermeture = soldeReel;
+  journee.ecartCaisse = soldeReel - stats.soldeCalcule;
+  journee.fermeePar = auteur;
+  journee.fermetureLe = Date.now();
+  saveCaisseJournees();
+  document.getElementById('modalFermetureCaisse').style.display = 'none';
+  renderPage();
+}
+
+// ── Historique : liste de tous les jours de caisse passes ────────────────
+function pageCaisseHistorique(){
+  var journees = CAISSE_JOURNEES.slice().sort(function(a,b){ return b.date.localeCompare(a.date); });
+  if(!journees.length){
+    return '<div class="card"><div class="empty">Aucune journee de caisse enregistree.</div></div>';
+  }
+
+  var html = '<div class="card"><div class="tw"><table><thead><tr>';
+  html += '<th>Date</th><th>Statut</th><th style="text-align:right">Ouverture</th><th style="text-align:right">Entrees</th><th style="text-align:right">Sorties</th><th style="text-align:right">Fermeture</th><th style="text-align:right">Ecart</th><th></th>';
+  html += '</tr></thead><tbody>';
+  journees.forEach(function(j){
+    var stats = calculerSoldeJournee(j);
+    var ecartTxt = (j.statut==='fermee' && j.ecartCaisse!==undefined && j.ecartCaisse!==null)
+      ? '<span style="color:'+(j.ecartCaisse===0?'#3B6D11':(j.ecartCaisse>0?'#185FA5':'#A32D2D'))+';font-weight:700">'+(j.ecartCaisse>0?'+':'')+j.ecartCaisse.toLocaleString('fr-FR')+'</span>'
+      : '—';
+    html += '<tr>';
+    html += '<td><strong>'+new Date(j.date).toLocaleDateString('fr-FR')+'</strong></td>';
+    html += '<td><span class="badge '+(j.statut==='fermee'?'b-gray':'b-green')+'">'+(j.statut==='fermee'?'Fermee':'Ouverte')+'</span></td>';
+    html += '<td style="text-align:right">'+j.soldeOuverture.toLocaleString('fr-FR')+'</td>';
+    html += '<td style="text-align:right;color:#3B6D11">+'+stats.totalEntrees.toLocaleString('fr-FR')+'</td>';
+    html += '<td style="text-align:right;color:#A32D2D">-'+stats.totalSorties.toLocaleString('fr-FR')+'</td>';
+    html += '<td style="text-align:right">'+(j.statut==='fermee'?j.soldeFermeture.toLocaleString('fr-FR'):stats.soldeCalcule.toLocaleString('fr-FR')+' (calcule)')+'</td>';
+    html += '<td style="text-align:right">'+ecartTxt+'</td>';
+    html += '<td><button class="btn btn-sm" style="font-size:11px" onclick="ouvrirDetailJourneeCaisse(\''+j.id+'\')">Detail</button></td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+
+  html += '<div class="overlay" id="modalDetailJourneeCaisse" style="display:none" onclick="if(event.target===this)document.getElementById(\'modalDetailJourneeCaisse\').style.display=\'none\'">';
+  html += '<div class="modal modal-lg" style="max-width:640px;max-height:85vh;display:flex;flex-direction:column">';
+  html += '<div class="mhead"><h2 id="detailJourneeCaisseTitre"></h2><button class="btn btn-sm" onclick="document.getElementById(\'modalDetailJourneeCaisse\').style.display=\'none\'">X</button></div>';
+  html += '<div class="mbody" id="detailJourneeCaisseContenu" style="overflow-y:auto"></div>';
+  html += '</div></div>';
+
+  return html;
+}
+
+function ouvrirDetailJourneeCaisse(journeeId){
+  var j = CAISSE_JOURNEES.find(function(x){return x.id===journeeId;});
+  if(!j) return;
+  var stats = calculerSoldeJournee(j);
+  document.getElementById('detailJourneeCaisseTitre').textContent = 'Detail — '+new Date(j.date).toLocaleDateString('fr-FR');
+
+  var html = '<div class="kgrid k4" style="margin-bottom:14px">';
+  html += kpi('Ouverture', j.soldeOuverture.toLocaleString('fr-FR')+' FCFA', '');
+  html += kpi('Entrees', '+'+stats.totalEntrees.toLocaleString('fr-FR'), 'green');
+  html += kpi('Sorties', '-'+stats.totalSorties.toLocaleString('fr-FR'), 'red');
+  html += kpi('Fermeture', (j.statut==='fermee'?j.soldeFermeture.toLocaleString('fr-FR'):stats.soldeCalcule.toLocaleString('fr-FR')+' (calc.)'), 'blue');
+  html += '</div>';
+
+  if(!stats.mouvements.length){
+    html += '<div class="empty">Aucun mouvement ce jour-la.</div>';
+  } else {
+    html += '<div class="tw"><table><thead><tr><th>Heure</th><th>Type</th><th>Categorie</th><th>Motif</th><th>Vehicule</th><th style="text-align:right">Montant</th></tr></thead><tbody>';
+    stats.mouvements.forEach(function(m){
+      var vehiculeTxt = '—';
+      if(m.vehiculeId){
+        var vRef = vehicles.find(function(x){return x.id===m.vehiculeId;});
+        vehiculeTxt = vRef ? vRef.immat : '(vehicule supprime)';
+      }
+      html += '<tr>';
+      html += '<td class="xs">'+new Date(m.date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+'</td>';
+      html += '<td><span class="badge '+(m.type==='entree'?'b-green':'b-red')+'">'+(m.type==='entree'?'Entree':'Sortie')+'</span></td>';
+      html += '<td>'+(m.categorie||'—')+'</td>';
+      html += '<td class="xs">'+(m.motif||'—')+'</td>';
+      html += '<td class="xs">'+vehiculeTxt+'</td>';
+      html += '<td style="text-align:right;font-weight:700">'+(m.type==='entree'?'+':'-')+m.montant.toLocaleString('fr-FR')+'</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+
+  document.getElementById('detailJourneeCaisseContenu').innerHTML = html;
+  document.getElementById('modalDetailJourneeCaisse').style.display = 'flex';
+}
+
+// ── Analyse financiere : filtre de periode, KPI globaux, repartition par
+// categorie et par vehicule ────────────────────────────────────────────
+var caisseAnalysePeriode = 'mois';
+var caisseAnalyseDebut = '';
+var caisseAnalyseFin = '';
+
+function pageCaisseAnalyse(){
+  var today = new Date();
+  var borneDebut = 0, borneFin = null;
+  if(caisseAnalysePeriode==='mois') borneDebut = new Date(today.getFullYear(), today.getMonth(), 1).getTime();
+  else if(caisseAnalysePeriode==='trimestre'){ var q=Math.floor(today.getMonth()/3)*3; borneDebut=new Date(today.getFullYear(),q,1).getTime(); }
+  else if(caisseAnalysePeriode==='annee') borneDebut = new Date(today.getFullYear(), 0, 1).getTime();
+  else if(caisseAnalysePeriode==='custom' && caisseAnalyseDebut){
+    borneDebut = new Date(caisseAnalyseDebut).setHours(0,0,0,0);
+    if(caisseAnalyseFin) borneFin = new Date(caisseAnalyseFin).setHours(23,59,59,999);
+  }
+
+  var mvts = CAISSE_MOUVEMENTS.filter(function(m){
+    if(borneDebut>0 && m.date<borneDebut) return false;
+    if(borneFin && m.date>borneFin) return false;
+    return true;
+  });
+
+  var html = '<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-bottom:16px">';
+  ['tous','mois','trimestre','annee','custom'].forEach(function(f){
+    var lbl={tous:'Tout',mois:'Mois',trimestre:'Trim.',annee:'Annee',custom:'Personnalise'}[f];
+    html += '<button class="btn btn-sm'+(caisseAnalysePeriode===f?' btn-primary':'')+'" onclick="caisseAnalysePeriode=\''+f+'\';renderPage()">'+lbl+'</button>';
+  });
+  if(caisseAnalysePeriode==='custom'){
+    html += '<input type="date" class="inp" style="width:150px" value="'+caisseAnalyseDebut+'" onchange="caisseAnalyseDebut=this.value;renderPage()">';
+    html += '<span class="xs muted">a</span>';
+    html += '<input type="date" class="inp" style="width:150px" value="'+caisseAnalyseFin+'" onchange="caisseAnalyseFin=this.value;renderPage()">';
+  }
+  html += '</div>';
+
+  var totalEntrees = mvts.filter(function(m){return m.type==='entree';}).reduce(function(s,m){return s+m.montant;},0);
+  var totalSorties = mvts.filter(function(m){return m.type==='sortie';}).reduce(function(s,m){return s+m.montant;},0);
+  var solde = totalEntrees - totalSorties;
+
+  html += '<div class="kgrid k4" style="margin-bottom:20px">';
+  html += kpi('Mouvements', mvts.length, '');
+  html += kpi('Total entrees', '+'+totalEntrees.toLocaleString('fr-FR')+' FCFA', 'green');
+  html += kpi('Total sorties', '-'+totalSorties.toLocaleString('fr-FR')+' FCFA', 'red');
+  html += kpi('Solde net', (solde>=0?'+':'')+solde.toLocaleString('fr-FR')+' FCFA', solde>=0?'blue':'red');
+  html += '</div>';
+
+  // Repartition par categorie (sorties uniquement, plus parlant pour analyser les depenses)
+  var parCategorie = {};
+  mvts.filter(function(m){return m.type==='sortie';}).forEach(function(m){
+    var cat = m.categorie || '(sans categorie)';
+    parCategorie[cat] = (parCategorie[cat]||0) + m.montant;
+  });
+  var categoriesTriees = Object.keys(parCategorie).sort(function(a,b){ return parCategorie[b]-parCategorie[a]; });
+
+  html += '<div class="section-title" style="font-weight:700;margin-bottom:8px">Depenses par categorie</div>';
+  if(!categoriesTriees.length){
+    html += '<div class="card"><div class="empty">Aucune depense sur cette periode.</div></div>';
+  } else {
+    html += '<div class="card" style="margin-bottom:20px"><div class="tw"><table><thead><tr><th>Categorie</th><th style="text-align:right">Montant</th><th style="text-align:right">% du total</th></tr></thead><tbody>';
+    categoriesTriees.forEach(function(cat){
+      var pct = totalSorties>0 ? Math.round((parCategorie[cat]/totalSorties)*100) : 0;
+      html += '<tr><td>'+cat+'</td><td style="text-align:right;font-weight:700">'+parCategorie[cat].toLocaleString('fr-FR')+' FCFA</td><td style="text-align:right">'+pct+'%</td></tr>';
+    });
+    html += '</tbody></table></div></div>';
+  }
+
+  // Repartition par vehicule (uniquement les mouvements attribues)
+  var parVehicule = {};
+  mvts.filter(function(m){return m.type==='sortie' && m.vehiculeId;}).forEach(function(m){
+    if(!parVehicule[m.vehiculeId]) parVehicule[m.vehiculeId] = 0;
+    parVehicule[m.vehiculeId] += m.montant;
+  });
+  var vehiculesTries = Object.keys(parVehicule).sort(function(a,b){ return parVehicule[b]-parVehicule[a]; });
+
+  html += '<div class="section-title" style="font-weight:700;margin-bottom:8px">Depenses attribuees par vehicule</div>';
+  if(!vehiculesTries.length){
+    html += '<div class="card"><div class="empty">Aucune depense attribuee a un vehicule sur cette periode.</div></div>';
+  } else {
+    html += '<div class="card"><div class="tw"><table><thead><tr><th>Vehicule</th><th>Client</th><th style="text-align:right">Total attribue</th></tr></thead><tbody>';
+    vehiculesTries.forEach(function(vid){
+      var vRef = vehicles.find(function(x){return x.id===vid;});
+      html += '<tr><td><strong>'+(vRef?vRef.immat:'(vehicule supprime)')+'</strong></td><td class="xs">'+(vRef?vRef.client:'—')+'</td><td style="text-align:right;font-weight:700">'+parVehicule[vid].toLocaleString('fr-FR')+' FCFA</td></tr>';
+    });
+    html += '</tbody></table></div></div>';
+  }
+
+  return html;
+}
+
+function pageCaisse(){
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+  html += '<h2 style="font-size:16px;font-weight:700;margin:0">&#x1F4B0; Caisse</h2>';
+  html += '</div>';
+
+  html += '<div class="tabs" style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid #e8e6e1;padding-bottom:8px">';
+  html += '<button class="btn btn-sm'+(caisseOnglet==='jour'?' btn-primary':'')+'" onclick="caisseOnglet=\'jour\';renderPage()">&#x1F4C5; Aujourd\'hui</button>';
+  html += '<button class="btn btn-sm'+(caisseOnglet==='historique'?' btn-primary':'')+'" onclick="caisseOnglet=\'historique\';renderPage()">&#x1F4CB; Historique</button>';
+  html += '<button class="btn btn-sm'+(caisseOnglet==='analyse'?' btn-primary':'')+'" onclick="caisseOnglet=\'analyse\';renderPage()">&#x1F4CA; Analyse financiere</button>';
+  html += '</div>';
+
+  if(caisseOnglet==='jour') html += pageCaisseJour();
+  else if(caisseOnglet==='historique') html += pageCaisseHistorique();
+  else html += pageCaisseAnalyse();
+
+  return html;
+}
+
+// Vue du jour : si la caisse n'est pas encore ouverte, propose de
+// l'ouvrir. Une fois ouverte, affiche le solde en temps reel, le
+// formulaire d'ajout de mouvement, la liste des mouvements du jour, et le
+// bouton de fermeture (avec reconciliation du solde reel compte).
+function pageCaisseJour(){
+  var aujourdhui = dateJourStr();
+  var journee = trouverJourneeCaisse(aujourdhui);
+
+  var html = '';
+  if(!journee){
+    html += '<div class="card" style="padding:24px;text-align:center">';
+    html += '<div style="font-size:14px;margin-bottom:12px">La caisse n\'a pas encore ete ouverte aujourd\'hui.</div>';
+    html += '<button class="btn btn-primary" onclick="ouvrirCaisseAujourdhui()">&#x1F513; Ouvrir la caisse</button>';
+    html += '</div>';
+    return html;
+  }
+
+  var stats = calculerSoldeJournee(journee);
+
+  html += '<div class="kgrid k4" style="margin-bottom:16px">';
+  html += kpi('Solde ouverture', stats.soldeOuverture.toLocaleString('fr-FR')+' FCFA', '');
+  html += kpi('Entrees', '+'+stats.totalEntrees.toLocaleString('fr-FR')+' FCFA', 'green');
+  html += kpi('Sorties', '-'+stats.totalSorties.toLocaleString('fr-FR')+' FCFA', 'red');
+  html += kpi('Solde actuel', stats.soldeCalcule.toLocaleString('fr-FR')+' FCFA', 'blue');
+  html += '</div>';
+
+  if(journee.statut==='ouverte'){
+    // Formulaire d'ajout de mouvement
+    var suggestions = categoriesCaisseConnues();
+    html += '<div class="card" style="padding:16px;margin-bottom:16px">';
+    html += '<div style="font-weight:700;margin-bottom:10px">Nouveau mouvement</div>';
+    html += '<div class="g2" style="margin-bottom:10px">';
+    html += '<div class="fr"><label class="fl">Type</label><select class="inp" id="cm_type"><option value="sortie">Sortie (depense)</option><option value="entree">Entree</option></select></div>';
+    html += '<div class="fr"><label class="fl">Montant (FCFA)</label><input class="inp" type="number" id="cm_montant" placeholder="0"></div>';
+    html += '</div>';
+    html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Categorie</label>';
+    html += '<input class="inp" id="cm_categorie" list="cm_categorie_list" placeholder="Ex: Carburant, Fournitures...">';
+    html += '<datalist id="cm_categorie_list">'+suggestions.map(function(c){return '<option value="'+c.replace(/"/g,'&quot;')+'">';}).join('')+'</datalist>';
+    html += '</div>';
+    html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Motif / description</label><input class="inp" id="cm_motif" placeholder="Precisez la raison"></div>';
+    html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Vehicule concerne (optionnel)</label>';
+    html += '<input class="inp" id="cm_vehicule_recherche" placeholder="Rechercher par immatriculation..." oninput="rechercherVehiculeCaisse(this.value)" autocomplete="off">';
+    html += '<input type="hidden" id="cm_vehicule_id" value="">';
+    html += '<div id="cm_vehicule_resultats" style="margin-top:4px"></div>';
+    html += '<div id="cm_vehicule_selectionne" style="margin-top:6px"></div>';
+    html += '</div>';
+    html += '<button class="btn btn-primary" onclick="ajouterMouvementCaisse()">&#x2795; Ajouter le mouvement</button>';
+    html += '</div>';
+  } else {
+    html += '<div class="info-box" style="margin-bottom:16px">Caisse fermee pour aujourd\'hui — solde final : <strong>'+(journee.soldeFermeture||0).toLocaleString('fr-FR')+' FCFA</strong>'+(journee.ecartCaisse ? ' (ecart : '+(journee.ecartCaisse>0?'+':'')+journee.ecartCaisse.toLocaleString('fr-FR')+' FCFA)' : '')+'</div>';
+  }
+
+  // Liste des mouvements du jour
+  html += '<div class="section-title" style="font-weight:700;margin-bottom:8px">Mouvements du jour</div>';
+  if(!stats.mouvements.length){
+    html += '<div class="card"><div class="empty">Aucun mouvement enregistre pour l\'instant.</div></div>';
+  } else {
+    html += '<div class="card"><div class="tw"><table><thead><tr><th>Heure</th><th>Type</th><th>Categorie</th><th>Motif</th><th>Vehicule</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
+    stats.mouvements.forEach(function(m){
+      var vehiculeTxt = '—';
+      if(m.vehiculeId){
+        var vRef = vehicles.find(function(x){return x.id===m.vehiculeId;});
+        vehiculeTxt = vRef ? vRef.immat : '(vehicule supprime)';
+      }
+      html += '<tr>';
+      html += '<td class="xs">'+new Date(m.date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+'</td>';
+      html += '<td><span class="badge '+(m.type==='entree'?'b-green':'b-red')+'">'+(m.type==='entree'?'Entree':'Sortie')+'</span></td>';
+      html += '<td>'+(m.categorie||'—')+'</td>';
+      html += '<td class="xs">'+(m.motif||'—')+'</td>';
+      html += '<td class="xs">'+vehiculeTxt+'</td>';
+      html += '<td style="text-align:right;font-weight:700">'+(m.type==='entree'?'+':'-')+m.montant.toLocaleString('fr-FR')+'</td>';
+      html += '<td><button class="btn btn-sm" style="font-size:10px;padding:2px 6px;color:#A32D2D" onclick="supprimerMouvementCaisse(\''+m.id+'\')">&#x1F5D1;</button></td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div></div>';
+  }
+
+  if(journee.statut==='ouverte'){
+    html += '<div style="margin-top:16px;text-align:right">';
+    html += '<button class="btn btn-sm" style="color:#854F0B;border-color:#E8A44A" onclick="ouvrirFermetureCaisse()">&#x1F512; Fermer la caisse du jour</button>';
+    html += '</div>';
+  }
+
+  // Modale de fermeture, cachee par defaut
+  html += '<div class="overlay" id="modalFermetureCaisse" style="display:none" onclick="if(event.target===this)document.getElementById(\'modalFermetureCaisse\').style.display=\'none\'">';
+  html += '<div class="modal" style="max-width:420px">';
+  html += '<div class="mhead"><h2>&#x1F512; Fermeture de caisse</h2><button class="btn btn-sm" onclick="document.getElementById(\'modalFermetureCaisse\').style.display=\'none\'">X</button></div>';
+  html += '<div class="mbody">';
+  html += '<div id="fermetureCaisseInfo" style="margin-bottom:12px"></div>';
+  html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Solde reellement compte en caisse (FCFA)</label><input class="inp" type="number" id="cf_solde_reel"></div>';
+  html += '</div>';
+  html += '<div class="mfoot"><button class="btn" onclick="document.getElementById(\'modalFermetureCaisse\').style.display=\'none\'">Annuler</button><button class="btn btn-primary" onclick="confirmerFermetureCaisse()">Confirmer la fermeture</button></div>';
+  html += '</div></div>';
+
+  return html;
+}
+
 function pageAccesClients(){
   var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Acces clients — Portail distant</h2>';
@@ -21910,6 +22404,11 @@ function tryInitFirebase(){
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       });
       syncDescripteursFaciauxFromFirebase(function(){});
+      syncCaisseJourneesFromFirebase(function(){
+        syncCaisseMouvementsFromFirebase(function(){
+          if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+        });
+      });
       syncPersonnelFromFirebase(function(){
         syncComptesFromFirebase(function(comptes){
           syncApiKeyFromFirebase(function(){
