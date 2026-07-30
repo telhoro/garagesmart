@@ -19514,7 +19514,7 @@ function buildClients2(){
   return Object.keys(map).map(function(k){return map[k];});
 }
 
-function genRapportVehiculeHtml(v){
+function genRapportVehiculeHtml(v, showTech){
   var h='';
   var dateEntree = v.entree ? new Date(v.entree).toLocaleDateString('fr-FR') : '—';
   var dateSortie = v.livraison ? new Date(v.livraison).toLocaleDateString('fr-FR') : (v.dateSort ? new Date(v.dateSort).toLocaleDateString('fr-FR') : '—');
@@ -19530,7 +19530,7 @@ function genRapportVehiculeHtml(v){
   h += '<div>Entrée : <strong>'+dateEntree+'</strong></div>';
   h += '<div>Sortie : <strong>'+dateSortie+'</strong></div>';
   if(v.km) h += '<div>Kilométrage : <strong>'+v.km.toLocaleString('fr-FR')+' km</strong></div>';
-  if(v.technicien) h += '<div>Technicien : <strong>'+v.technicien+'</strong></div>';
+  if(showTech!==false && v.technicien) h += '<div>Technicien : <strong>'+v.technicien+'</strong></div>';
   h += '</div></div>';
 
   // Motif et symptômes
@@ -19584,20 +19584,49 @@ function genRapportVehiculeHtml(v){
 }
 
 function genRapportVehicule(id, dateFrom, dateTo, showTech){
-  var v = vehicles.find(function(x){return x.id===id;});
-  if(!v) return '<div>Véhicule introuvable</div>';
+  var vRef = vehicles.find(function(x){return x.id===id;});
+  if(!vRef) return '<div>Véhicule introuvable</div>';
+
+  // Tous les dossiers partageant la meme immatriculation (pas seulement
+  // celui ouvert au moment du clic), tries du plus recent au plus ancien.
+  var tousDossiers = vehicles.filter(function(x){
+    return !x.isProspect && x.immat && vRef.immat && x.immat.toUpperCase()===vRef.immat.toUpperCase();
+  }).sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+
+  // Filtre de periode, applique sur la date d'entree de chaque dossier —
+  // un dossier sans date d'entree connue est conserve par prudence.
+  var dossiersFiltres = tousDossiers.filter(function(d){
+    if(!d.entree) return true;
+    if(dateFrom){
+      var deb = new Date(dateFrom).setHours(0,0,0,0);
+      if(d.entree < deb) return false;
+    }
+    if(dateTo){
+      var fin = new Date(dateTo).setHours(23,59,59,999);
+      if(d.entree > fin) return false;
+    }
+    return true;
+  });
+
+  if(!dossiersFiltres.length) return '';
+
   var h = '<div style="font-family:Arial,sans-serif">';
   h += '<div style="text-align:center;margin-bottom:16px">';
   h += '<div style="font-size:18px;font-weight:700">RAPPORT VÉHICULE</div>';
-  h += '<div style="font-size:12px;color:#666">Généré le '+new Date().toLocaleDateString('fr-FR')+'</div>';
+  h += '<div style="font-size:12px;color:#666">Généré le '+new Date().toLocaleDateString('fr-FR')
+     + (dossiersFiltres.length>1 ? ' — '+dossiersFiltres.length+' passage'+(dossiersFiltres.length>1?'s':'') : '')+'</div>';
   h += '</div>';
-  h += genRapportVehiculeHtml(v);
-  // Devis complémentaires liés
-  var dcs = vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl;});
-  if(dcs.length){
-    h += '<div style="font-size:13px;font-weight:700;margin:12px 0 8px;color:#854F0B">Devis complémentaires</div>';
-    dcs.forEach(function(dc){ h += genRapportVehiculeHtml(dc); });
-  }
+
+  dossiersFiltres.forEach(function(v){
+    h += genRapportVehiculeHtml(v, showTech);
+    // Devis complémentaires liés a ce dossier precis
+    var dcs = vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl;});
+    if(dcs.length){
+      h += '<div style="font-size:13px;font-weight:700;margin:12px 0 8px;color:#854F0B">Devis complémentaires</div>';
+      dcs.forEach(function(dc){ h += genRapportVehiculeHtml(dc, showTech); });
+    }
+  });
+
   h += '</div>';
   return h;
 }
@@ -19615,7 +19644,7 @@ function genRapportClient(clientKey, dateFrom, dateTo, showTech){
   var totalGlobal = 0;
   c.vehicules.forEach(function(v,i){
     if(i>0) h += '<div style="border-top:2px solid #185FA5;margin:16px 0"></div>';
-    h += genRapportVehiculeHtml(v);
+    h += genRapportVehiculeHtml(v, showTech);
     // Calculer total
     if(v.chiffrage&&v.chiffrage.lignes){
       v.chiffrage.lignes.filter(function(l){return (l.piece||'').trim();}).forEach(function(l){
@@ -19626,7 +19655,7 @@ function genRapportClient(clientKey, dateFrom, dateTo, showTech){
     var dcs = vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl;});
     if(dcs.length){
       h += '<div style="font-size:12px;font-weight:700;margin:8px 0 6px;color:#854F0B">Devis complémentaires</div>';
-      dcs.forEach(function(dc){ h += genRapportVehiculeHtml(dc); });
+      dcs.forEach(function(dc){ h += genRapportVehiculeHtml(dc, showTech); });
     }
   });
   if(c.vehicules.length>1){
