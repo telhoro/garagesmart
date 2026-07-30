@@ -3465,7 +3465,12 @@ function renderHistoriqueResults(){
       html += '<td><span class="badge '+st.c+'">'+st.l+'</span></td>';
       html += '<td>'+techHtml+'</td>';
       html += '<td>'+chronoHtml(v)+'</td>';
-      html += '<td><button class="btn btn-sm" data-vid="'+v.id+'" onclick="openDetById(this)">&#x1F441;</button></td>';
+      html += '<td><div class="flex gap6">';
+      html += '<button class="btn btn-sm" data-vid="'+v.id+'" onclick="openDetById(this)">&#x1F441;</button>';
+      if(currentRole==='direction' && v.status!=='dossier_cloture' && !v.isProspect){
+        html += '<button class="btn btn-sm" title="Cloturer sans facturer (le devis part en travaux a prevoir)" style="color:#854F0B;border-color:#E8A44A" onclick="ouvrirClotureForceeByEl(this)" data-vid="'+v.id+'">&#x1F512; Cloturer</button>';
+      }
+      html += '</div></td>';
       html += '</tr>';
     });
 
@@ -12242,10 +12247,26 @@ function addChiffrageLigne(){
 function removeChiffrageLigne(lineId){
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v || !v.chiffrage) return;
-  // Supprimer par libreId OU devisId
+  // Retrouver le(s) devisId des lignes visees, AVANT de les retirer du
+  // chiffrage — necessaire pour aussi les retirer de v.devis.lignes,
+  // sinon la logique de synchronisation automatique (qui recree toute
+  // piece du devis absente du chiffrage) les fait reapparaitre au
+  // prochain rendu de la fiche.
+  var devisIdsASupprimer = v.chiffrage.lignes
+    .filter(function(cl){ return cl.libreId===lineId || cl.devisId===lineId; })
+    .map(function(cl){ return cl.devisId; })
+    .filter(function(id){ return id; });
+
   v.chiffrage.lignes = v.chiffrage.lignes.filter(function(cl){
     return cl.libreId!==lineId && cl.devisId!==lineId;
   });
+
+  if(devisIdsASupprimer.length && v.devis && v.devis.lignes){
+    v.devis.lignes = v.devis.lignes.filter(function(dl){
+      return devisIdsASupprimer.indexOf(dl.id)===-1;
+    });
+  }
+
   saveV();
   openDetKeepEdit(detCurrentVid);
 }
@@ -15839,7 +15860,9 @@ function renderClientsListe(clients, q){
           var plusOpen = (openPlusKey===plusKey);
 
           var buildDossRow = function(d){
-            var dateStr = d.entree ? new Date(d.entree).toLocaleDateString('fr-FR') : '-';
+            var dateEntreeStr = d.entree ? new Date(d.entree).toLocaleDateString('fr-FR') : '-';
+            var dateSortieStr = (d.livraison && LIV_ST.indexOf(d.status)>=0) ? new Date(d.livraison).toLocaleDateString('fr-FR') : 'En cours';
+            var kmStr = d.km ? d.km.toLocaleString('fr-FR')+' km' : '-';
             var motif = d.motif || '-';
             var symp = d.symptomes || '';
             var badge = sbadgeV(d);
@@ -15849,15 +15872,16 @@ function renderClientsListe(clients, q){
             var h='<div style="background:#fff;border-radius:6px;margin-bottom:6px;border:0.5px solid #e8e5e0;font-size:11px">';
             h+='<table style="width:100%;border-collapse:collapse">';
             h+='<tr style="border-bottom:0.5px solid #f0ede8">';
-            h+='<td style="padding:5px 8px;color:#5a5956;white-space:nowrap;width:90px">'+dateStr+'</td>';
+            h+='<td style="padding:5px 8px;color:#5a5956;white-space:nowrap;width:90px">'+dateEntreeStr+' &rarr; '+dateSortieStr+'</td>';
+            h+='<td style="padding:5px 8px;color:#5a5956;white-space:nowrap;width:80px">'+kmStr+'</td>';
             h+='<td style="padding:5px 8px;font-weight:700">'+motif+'</td>';
             h+='<td style="padding:5px 8px;text-align:right">'+badge+'</td>';
             h+='<td style="padding:5px 8px;text-align:right"><button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-vid="'+d.id+'" onclick="openDetById(this)">&#x1F441;</button>'
-              +(currentRole==='direction' ? ' <button class="btn btn-sm" style="font-size:10px;padding:2px 6px;color:#A32D2D;border-color:#E0A0A0" data-vid="'+d.id+'" data-immat="'+(d.immat||'').replace(/"/g,'&quot;')+'" data-date="'+dateStr+'" onclick="event.stopPropagation();supprimerPassageByEl(this)" title="Supprimer ce passage precis">&#x1F5D1;</button>' : '')
+              +(currentRole==='direction' ? ' <button class="btn btn-sm" style="font-size:10px;padding:2px 6px;color:#A32D2D;border-color:#E0A0A0" data-vid="'+d.id+'" data-immat="'+(d.immat||'').replace(/"/g,'&quot;')+'" data-date="'+dateEntreeStr+'" onclick="event.stopPropagation();supprimerPassageByEl(this)" title="Supprimer ce passage precis">&#x1F5D1;</button>' : '')
               +'</td>';
             h+='</tr>';
-            if(symp) h+='<tr style="border-bottom:0.5px solid #f0ede8"><td colspan="4" style="padding:3px 8px;color:#888;font-style:italic">'+symp+'</td></tr>';
-            pieces.forEach(function(p){h+='<tr style="border-bottom:0.5px solid #f8f7f5"><td colspan="4" style="padding:2px 8px;color:#3B6D11">&#x25AA; '+p+'</td></tr>';});
+            if(symp) h+='<tr style="border-bottom:0.5px solid #f0ede8"><td colspan="5" style="padding:3px 8px;color:#888;font-style:italic">'+symp+'</td></tr>';
+            pieces.forEach(function(p){h+='<tr style="border-bottom:0.5px solid #f8f7f5"><td colspan="5" style="padding:2px 8px;color:#3B6D11">&#x25AA; '+p+'</td></tr>';});
             h+='</table></div>';
             return h;
           };
