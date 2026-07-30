@@ -12247,15 +12247,19 @@ function addChiffrageLigne(){
 function removeChiffrageLigne(lineId){
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v || !v.chiffrage) return;
-  // Retrouver le(s) devisId des lignes visees, AVANT de les retirer du
-  // chiffrage — necessaire pour aussi les retirer de v.devis.lignes,
-  // sinon la logique de synchronisation automatique (qui recree toute
-  // piece du devis absente du chiffrage) les fait reapparaitre au
-  // prochain rendu de la fiche.
-  var devisIdsASupprimer = v.chiffrage.lignes
-    .filter(function(cl){ return cl.libreId===lineId || cl.devisId===lineId; })
-    .map(function(cl){ return cl.devisId; })
-    .filter(function(id){ return id; });
+  // Retrouver le(s) devisId ET le(s) nom(s) de piece des lignes visees,
+  // AVANT de les retirer du chiffrage — necessaire pour :
+  // 1) aussi les retirer de v.devis.lignes, sinon la synchronisation
+  //    automatique (qui recree toute piece du devis absente du chiffrage)
+  //    les fait reapparaitre au prochain rendu de la fiche ;
+  // 2) aussi les retirer de v.interventions[].pieces, un historique fige
+  //    (ex: "Livraison complete...") qui garde le nom de la piece en texte
+  //    libre (format "NomPiece xN"), independamment du chiffrage.
+  var lignesASupprimer = v.chiffrage.lignes.filter(function(cl){
+    return cl.libreId===lineId || cl.devisId===lineId;
+  });
+  var devisIdsASupprimer = lignesASupprimer.map(function(cl){ return cl.devisId; }).filter(function(id){ return id; });
+  var nomsPiecesASupprimer = lignesASupprimer.map(function(cl){ return (cl.piece||'').trim().toLowerCase(); }).filter(function(n){ return n; });
 
   v.chiffrage.lignes = v.chiffrage.lignes.filter(function(cl){
     return cl.libreId!==lineId && cl.devisId!==lineId;
@@ -12264,6 +12268,18 @@ function removeChiffrageLigne(lineId){
   if(devisIdsASupprimer.length && v.devis && v.devis.lignes){
     v.devis.lignes = v.devis.lignes.filter(function(dl){
       return devisIdsASupprimer.indexOf(dl.id)===-1;
+    });
+  }
+
+  if(nomsPiecesASupprimer.length && v.interventions && v.interventions.length){
+    v.interventions.forEach(function(iv){
+      if(!iv.pieces || !iv.pieces.length) return;
+      iv.pieces = iv.pieces.filter(function(p){
+        // Le nom stocke est du type "NomPiece xN" — on compare sur le nom
+        // seul, en retirant le suffixe " xN" avant comparaison.
+        var nomSeul = (p||'').replace(/\s+x\d+$/i,'').trim().toLowerCase();
+        return nomsPiecesASupprimer.indexOf(nomSeul)===-1;
+      });
     });
   }
 
