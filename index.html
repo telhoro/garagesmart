@@ -2109,7 +2109,7 @@ function chargerModelesFaceApi(callback, onError){
 var presenceStream = null;         // flux camera actif, pour pouvoir l'arreter proprement
 var presenceIntervalId = null;     // boucle de detection en cours
 var presenceDerniereReconnaissance = 0; // anti-rebond : evite de pointer 10x en 2 secondes
-var SEUIL_RECONNAISSANCE_FACIALE = 0.5; // distance euclidienne max (face-api.js) — plus bas = plus strict
+var SEUIL_RECONNAISSANCE_FACIALE = parseFloat(localStorage.getItem('gos_seuil_reconnaissance_faciale')) || 0.45; // distance euclidienne max (face-api.js) — plus bas = plus strict, reduit les faux positifs
 
 var presenceCameraFace = 'user'; // 'user' = camera avant (selfie), 'environment' = camera arriere
 
@@ -2189,18 +2189,57 @@ function arreterPointagePresence(){
   presenceEnPause = false;
 }
 
+// Normalise un enregistrement DESCRIPTEURS_FACIAUX[employeId] vers un
+// tableau de descripteurs, peu importe l'ancien format (un seul tableau
+// plat de 128 nombres, un enrolement) ou le nouveau (tableau de tableaux,
+// plusieurs captures — bien plus robuste face aux variations d'angle,
+// d'eclairage ou d'expression).
+function normaliserDescripteurs(valeur){
+  if(!valeur || !valeur.length) return [];
+  if(typeof valeur[0] === 'number') return [valeur]; // ancien format, un seul descripteur plat
+  return valeur; // nouveau format, deja un tableau de descripteurs
+}
+
+// Distance euclidienne entre deux descripteurs de 128 valeurs.
+function distanceEuclidienneDescripteurs(a, b){
+  var somme = 0;
+  for(var i=0; i<a.length; i++){ somme += Math.pow(a[i]-b[i], 2); }
+  return Math.sqrt(somme);
+}
+
+// Marge minimale exigee entre le meilleur et le second candidat pour
+// accepter une reconnaissance — si deux personnes sont "presque aussi
+// proches" l'une que l'autre du visage detecte, mieux vaut refuser
+// (bascule vers un nouvel essai ou le mode manuel) que de risquer
+// d'attribuer le pointage a la mauvaise personne.
+var MARGE_MINIMALE_RECONNAISSANCE = 0.08;
+
+// Calcule, pour un descripteur detecte, la distance minimale a chaque
+// personne enrolee (meilleure de ses eventuelles plusieurs captures), et
+// determine si le meilleur candidat est suffisamment distinct du second
+// pour etre accepte sans ambiguite.
+function trouverMeilleurCandidatFacial(descripteurDetecte){
+  var distancesParEmploye = Object.keys(DESCRIPTEURS_FACIAUX).map(function(employeId){
+    var descripteurs = normaliserDescripteurs(DESCRIPTEURS_FACIAUX[employeId]);
+    var distances = descripteurs.map(function(d){ return distanceEuclidienneDescripteurs(descripteurDetecte, d); });
+    return { employeId: employeId, distance: distances.length ? Math.min.apply(null, distances) : Infinity };
+  }).filter(function(x){ return isFinite(x.distance); })
+    .sort(function(a,b){ return a.distance-b.distance; });
+
+  if(!distancesParEmploye.length) return null;
+  var meilleur = distancesParEmploye[0];
+  if(meilleur.distance > SEUIL_RECONNAISSANCE_FACIALE) return null;
+
+  if(distancesParEmploye.length>1){
+    var marge = distancesParEmploye[1].distance - meilleur.distance;
+    if(marge < MARGE_MINIMALE_RECONNAISSANCE) return null; // trop ambigu, on prefere refuser
+  }
+  return meilleur.employeId;
+}
+
 function lancerBoucleReconnaissance(){
   var video = document.getElementById('presenceVideo');
   if(!video) return;
-  // Construit le "faceMatcher" (comparateur) a partir de tous les
-  // descripteurs enroles, une seule fois avant la boucle (recalcule a
-  // chaque appel de demarrerPointagePresence, donc a jour si un nouvel
-  // employe vient d'etre enrole).
-  var labeledDescriptors = Object.keys(DESCRIPTEURS_FACIAUX).map(function(employeId){
-    var descripteur = new Float32Array(DESCRIPTEURS_FACIAUX[employeId]);
-    return new faceapi.LabeledFaceDescriptors(employeId, [descripteur]);
-  });
-  var faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, SEUIL_RECONNAISSANCE_FACIALE);
 
   presenceIntervalId = setInterval(function(){
     if(!document.getElementById('presenceVideo')) { arreterPointagePresence(); return; } // page quittee
@@ -2209,10 +2248,10 @@ function lancerBoucleReconnaissance(){
       .withFaceLandmarks().withFaceDescriptor()
       .then(function(detection){
         if(!detection) return; // aucun visage detecte ce cycle, on reessaie au prochain
-        var match = faceMatcher.findBestMatch(detection.descriptor);
-        if(match.label!=='unknown' && (Date.now()-presenceDerniereReconnaissance)>3000){
+        var employeId = trouverMeilleurCandidatFacial(detection.descriptor);
+        if(employeId && (Date.now()-presenceDerniereReconnaissance)>3000){
           presenceDerniereReconnaissance = Date.now();
-          traiterReconnaissanceReussie(match.label, video);
+          traiterReconnaissanceReussie(employeId, video);
         }
       }).catch(function(err){ console.error('Erreur detection:', err); });
   }, 800); // ~1.25 detection/seconde, suffisant et raisonnable en charge CPU
@@ -2336,6 +2375,7 @@ function ouvrirEnrolementFacial(employeId){
   if(!employe) return;
   enrolementEmployeIdActuel = employeId;
   enrolementCameraFace = 'user';
+  enrolementCapturesEnCours = []; // reinitialise la progression (3 captures a faire)
   document.getElementById('enrolNomEmploye').textContent = employe.nom;
   document.getElementById('enrolStatusMsg').textContent = 'Chargement des modeles de reconnaissance...';
   document.getElementById('modalEnrolementFacial').style.display = 'flex';
@@ -2372,10 +2412,14 @@ function basculerCameraEnrolement(){
 function fermerEnrolementFacial(){
   if(enrolementStream){ enrolementStream.getTracks().forEach(function(t){t.stop();}); enrolementStream = null; }
   enrolementEmployeIdActuel = null;
+  enrolementCapturesEnCours = [];
   document.getElementById('modalEnrolementFacial').style.display = 'none';
   var btnBasculer = document.getElementById('enrolBtnBasculerCamera');
   if(btnBasculer) btnBasculer.style.display = 'none';
 }
+
+var NB_CAPTURES_ENROLEMENT = 3; // 3 angles/instants differents par employe, pour une reconnaissance plus robuste
+var enrolementCapturesEnCours = [];
 
 function capturerEnrolementFacial(){
   var video = document.getElementById('enrolVideo');
@@ -2390,22 +2434,29 @@ function capturerEnrolementFacial(){
         statusMsg.textContent = 'Aucun visage detecte. Rapprochez-vous et reessayez.';
         return;
       }
-      // Stocke le descripteur (128 valeurs) comme tableau simple, pour
-      // rester serialisable en JSON (Float32Array ne l'est pas telle
-      // quelle).
-      DESCRIPTEURS_FACIAUX[enrolementEmployeIdActuel] = Array.from(detection.descriptor);
-      saveDescripteursFaciaux();
+      enrolementCapturesEnCours.push(Array.from(detection.descriptor));
       var nomEmploye = document.getElementById('enrolNomEmploye').textContent;
 
-      // Coupe la camera IMMEDIATEMENT (pas d'attente) et remplace la
-      // video par un message de confirmation bien visible, plutot que de
-      // laisser le flux tourner pendant le delai avant fermeture.
+      if(enrolementCapturesEnCours.length < NB_CAPTURES_ENROLEMENT){
+        // Encore des captures a faire : on demande de bouger legerement
+        // la tete pour varier l'angle, sans fermer la modale.
+        var restantes = NB_CAPTURES_ENROLEMENT - enrolementCapturesEnCours.length;
+        statusMsg.textContent = 'Capture '+enrolementCapturesEnCours.length+'/'+NB_CAPTURES_ENROLEMENT+' reussie ! Tournez legerement la tete puis capturez a nouveau ('+restantes+' restante'+(restantes>1?'s':'')+').';
+        return;
+      }
+
+      // Toutes les captures sont faites : on enregistre le tableau
+      // complet (plusieurs descripteurs), on coupe la camera et on
+      // affiche la confirmation.
+      DESCRIPTEURS_FACIAUX[enrolementEmployeIdActuel] = enrolementCapturesEnCours;
+      saveDescripteursFaciaux();
+
       if(enrolementStream){ enrolementStream.getTracks().forEach(function(t){t.stop();}); enrolementStream = null; }
       var mbody = video.closest('.mbody');
       if(mbody){
         mbody.innerHTML = '<div style="padding:30px 10px"><div style="font-size:48px;margin-bottom:10px">&#x2714;</div>'
           + '<div style="font-size:16px;font-weight:700;color:#3B6D11">Enrolement reussi</div>'
-          + '<div class="xs muted" style="margin-top:4px">'+nomEmploye+' a ete enrole avec succes.</div></div>';
+          + '<div class="xs muted" style="margin-top:4px">'+nomEmploye+' a ete enrole avec succes ('+NB_CAPTURES_ENROLEMENT+' captures).</div></div>';
       }
       setTimeout(function(){ fermerEnrolementFacial(); renderPage(); }, 1500);
     }).catch(function(err){
@@ -20522,13 +20573,23 @@ function activerCameraPointage(){
 
 // Liste des employes avec leur statut d'enrolement facial (deja enrole ou
 // pas), et un bouton pour lancer/refaire l'enrolement de chacun.
+function modifierSeuilReconnaissance(valeur){
+  SEUIL_RECONNAISSANCE_FACIALE = parseFloat(valeur) || 0.45;
+  localStorage.setItem('gos_seuil_reconnaissance_faciale', SEUIL_RECONNAISSANCE_FACIALE);
+}
+
 function pagePresencesEnrolement(){
   // Utilise la liste des COMPTES de connexion (Direction, Reception,
   // Achats, techniciens...) plutot que PERSONNEL, qui ne couvre que les
   // roles atelier — le module Presences doit pouvoir enroler et pointer
   // n'importe quel employe du garage, tous roles confondus.
   var employes = loadComptes();
-  var html = '<div class="info-box" style="margin-bottom:16px">Enrolez chaque employe une seule fois : la camera capture son visage et enregistre sa signature, utilisee ensuite pour le reconnaitre automatiquement au pointage. Refaire l\'enrolement remplace l\'ancienne signature.</div>';
+  var html = '<div class="card" style="padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
+  html += '<span class="xs muted">Sensibilite de reconnaissance (plus bas = plus strict, moins d\'erreurs mais plus de refus) :</span>';
+  html += '<input type="range" min="0.30" max="0.55" step="0.01" value="'+SEUIL_RECONNAISSANCE_FACIALE+'" style="width:150px" oninput="document.getElementById(\'seuilRecoValeur\').textContent=this.value" onchange="modifierSeuilReconnaissance(this.value)">';
+  html += '<span id="seuilRecoValeur" style="font-weight:700">'+SEUIL_RECONNAISSANCE_FACIALE+'</span>';
+  html += '</div>';
+  html += '<div class="info-box" style="margin-bottom:16px">Enrolez chaque employe avec <strong>3 captures</strong> (angles/expressions legerement differents) : la camera enregistre plusieurs signatures pour ameliorer la fiabilite de reconnaissance. Refaire l\'enrolement remplace les anciennes signatures.</div>';
   html += '<div class="tw"><table><thead><tr><th>Employe</th><th>Role</th><th>Statut</th><th></th></tr></thead><tbody>';
   employes.forEach(function(c){
     var estEnrole = !!DESCRIPTEURS_FACIAUX[c.id];
