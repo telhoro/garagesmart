@@ -21208,10 +21208,22 @@ function trouverJourneeCaisse(dateStr){
 function ouvrirJourneeCaisse(dateStr, auteur){
   var existante = trouverJourneeCaisse(dateStr);
   if(existante) return existante;
-  // Solde d'ouverture par defaut = solde de fermeture du dernier jour ferme
-  var dernierFerme = CAISSE_JOURNEES.filter(function(j){return j.statut==='fermee';})
+  // Solde d'ouverture par defaut = solde de la journee la PLUS RECENTE par
+  // date, qu'elle soit fermee ou non : si elle est fermee, on reprend son
+  // soldeFermeture ; si elle est restee ouverte (jour non cloture, ex:
+  // oubli de fermeture), on reprend son solde calcule en temps reel
+  // (ouverture + entrees - sorties de cette journee), pour ne pas perdre
+  // les mouvements deja enregistres ce jour-la. Sans cela, une journee
+  // laissee ouverte serait ignoree et le nouveau jour reprendrait un solde
+  // perime, plus ancien.
+  var derniereJournee = CAISSE_JOURNEES.slice()
     .sort(function(a,b){return b.date.localeCompare(a.date);})[0];
-  var soldeDepart = dernierFerme ? dernierFerme.soldeFermeture : 0;
+  var soldeDepart = 0;
+  if(derniereJournee){
+    soldeDepart = (derniereJournee.statut==='fermee')
+      ? derniereJournee.soldeFermeture
+      : calculerSoldeJournee(derniereJournee).soldeCalcule;
+  }
   var journee = {
     id: 'cj_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),
     date: dateStr, soldeOuverture: soldeDepart,
@@ -21234,6 +21246,33 @@ function calculerSoldeJournee(journee){
     soldeCalcule: journee.soldeOuverture + totalEntrees - totalSorties,
     mouvements: mvtsJournee.sort(function(a,b){return b.date-a.date;})
   };
+}
+
+// Recalcule le solde d'ouverture d'une journee a partir de la journee
+// precedente par DATE (fermee ou non) — corrige les cas ou une journee
+// intermediaire etait restee ouverte (jamais fermee) au moment de la
+// creation de celle-ci : l'ancienne logique ignorait alors ses mouvements
+// et reprenait un solde perime, plus ancien.
+function recalculerSoldeOuvertureJournee(journeeId){
+  var cible = CAISSE_JOURNEES.find(function(j){return j.id===journeeId;});
+  if(!cible) return;
+  var precedentes = CAISSE_JOURNEES.filter(function(j){ return j.date < cible.date; })
+    .sort(function(a,b){ return b.date.localeCompare(a.date); });
+  var precedente = precedentes[0];
+  var nouveauSolde = 0;
+  if(precedente){
+    nouveauSolde = (precedente.statut==='fermee')
+      ? precedente.soldeFermeture
+      : calculerSoldeJournee(precedente).soldeCalcule;
+  }
+  cible.soldeOuverture = nouveauSolde;
+  saveCaisseJournees();
+}
+
+function ouvrirRecalculSoldeOuverture(journeeId){
+  if(!confirm('Recalculer le solde d\'ouverture de cette journee a partir de la journee precedente ? A utiliser si une journee anterieure est restee ouverte par oubli, faussant le solde de depart.')) return;
+  recalculerSoldeOuvertureJournee(journeeId);
+  renderPage();
 }
 
 // Liste des categories deja utilisees, par ordre de frequence decroissante
@@ -21370,7 +21409,9 @@ function pageCaisseHistorique(){
     html += '<td style="text-align:right;color:#A32D2D">-'+stats.totalSorties.toLocaleString('fr-FR')+'</td>';
     html += '<td style="text-align:right">'+(j.statut==='fermee'?j.soldeFermeture.toLocaleString('fr-FR'):stats.soldeCalcule.toLocaleString('fr-FR')+' (calcule)')+'</td>';
     html += '<td style="text-align:right">'+ecartTxt+'</td>';
-    html += '<td><button class="btn btn-sm" style="font-size:11px" onclick="ouvrirDetailJourneeCaisse(\''+j.id+'\')">Detail</button></td>';
+    html += '<td><button class="btn btn-sm" style="font-size:11px" onclick="ouvrirDetailJourneeCaisse(\''+j.id+'\')">Detail</button>'
+      + (currentRole==='direction' ? ' <button class="btn btn-sm" style="font-size:11px;color:#854F0B" title="Recalculer le solde d\'ouverture" onclick="ouvrirRecalculSoldeOuverture(\''+j.id+'\')">&#x1F504;</button>' : '')
+      + '</td>';
     html += '</tr>';
   });
   html += '</tbody></table></div></div>';
@@ -21555,6 +21596,10 @@ function pageCaisseJour(){
   html += kpi('Sorties', '-'+stats.totalSorties.toLocaleString('fr-FR')+' FCFA', 'red');
   html += kpi('Solde actuel', stats.soldeCalcule.toLocaleString('fr-FR')+' FCFA', 'blue');
   html += '</div>';
+
+  if(currentRole==='direction' && journee.statut==='ouverte'){
+    html += '<div style="text-align:right;margin-bottom:10px"><a href="#" onclick="event.preventDefault();ouvrirRecalculSoldeOuverture(\''+journee.id+'\')" class="xs" style="color:#854F0B">&#x1F504; Solde d\'ouverture incoherent (journee anterieure restee ouverte) ? Recalculer</a></div>';
+  }
 
   if(journee.statut==='ouverte'){
     // Formulaire d'ajout de mouvement
