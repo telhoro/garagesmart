@@ -21297,11 +21297,12 @@ function ouvrirCaisseAujourdhui(){
 // Recherche live par immatriculation, pour attribuer un mouvement a un
 // vehicule precis — optionnelle, comme convenu (le mouvement reste une
 // depense generale si aucun vehicule n'est choisi).
-function rechercherVehiculeCaisse(texte){
-  var zone = document.getElementById('cm_vehicule_resultats');
+function rechercherVehiculeCaisse(texte, prefixe){
+  prefixe = prefixe || 'cm';
+  var zone = document.getElementById(prefixe+'_vehicule_resultats');
   if(!zone) return;
-  document.getElementById('cm_vehicule_id').value = ''; // reinitialise la selection si on retape
-  var champSelectionne = document.getElementById('cm_vehicule_selectionne');
+  document.getElementById(prefixe+'_vehicule_id').value = ''; // reinitialise la selection si on retape
+  var champSelectionne = document.getElementById(prefixe+'_vehicule_selectionne');
   if(champSelectionne) champSelectionne.innerHTML = '';
   if(!texte || texte.trim().length<2){ zone.innerHTML=''; return; }
   var q = texte.trim().toLowerCase();
@@ -21311,19 +21312,20 @@ function rechercherVehiculeCaisse(texte){
   if(!resultats.length){ zone.innerHTML = '<div class="xs muted">Aucun vehicule trouve.</div>'; return; }
   var html = '<div style="border:1px solid #e8e6e1;border-radius:7px;overflow:hidden">';
   resultats.forEach(function(v){
-    html += '<div style="padding:6px 10px;cursor:pointer;border-bottom:1px solid #f0ede8" onclick="selectionnerVehiculeCaisse(\''+v.id+'\',\''+v.immat+'\')">'
+    html += '<div style="padding:6px 10px;cursor:pointer;border-bottom:1px solid #f0ede8" onclick="selectionnerVehiculeCaisse(\''+v.id+'\',\''+v.immat+'\',\''+prefixe+'\')">'
       + '<strong>'+v.immat+'</strong> <span class="xs muted">'+(v.marque||'')+' '+(v.modele||'')+' — '+(v.client||'')+'</span></div>';
   });
   html += '</div>';
   zone.innerHTML = html;
 }
 
-function selectionnerVehiculeCaisse(vid, immat){
-  document.getElementById('cm_vehicule_id').value = vid;
-  document.getElementById('cm_vehicule_recherche').value = '';
-  document.getElementById('cm_vehicule_resultats').innerHTML = '';
-  document.getElementById('cm_vehicule_selectionne').innerHTML =
-    '<span class="badge b-blue">'+immat+' <a href="#" onclick="event.preventDefault();document.getElementById(\'cm_vehicule_id\').value=\'\';document.getElementById(\'cm_vehicule_selectionne\').innerHTML=\'\';" style="color:#fff;margin-left:6px">&times;</a></span>';
+function selectionnerVehiculeCaisse(vid, immat, prefixe){
+  prefixe = prefixe || 'cm';
+  document.getElementById(prefixe+'_vehicule_id').value = vid;
+  document.getElementById(prefixe+'_vehicule_recherche').value = '';
+  document.getElementById(prefixe+'_vehicule_resultats').innerHTML = '';
+  document.getElementById(prefixe+'_vehicule_selectionne').innerHTML =
+    '<span class="badge b-blue">'+immat+' <a href="#" onclick="event.preventDefault();document.getElementById(\''+prefixe+'_vehicule_id\').value=\'\';document.getElementById(\''+prefixe+'_vehicule_selectionne\').innerHTML=\'\';" style="color:#fff;margin-left:6px">&times;</a></span>';
 }
 
 function ajouterMouvementCaisse(){
@@ -21354,6 +21356,92 @@ function supprimerMouvementCaisse(mid){
   if(!confirm('Supprimer ce mouvement de caisse ?')) return;
   CAISSE_MOUVEMENTS = CAISSE_MOUVEMENTS.filter(function(m){ return m.id!==mid; });
   saveCaisseMouvements();
+  renderPage();
+}
+
+// Determine si le role courant peut modifier ce mouvement, et si oui,
+// avec quels champs : Direction peut tout modifier, n'importe quel jour ;
+// Reception ne peut modifier que categorie/motif/montant, et uniquement
+// sur les mouvements du jour EN COURS.
+function permissionsModifMouvementCaisse(mouvement){
+  var journee = CAISSE_JOURNEES.find(function(j){return j.id===mouvement.journeeId;});
+  if(!journee) return {autorise:false};
+  if(currentRole==='direction') return {autorise:true, champsLimites:false};
+  if(currentRole==='reception'){
+    var estJourEnCours = journee.date===dateJourStr();
+    if(!estJourEnCours) return {autorise:false};
+    return {autorise:true, champsLimites:true};
+  }
+  return {autorise:false};
+}
+
+var _mouvementCaisseEnModification = null;
+
+function ouvrirModifMouvementCaisse(mid){
+  var m = CAISSE_MOUVEMENTS.find(function(x){return x.id===mid;});
+  if(!m) return;
+  var permissions = permissionsModifMouvementCaisse(m);
+  if(!permissions.autorise){
+    alert('Vous ne pouvez pas modifier ce mouvement (reserve a Direction pour les jours passes).');
+    return;
+  }
+  _mouvementCaisseEnModification = mid;
+
+  var html = '';
+  if(permissions.champsLimites){
+    // Reception : seulement categorie, motif, montant
+    html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Categorie</label>';
+    html += '<input class="inp" id="mm_categorie" list="mm_categorie_list" value="'+(m.categorie||'').replace(/"/g,'&quot;')+'">';
+    html += '<datalist id="mm_categorie_list">'+categoriesCaisseConnues().map(function(c){return '<option value="'+c.replace(/"/g,'&quot;')+'">';}).join('')+'</datalist>';
+    html += '</div>';
+    html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Motif / description</label><input class="inp" id="mm_motif" value="'+(m.motif||'').replace(/"/g,'&quot;')+'"></div>';
+    html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Montant (FCFA)</label><input class="inp" type="number" id="mm_montant" value="'+m.montant+'"></div>';
+  } else {
+    // Direction : tous les champs, y compris type et vehicule attribue
+    html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Type</label><select class="inp" id="mm_type"><option value="sortie"'+(m.type==='sortie'?' selected':'')+'>Sortie (depense)</option><option value="entree"'+(m.type==='entree'?' selected':'')+'>Entree</option></select></div>';
+    html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Montant (FCFA)</label><input class="inp" type="number" id="mm_montant" value="'+m.montant+'"></div>';
+    html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Categorie</label>';
+    html += '<input class="inp" id="mm_categorie" list="mm_categorie_list" value="'+(m.categorie||'').replace(/"/g,'&quot;')+'">';
+    html += '<datalist id="mm_categorie_list">'+categoriesCaisseConnues().map(function(c){return '<option value="'+c.replace(/"/g,'&quot;')+'">';}).join('')+'</datalist>';
+    html += '</div>';
+    html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Motif / description</label><input class="inp" id="mm_motif" value="'+(m.motif||'').replace(/"/g,'&quot;')+'"></div>';
+    var immatActuelle = '';
+    if(m.vehiculeId){ var vRef = vehicles.find(function(x){return x.id===m.vehiculeId;}); if(vRef) immatActuelle = vRef.immat; }
+    html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Vehicule concerne (optionnel)</label>';
+    html += '<input class="inp" id="mm_vehicule_recherche" placeholder="Rechercher par immatriculation..." value="" oninput="rechercherVehiculeCaisse(this.value,\'mm\')" autocomplete="off">';
+    html += '<input type="hidden" id="mm_vehicule_id" value="'+(m.vehiculeId||'')+'">';
+    html += '<div id="mm_vehicule_resultats" style="margin-top:4px"></div>';
+    html += '<div id="mm_vehicule_selectionne" style="margin-top:6px">'+(immatActuelle?'<span class="badge b-blue">'+immatActuelle+' <a href="#" onclick="event.preventDefault();document.getElementById(\'mm_vehicule_id\').value=\'\';document.getElementById(\'mm_vehicule_selectionne\').innerHTML=\'\';" style="color:#fff;margin-left:6px">&times;</a></span>':'')+'</div>';
+    html += '</div>';
+  }
+
+  document.getElementById('modifMouvementCaisseContenu').innerHTML = html;
+  document.getElementById('modalModifMouvementCaisse').style.display = 'flex';
+}
+
+function confirmerModifMouvementCaisse(){
+  var m = CAISSE_MOUVEMENTS.find(function(x){return x.id===_mouvementCaisseEnModification;});
+  if(!m) return;
+  var permissions = permissionsModifMouvementCaisse(m);
+  if(!permissions.autorise) return;
+
+  var montant = parseFloat(document.getElementById('mm_montant').value);
+  if(!montant || montant<=0){ alert('Indiquez un montant valide.'); return; }
+  var categorie = document.getElementById('mm_categorie').value.trim();
+  if(!categorie){ alert('Indiquez une categorie.'); return; }
+
+  m.montant = montant;
+  m.categorie = categorie;
+  m.motif = document.getElementById('mm_motif').value.trim();
+
+  if(!permissions.champsLimites){
+    m.type = document.getElementById('mm_type').value;
+    m.vehiculeId = document.getElementById('mm_vehicule_id').value || null;
+  }
+
+  saveCaisseMouvements();
+  document.getElementById('modalModifMouvementCaisse').style.display = 'none';
+  _mouvementCaisseEnModification = null;
   renderPage();
 }
 
@@ -21441,7 +21529,7 @@ function ouvrirDetailJourneeCaisse(journeeId){
   if(!stats.mouvements.length){
     html += '<div class="empty">Aucun mouvement ce jour-la.</div>';
   } else {
-    html += '<div class="tw"><table><thead><tr><th>Heure</th><th>Type</th><th>Categorie</th><th>Motif</th><th>Vehicule</th><th style="text-align:right">Montant</th></tr></thead><tbody>';
+    html += '<div class="tw"><table><thead><tr><th>Heure</th><th>Type</th><th>Categorie</th><th>Motif</th><th>Vehicule</th><th style="text-align:right">Montant</th>'+(currentRole==='direction'?'<th></th>':'')+'</tr></thead><tbody>';
     stats.mouvements.forEach(function(m){
       var vehiculeTxt = '—';
       if(m.vehiculeId){
@@ -21455,6 +21543,9 @@ function ouvrirDetailJourneeCaisse(journeeId){
       html += '<td class="xs">'+(m.motif||'—')+'</td>';
       html += '<td class="xs">'+vehiculeTxt+'</td>';
       html += '<td style="text-align:right;font-weight:700">'+(m.type==='entree'?'+':'-')+m.montant.toLocaleString('fr-FR')+'</td>';
+      if(currentRole==='direction'){
+        html += '<td><button class="btn btn-sm" style="font-size:10px;padding:2px 6px" onclick="ouvrirModifMouvementCaisse(\''+m.id+'\')">&#x270F;</button></td>';
+      }
       html += '</tr>';
     });
     html += '</tbody></table></div>';
@@ -21568,6 +21659,16 @@ function pageCaisse(){
   else if(caisseOnglet==='historique') html += pageCaisseHistorique();
   else html += pageCaisseAnalyse();
 
+  // Modale de modification d'un mouvement, partagee entre l'onglet
+  // Aujourd'hui et l'Historique — contenu genere dynamiquement par
+  // ouvrirModifMouvementCaisse() selon les permissions du role.
+  html += '<div class="overlay" id="modalModifMouvementCaisse" style="display:none" onclick="if(event.target===this)document.getElementById(\'modalModifMouvementCaisse\').style.display=\'none\'">';
+  html += '<div class="modal" style="max-width:420px">';
+  html += '<div class="mhead"><h2>&#x270F; Modifier le mouvement</h2><button class="btn btn-sm" onclick="document.getElementById(\'modalModifMouvementCaisse\').style.display=\'none\'">X</button></div>';
+  html += '<div class="mbody" id="modifMouvementCaisseContenu"></div>';
+  html += '<div class="mfoot"><button class="btn" onclick="document.getElementById(\'modalModifMouvementCaisse\').style.display=\'none\'">Annuler</button><button class="btn btn-primary" onclick="confirmerModifMouvementCaisse()">Enregistrer</button></div>';
+  html += '</div></div>';
+
   return html;
 }
 
@@ -21646,7 +21747,7 @@ function pageCaisseJour(){
       html += '<td class="xs">'+(m.motif||'—')+'</td>';
       html += '<td class="xs">'+vehiculeTxt+'</td>';
       html += '<td style="text-align:right;font-weight:700">'+(m.type==='entree'?'+':'-')+m.montant.toLocaleString('fr-FR')+'</td>';
-      html += '<td><button class="btn btn-sm" style="font-size:10px;padding:2px 6px;color:#A32D2D" onclick="supprimerMouvementCaisse(\''+m.id+'\')">&#x1F5D1;</button></td>';
+      html += '<td><button class="btn btn-sm" style="font-size:10px;padding:2px 6px" onclick="ouvrirModifMouvementCaisse(\''+m.id+'\')">&#x270F;</button> <button class="btn btn-sm" style="font-size:10px;padding:2px 6px;color:#A32D2D" onclick="supprimerMouvementCaisse(\''+m.id+'\')">&#x1F5D1;</button></td>';
       html += '</tr>';
     });
     html += '</tbody></table></div></div>';
