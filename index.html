@@ -11833,6 +11833,24 @@ function renderChiffrageSection(v){
     fournOpts += '<option value="'+f.id+'">'+f.nom+'</option>';
   });
 
+  // Actions groupees pour la Direction : valider toutes les pieces d'un
+  // coup, et/ou appliquer une meme source de financement a toutes les
+  // pieces en une seule fois — evite de repeter l'action ligne par ligne
+  // quand tout le devis vient de la meme source.
+  if(currentRole==='direction' && isChiffreLocked && v.chiffrage.lignes.some(function(cl){return (cl.piece||'').trim();})){
+    s += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;padding:8px 10px;background:#f5fbf0;border-radius:7px">';
+    s += '<button class="btn btn-success btn-sm" onclick="toutValiderPieces()">&#x2714;&#x2714; Tout valider</button>';
+    s += '<span class="xs muted">|</span>';
+    s += '<span class="xs muted">Source de financement pour toutes :</span>';
+    s += '<select class="inp" style="font-size:11px;width:auto" id="sourceFinancementGlobale" onchange="appliquerSourceFinancementGlobale(this.value)">';
+    s += '<option value="">-- Choisir --</option>';
+    BANQUES.filter(function(b){return b.actif;}).forEach(function(b){ s += '<option value="'+b.id+'">'+b.nom+'</option>'; });
+    s += '<option value="fonds_propres">Fonds propres</option>';
+    s += '<option value="credit_fourn">Credit fournisseur</option>';
+    s += '</select>';
+    s += '</div>';
+  }
+
   s += '<div class="tw" style="overflow-x:auto"><table><thead><tr>'
     +'<th style="background:#EAF3DE;color:#3B6D11">Pièce demandée</th><th>Qte</th><th>Désignation / Référence</th><th>Prix achat (FCFA)</th>'+(isForfait?'':'<th>Prix vente (FCFA)</th><th>Total vente</th>')+'<th>Fournisseur</th><th>Source</th><th>Paiement</th>'
     +(currentRole==='direction'?'<th>Validation</th>':'<th></th>')
@@ -12874,6 +12892,40 @@ function setSourceFinancement(sel){
   if(!v || !v.chiffrage) return;
   var cl = v.chiffrage.lignes.find(function(x){return x.devisId===lid||x.libreId===lid;});
   if(cl){ cl.sourceFinancement=val; saveV(); }
+}
+
+// Coche d'un coup toutes les pieces du chiffrage (comme si chaque case
+// avait ete cochee individuellement) — reserve a la Direction. Reutilise
+// exactement le meme comportement que toggleValidPiece (liberation de
+// reservation stock non concernee ici, puisqu'on ne fait que cocher, pas
+// decocher).
+function toutValiderPieces(){
+  var v = vehicles.find(function(x){return x.id===detCurrentVid;});
+  if(!v || !v.chiffrage || !v.chiffrage.lignes) return;
+  var nbConcernees = 0;
+  v.chiffrage.lignes.forEach(function(cl){
+    if((cl.piece||'').trim()){ cl.valideDir = true; nbConcernees++; }
+  });
+  if(!nbConcernees) return;
+  saveV();
+  openDetKeepEdit(detCurrentVid);
+}
+
+// Applique la meme source de financement a toutes les pieces du
+// chiffrage — sauf celles en CREDIT, dont la source reste automatiquement
+// verrouillee sur "Credit fournisseur" (meme regle que le selecteur
+// individuel par ligne).
+function appliquerSourceFinancementGlobale(valeur){
+  if(!valeur) return;
+  var v = vehicles.find(function(x){return x.id===detCurrentVid;});
+  if(!v || !v.chiffrage || !v.chiffrage.lignes) return;
+  v.chiffrage.lignes.forEach(function(cl){
+    if(!(cl.piece||'').trim()) return;
+    if(cl.paiement==='credit') return; // deja verrouille sur credit fournisseur
+    cl.sourceFinancement = valeur;
+  });
+  saveV();
+  openDetKeepEdit(detCurrentVid);
 }
 
 function toggleValidPiece(cb){
