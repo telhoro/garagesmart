@@ -21161,7 +21161,9 @@ function renderCalendrierEmploye(employeId, employeNom, journeesEmploye, annee, 
 // les fonctions d'export/impression pour rester coherentes avec les
 // filtres actuellement appliques (employe, periode).
 function presencesDonneesFiltrees(){
-  var liste = PRESENCES.slice();
+  var idsActifs = {};
+  EMPLOYES_PRESENCE.forEach(function(e){ if(e.actif) idsActifs[e.id] = true; });
+  var liste = PRESENCES.slice().filter(function(p){ return idsActifs[p.employeId]; });
   if(presencesHistoEmploye) liste = liste.filter(function(p){return p.employeId===presencesHistoEmploye;});
   if(presencesHistoDateDebut){
     var deb = new Date(presencesHistoDateDebut).setHours(0,0,0,0);
@@ -21410,10 +21412,17 @@ function presencesOuvrirEtImprimer(html){
 }
 
 function pagePresencesHistorique(){
+  // Un employe desactive (decoche dans la gestion) disparait completement
+  // de l'historique : filtre deroulant, recapitulatif, calendrier, detail
+  // — tant qu'il reste desactive. Ses pointages restent en base (aucune
+  // donnee perdue), simplement filtres hors de cette vue.
+  var idsActifs = {};
+  EMPLOYES_PRESENCE.forEach(function(e){ if(e.actif) idsActifs[e.id] = true; });
+
   var html = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px">';
   html += '<select class="inp" style="width:200px" onchange="presencesHistoEmploye=this.value;renderPage()">';
   html += '<option value="">Tous les employes</option>';
-  EMPLOYES_PRESENCE.forEach(function(e){
+  EMPLOYES_PRESENCE.filter(function(e){return e.actif;}).forEach(function(e){
     html += '<option value="'+e.id+'"'+(presencesHistoEmploye===e.id?' selected':'')+'>'+e.nom+(e.prenom?' '+e.prenom:'')+'</option>';
   });
   html += '</select>';
@@ -21438,7 +21447,7 @@ function pagePresencesHistorique(){
   html += '<button class="btn btn-sm" style="background:#854F0B;color:#fff" onclick="presencesImprimerCalendriersGlobal()">&#128197; Imprimer les calendriers</button>';
   html += '</div>';
 
-  var liste = PRESENCES.slice();
+  var liste = PRESENCES.slice().filter(function(p){ return idsActifs[p.employeId]; });
   if(presencesHistoEmploye) liste = liste.filter(function(p){return p.employeId===presencesHistoEmploye;});
   if(presencesHistoDateDebut){
     var deb = new Date(presencesHistoDateDebut).setHours(0,0,0,0);
