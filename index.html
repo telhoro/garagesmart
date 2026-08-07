@@ -5078,6 +5078,26 @@ function marquerJalonsTemps(v, nouveauStatut){
   }
 }
 
+// Migration retroactive : les vehicules deja au statut facture_deposee
+// ou dossier_cloture AVANT l'introduction du champ factureDeposeeLe n'ont
+// jamais eu cette date renseignee (elle n'est ecrite qu'au moment precis
+// de la transition, dans advance() ci-dessous). Sans cette migration, ces
+// factures deja reellement deposees tombent a tort dans la categorie "non
+// deposees" sur la page Facturation. Execute une seule fois par vehicule
+// (ne touche jamais un champ deja renseigne), avec une date de secours
+// (livraison, sinon validation financiere, sinon entree).
+function migrerFactureDeposeeLe(){
+  var nbMigres = 0;
+  vehicles.forEach(function(v){
+    if(v.status!=='facture_deposee' && v.status!=='dossier_cloture') return;
+    if(v.factureDeposeeLe) return;
+    v.factureDeposeeLe = v.livraison || (v.chiffrage && v.chiffrage.valideDirLe) || (v.chiffrage && v.chiffrage.soumisLe) || v.entree || Date.now();
+    nbMigres++;
+  });
+  if(nbMigres>0) saveV();
+  return nbMigres;
+}
+
 function advance(id){
   for(var i=0;i<vehicles.length;i++){
     if(vehicles[i].id===id){
@@ -23084,6 +23104,7 @@ function initFirebase(){
           return nv;
         });
         vehicles = newVehicles;
+        migrerFactureDeposeeLe(); // migration retroactive, aussi apres synchro Firebase
         lastLocalTs = data.ts || Date.now();
         // Sauvegarder sans photos en localStorage
         var sans = vehicles.map(function(v){
@@ -23250,6 +23271,7 @@ window.onload=function(){
   window.addEventListener('resize', checkMobileLayout);
 
   initData();vehicles=loadV();
+  migrerFactureDeposeeLe(); // migration retroactive (voir commentaire de la fonction)
   // Firebase sera initialisé via onFirebaseDatabaseLoaded()
   // Vérifier s'il y a une session active (persiste après actualisation)
   var session = null;
