@@ -2066,6 +2066,86 @@ function syncCaisseMouvementsFromFirebase(callback){
   }).catch(function(){ if(callback) callback(); });
 }
 
+// ── Dettes fournisseurs saisies manuellement ─────────────────────────────
+// Pour les achats non lies a une prestation vehicule (ex: commande de
+// stock general, article divers) : {id, fournisseurId, piece, qte,
+// prixAchat, dateAchat, dateEcheance, paye, payeLe, auteur}. Integrees
+// dans collecterDettesFournisseurs() au meme titre que les dettes issues
+// du chiffrage vehicule, pour rester dans le meme tableau/calcul.
+var DETTES_MANUELLES = [];
+function saveDettesManuelles(){
+  localStorage.setItem('gos_dettes_manuelles', JSON.stringify(DETTES_MANUELLES));
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_dettes_manuelles').set(JSON.stringify(DETTES_MANUELLES)).catch(function(e){
+      console.error('Firebase dettes manuelles save error:', e);
+    });
+  }
+}
+function loadDettesManuelles(){
+  var raw = localStorage.getItem('gos_dettes_manuelles');
+  if(raw){ try{ DETTES_MANUELLES = JSON.parse(raw)||[]; }catch(e){ DETTES_MANUELLES=[]; } }
+}
+function syncDettesManuellesFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_dettes_manuelles').once('value').then(function(snap){
+    var val = snap.val();
+    if(val){ try{ DETTES_MANUELLES = JSON.parse(val)||[]; localStorage.setItem('gos_dettes_manuelles', val); }catch(e){} }
+    else if(DETTES_MANUELLES.length && fbConnected){ fbDb.ref('gos_dettes_manuelles').set(JSON.stringify(DETTES_MANUELLES)); }
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
+}
+
+// ── Employes pour le module Presences (pointage/enrolement) ─────────────
+// Liste dediee, distincte des comptes de connexion : {id, nom, prenom,
+// fonction, actif, manuel (true si ajoute a la main, false si issu d'un
+// compte de connexion — determine si la suppression est autorisee)}.
+// Initialisee automatiquement a partir des comptes existants au premier
+// usage (voir initialiserEmployesPresence), puis geree independamment :
+// un employe peut etre desactive (grise, exclu du pointage) sans jamais
+// toucher au compte de connexion d'origine.
+var EMPLOYES_PRESENCE = [];
+function saveEmployesPresence(){
+  localStorage.setItem('gos_employes_presence', JSON.stringify(EMPLOYES_PRESENCE));
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_employes_presence').set(JSON.stringify(EMPLOYES_PRESENCE)).catch(function(e){
+      console.error('Firebase employes presence save error:', e);
+    });
+  }
+}
+function loadEmployesPresence(){
+  var raw = localStorage.getItem('gos_employes_presence');
+  if(raw){ try{ EMPLOYES_PRESENCE = JSON.parse(raw)||[]; }catch(e){ EMPLOYES_PRESENCE=[]; } }
+}
+function syncEmployesPresenceFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_employes_presence').once('value').then(function(snap){
+    var val = snap.val();
+    if(val){ try{ EMPLOYES_PRESENCE = JSON.parse(val)||[]; localStorage.setItem('gos_employes_presence', val); }catch(e){} }
+    else if(EMPLOYES_PRESENCE.length && fbConnected){ fbDb.ref('gos_employes_presence').set(JSON.stringify(EMPLOYES_PRESENCE)); }
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
+}
+
+// Initialise EMPLOYES_PRESENCE a partir des comptes de connexion, UNE
+// SEULE FOIS (n'ajoute que les comptes absents de la liste, ne touche
+// jamais aux employes deja geres — evite d'ecraser une desactivation ou
+// un employe manuel a chaque appel).
+function initialiserEmployesPresence(){
+  var comptes = loadComptes();
+  var idsExistants = {};
+  EMPLOYES_PRESENCE.forEach(function(e){ idsExistants[e.id] = true; });
+  var ajoutes = false;
+  comptes.forEach(function(c){
+    if(idsExistants[c.id]) return;
+    var parts = (c.nom||'').trim().split(' ');
+    EMPLOYES_PRESENCE.push({
+      id: c.id, nom: parts[0]||c.nom||'', prenom: parts.slice(1).join(' ')||'',
+      fonction: c.role||'', actif: true, manuel: false
+    });
+    ajoutes = true;
+  });
+  if(ajoutes) saveEmployesPresence();
+}
 
 // ── Chargement des modeles de reconnaissance faciale (face-api.js) ──────
 // Charge a la demande (pas au demarrage de l'app) pour ne pas ralentir le
@@ -2119,8 +2199,9 @@ function demarrerPointagePresence(){
   var placeholder = document.getElementById('presencePlaceholder');
   if(!video) return; // l'utilisateur a change de page entre temps
 
-  if(Object.keys(DESCRIPTEURS_FACIAUX).length===0){
-    if(statusMsg) statusMsg.textContent = 'Aucun employe enrole pour l\'instant. Utilisez l\'onglet Enrolement.';
+  var nbActifsEnroles = EMPLOYES_PRESENCE.filter(function(e){ return e.actif && DESCRIPTEURS_FACIAUX[e.id]; }).length;
+  if(nbActifsEnroles===0){
+    if(statusMsg) statusMsg.textContent = 'Aucun employe actif enrole pour l\'instant. Utilisez l\'onglet Enrolement.';
     remettreBoutonActiverPointage();
     return;
   }
@@ -2219,7 +2300,15 @@ var MARGE_MINIMALE_RECONNAISSANCE = 0.08;
 // determine si le meilleur candidat est suffisamment distinct du second
 // pour etre accepte sans ambiguite.
 function trouverMeilleurCandidatFacial(descripteurDetecte){
-  var distancesParEmploye = Object.keys(DESCRIPTEURS_FACIAUX).map(function(employeId){
+  // Ne compare qu'aux employes ACTIFS (coches pour pointer) — un employe
+  // desactive reste enrole (sa signature n'est pas supprimee) mais ne
+  // doit plus jamais etre reconnu automatiquement.
+  var idsActifs = {};
+  EMPLOYES_PRESENCE.forEach(function(e){ if(e.actif) idsActifs[e.id] = true; });
+
+  var distancesParEmploye = Object.keys(DESCRIPTEURS_FACIAUX).filter(function(employeId){
+    return idsActifs[employeId];
+  }).map(function(employeId){
     var descripteurs = normaliserDescripteurs(DESCRIPTEURS_FACIAUX[employeId]);
     var distances = descripteurs.map(function(d){ return distanceEuclidienneDescripteurs(descripteurDetecte, d); });
     return { employeId: employeId, distance: distances.length ? Math.min.apply(null, distances) : Infinity };
@@ -2260,7 +2349,7 @@ function lancerBoucleReconnaissance(){
 var presenceEnPause = false; // true pendant l'affichage du message de confirmation, pour ignorer les detections
 
 function traiterReconnaissanceReussie(employeId, video){
-  var employe = loadComptes().find(function(c){return c.id===employeId;});
+  var employe = EMPLOYES_PRESENCE.find(function(e){return e.id===employeId && e.actif;});
   if(!employe) return;
   var photoBase64 = capturerPhotoDepuisVideo(video);
   enregistrerPointage(employe, 'reconnaissance', photoBase64);
@@ -2288,9 +2377,10 @@ function enregistrerPointage(employe, methode, photoBase64){
   var dernierType = pointagesDuJour.length ? pointagesDuJour[pointagesDuJour.length-1].type : null;
   var type = (dernierType==='arrivee') ? 'depart' : 'arrivee';
 
+  var nomComplet = employe.nom+(employe.prenom?' '+employe.prenom:'');
   var pointage = {
     id: 'pres_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),
-    employeId: employe.id, employeNom: employe.nom,
+    employeId: employe.id, employeNom: nomComplet,
     type: type, date: Date.now(), methode: methode, photo: photoBase64
   };
   PRESENCES.push(pointage);
@@ -2311,7 +2401,7 @@ function enregistrerPointage(employe, methode, photoBase64){
     confirmationDiv.id = 'presenceConfirmationEcran';
     confirmationDiv.style.cssText = 'background:#EAF3DE;border-radius:12px;padding:40px 20px;text-align:center;width:100%;aspect-ratio:4/3;display:flex;flex-direction:column;align-items:center;justify-content:center';
     confirmationDiv.innerHTML = '<div style="font-size:56px;margin-bottom:10px">&#x2714;</div>'
-      + '<div style="font-size:18px;font-weight:700;color:#3B6D11">'+employe.nom+'</div>'
+      + '<div style="font-size:18px;font-weight:700;color:#3B6D11">'+nomComplet+'</div>'
       + '<div style="font-size:14px;color:#3B6D11;margin-top:4px">'+(type==='arrivee'?'Arrivee':'Depart')+' enregistre a '+new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+'</div>';
     var placeholder = document.getElementById('presencePlaceholder');
     if(placeholder) placeholder.style.display = 'none';
@@ -2343,7 +2433,9 @@ function basculerModeManuelPresence(){
   }
 
   var options = '<option value="">— Selectionner votre nom —</option>';
-  loadComptes().forEach(function(c){ options += '<option value="'+c.id+'">'+c.nom+'</option>'; });
+  EMPLOYES_PRESENCE.filter(function(e){return e.actif;}).forEach(function(e){
+    options += '<option value="'+e.id+'">'+e.nom+(e.prenom?' '+e.prenom:'')+'</option>';
+  });
   zone.innerHTML = '<div class="card" style="padding:14px;text-align:left">'
     + '<label class="fl">Votre nom</label>'
     + '<select class="inp" id="presenceManuelSelect" style="margin-bottom:10px">'+options+'</select>'
@@ -2356,7 +2448,7 @@ function pointerManuellement(){
   var select = document.getElementById('presenceManuelSelect');
   var employeId = select ? select.value : '';
   if(!employeId){ alert('Selectionnez votre nom.'); return; }
-  var employe = loadComptes().find(function(c){return c.id===employeId;});
+  var employe = EMPLOYES_PRESENCE.find(function(e){return e.id===employeId && e.actif;});
   if(!employe) return;
   var video = document.getElementById('presenceVideo');
   var photoBase64 = video ? capturerPhotoDepuisVideo(video) : null;
@@ -2371,12 +2463,12 @@ var enrolementEmployeIdActuel = null;
 var enrolementCameraFace = 'user'; // 'user' = camera avant, 'environment' = camera arriere
 
 function ouvrirEnrolementFacial(employeId){
-  var employe = loadComptes().find(function(c){return c.id===employeId;});
+  var employe = EMPLOYES_PRESENCE.find(function(e){return e.id===employeId;});
   if(!employe) return;
   enrolementEmployeIdActuel = employeId;
   enrolementCameraFace = 'user';
   enrolementCapturesEnCours = []; // reinitialise la progression (3 captures a faire)
-  document.getElementById('enrolNomEmploye').textContent = employe.nom;
+  document.getElementById('enrolNomEmploye').textContent = employe.nom+' '+(employe.prenom||'');
   document.getElementById('enrolStatusMsg').textContent = 'Chargement des modeles de reconnaissance...';
   document.getElementById('modalEnrolementFacial').style.display = 'flex';
   demarrerCameraEnrolement();
@@ -8123,6 +8215,37 @@ function collecterDettesFournisseurs(){
       }
     });
   });
+
+  // Dettes saisies manuellement (achats non lies a une prestation
+  // vehicule) : integrees au meme groupe par fournisseur, avec la meme
+  // structure de ligne — marquees manuel:true pour permettre de les
+  // modifier/supprimer depuis l'interface, contrairement aux lignes
+  // issues du chiffrage vehicule.
+  DETTES_MANUELLES.forEach(function(dm){
+    if(dm.paye) return;
+    var f = FOURNISSEURS.find(function(x){return x.id===dm.fournisseurId;});
+    if(!f) return;
+    var montant = (parseFloat(dm.prixAchat)||0)*(parseInt(dm.qte)||1);
+    if(!montant) return;
+    var dateEcheance = dm.dateEcheance || 0;
+    var joursRestants = dateEcheance ? Math.round((dateEcheance-Date.now())/86400000) : 0;
+    var statut = joursRestants<0 ? 'retard' : (joursRestants<=7 ? 'a_echoir' : 'planifie');
+    if(!parFourn[f.id]){
+      parFourn[f.id] = {fournisseur:f, lignes:[], total:0, delai:delaiEcheanceFourn(f), echeanceMin:dateEcheance};
+    }
+    parFourn[f.id].lignes.push({
+      vehId:null, immat:'—', marque:'', modele:'',
+      client:'', piece:dm.piece, montant:montant, qte:dm.qte,
+      dateAchat:dm.dateAchat, dateEcheance:dateEcheance,
+      joursRestants:joursRestants, statut:statut, ligneId:null,
+      manuel:true, detteId:dm.id
+    });
+    parFourn[f.id].total += montant;
+    if(dateEcheance && (!parFourn[f.id].echeanceMin || dateEcheance<parFourn[f.id].echeanceMin)){
+      parFourn[f.id].echeanceMin = dateEcheance;
+    }
+  });
+
   return Object.keys(parFourn).map(function(k){return parFourn[k];});
 }
 
@@ -8421,6 +8544,7 @@ function pageDettesFournisseurs(){
 
   var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Dettes fournisseurs</h2>';
+  html += '<button class="btn btn-primary btn-sm" onclick="ouvrirAjoutDetteManuelle()">+ Ajouter une dette</button>';
   html += '</div>';
 
   html += '<div class="card" style="margin-bottom:16px;border:2px solid #A32D2D;padding:12px 16px">';
@@ -8472,11 +8596,19 @@ function pageDettesFournisseurs(){
         else if(l.statut==='a_echoir'){ badgeLabel='A echoir'; badgeCls='b-amber'; }
         else { badgeLabel='Planifie'; badgeCls='b-green'; }
         html += '<tr class="xs">';
-        html += '<td style="padding-left:28px"><strong>'+l.immat+'</strong> '+(l.marque||'')+' '+(l.modele||'')+' — <span class="muted">client '+l.client+'</span>'+(l.piece?' <span class="muted">('+l.piece+')</span>':'')+'</td>';
+        if(l.manuel){
+          html += '<td style="padding-left:28px"><strong>'+l.piece+'</strong> <span class="badge b-gray" style="font-size:9px">Saisie manuelle</span> <span class="muted">qte : '+(l.qte||1)+'</span></td>';
+        } else {
+          html += '<td style="padding-left:28px"><strong>'+l.immat+'</strong> '+(l.marque||'')+' '+(l.modele||'')+' — <span class="muted">client '+l.client+'</span>'+(l.piece?' <span class="muted">('+l.piece+')</span>':'')+'</td>';
+        }
         html += '<td style="font-family:monospace">'+l.montant.toLocaleString('fr-FR')+'</td>';
         html += '<td style="font-family:monospace;color:#A32D2D">'+l.montant.toLocaleString('fr-FR')+'</td>';
         html += '<td><span class="badge '+badgeCls+'">'+badgeLabel+'</span></td>';
-        html += '<td><button class="btn btn-sm" data-vid="'+l.vehId+'" data-lid="'+(l.ligneId||'')+'" onclick="event.stopPropagation();marquerLigneFournPayeeByEl(this)">Payer cette ligne</button></td>';
+        if(l.manuel){
+          html += '<td><button class="btn btn-sm" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();marquerDetteManuelleByEl(this)">Payer</button> <button class="btn btn-sm" style="color:#A32D2D" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();supprimerDetteManuelleByEl(this)">&#x1F5D1;</button></td>';
+        } else {
+          html += '<td><button class="btn btn-sm" data-vid="'+l.vehId+'" data-lid="'+(l.ligneId||'')+'" onclick="event.stopPropagation();marquerLigneFournPayeeByEl(this)">Payer cette ligne</button></td>';
+        }
         html += '</tr>';
       });
       html += '<tr><td colspan="5" style="padding:8px 8px 12px 28px">';
@@ -8486,6 +8618,27 @@ function pageDettesFournisseurs(){
   });
 
   html += '</tbody></table></div></div>';
+
+  // Modale d'ajout d'une dette fournisseur manuelle (achat non lie a une
+  // prestation vehicule) — cachee par defaut.
+  html += '<div class="overlay" id="modalAjoutDetteManuelle" style="display:none" onclick="if(event.target===this)document.getElementById(\'modalAjoutDetteManuelle\').style.display=\'none\'">';
+  html += '<div class="modal" style="max-width:420px">';
+  html += '<div class="mhead"><h2>+ Ajouter une dette fournisseur</h2><button class="btn btn-sm" onclick="document.getElementById(\'modalAjoutDetteManuelle\').style.display=\'none\'">X</button></div>';
+  html += '<div class="mbody">';
+  html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Fournisseur <span style="color:red">*</span></label>';
+  html += '<select class="inp" id="dm_fournisseur"><option value="">-- Choisir --</option>';
+  FOURNISSEURS.filter(function(f){return f.actif;}).forEach(function(f){ html += '<option value="'+f.id+'">'+f.nom+'</option>'; });
+  html += '</select></div>';
+  html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Piece / Article <span style="color:red">*</span></label><input class="inp" id="dm_piece" placeholder="Ex: Batterie 12V, huile moteur..."></div>';
+  html += '<div class="g2" style="margin-bottom:10px">';
+  html += '<div class="fr"><label class="fl">Quantite</label><input class="inp" type="number" min="1" id="dm_qte" value="1"></div>';
+  html += '<div class="fr"><label class="fl">Prix d\'achat unitaire (FCFA) <span style="color:red">*</span></label><input class="inp" type="number" min="0" id="dm_prixAchat" placeholder="0"></div>';
+  html += '</div>';
+  html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Date d\'echeance <span style="color:red">*</span></label><input class="inp" type="date" id="dm_dateEcheance"></div>';
+  html += '</div>';
+  html += '<div class="mfoot"><button class="btn" onclick="document.getElementById(\'modalAjoutDetteManuelle\').style.display=\'none\'">Annuler</button><button class="btn btn-primary" onclick="confirmerAjoutDetteManuelle()">Enregistrer</button></div>';
+  html += '</div></div>';
+
   return html;
 }
 
@@ -8526,9 +8679,72 @@ function marquerFournisseurPayeByEl(el){
       }
     });
   });
+  // Inclut aussi les dettes manuelles de ce fournisseur, pour que le
+  // paiement global couvre bien TOUTES ses dettes, pas seulement celles
+  // issues du chiffrage vehicule.
+  DETTES_MANUELLES.forEach(function(dm){
+    if(dm.fournisseurId===fid && !dm.paye){
+      dm.paye = true;
+      dm.payeLe = Date.now();
+    }
+  });
+  saveDettesManuelles();
   saveV();
   renderPage();
 }
+
+// ── Dettes fournisseurs manuelles : ajout, paiement, suppression ────────
+function ouvrirAjoutDetteManuelle(){
+  document.getElementById('dm_fournisseur').value = '';
+  document.getElementById('dm_piece').value = '';
+  document.getElementById('dm_qte').value = 1;
+  document.getElementById('dm_prixAchat').value = '';
+  document.getElementById('dm_dateEcheance').value = '';
+  document.getElementById('modalAjoutDetteManuelle').style.display = 'flex';
+}
+
+function confirmerAjoutDetteManuelle(){
+  var fournisseurId = document.getElementById('dm_fournisseur').value;
+  var piece = document.getElementById('dm_piece').value.trim();
+  var qte = parseInt(document.getElementById('dm_qte').value,10) || 1;
+  var prixAchat = parseFloat(document.getElementById('dm_prixAchat').value);
+  var dateEcheanceStr = document.getElementById('dm_dateEcheance').value;
+
+  if(!fournisseurId){ alert('Choisissez un fournisseur.'); return; }
+  if(!piece){ alert('Indiquez le nom de la piece ou de l\'article.'); return; }
+  if(!prixAchat || prixAchat<=0){ alert('Indiquez un prix d\'achat valide.'); return; }
+  if(!dateEcheanceStr){ alert('Indiquez une date d\'echeance.'); return; }
+
+  var auteur = currentUser ? (currentUser.login||currentUser.nom) : currentRole;
+  DETTES_MANUELLES.push({
+    id: 'dm_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),
+    fournisseurId: fournisseurId, piece: piece, qte: qte, prixAchat: prixAchat,
+    dateAchat: Date.now(), dateEcheance: new Date(dateEcheanceStr).getTime(),
+    paye: false, payeLe: null, auteur: auteur
+  });
+  saveDettesManuelles();
+  document.getElementById('modalAjoutDetteManuelle').style.display = 'none';
+  renderPage();
+}
+
+function marquerDetteManuelleByEl(btn){
+  var id = btn.getAttribute('data-dette-id');
+  var dm = DETTES_MANUELLES.find(function(x){return x.id===id;});
+  if(!dm) return;
+  dm.paye = true;
+  dm.payeLe = Date.now();
+  saveDettesManuelles();
+  renderPage();
+}
+
+function supprimerDetteManuelleByEl(btn){
+  var id = btn.getAttribute('data-dette-id');
+  if(!confirm('Supprimer cette dette fournisseur saisie manuellement ?')) return;
+  DETTES_MANUELLES = DETTES_MANUELLES.filter(function(x){return x.id!==id;});
+  saveDettesManuelles();
+  renderPage();
+}
+
 
 // ── Prevision de tresorerie ──────────────────────────────────────────────
 // Projette le solde de cash sur plusieurs periodes (semaine/mois/trimestre/
@@ -20631,26 +20847,67 @@ function modifierSeuilReconnaissance(valeur){
 }
 
 function pagePresencesEnrolement(){
-  // Utilise la liste des COMPTES de connexion (Direction, Reception,
-  // Achats, techniciens...) plutot que PERSONNEL, qui ne couvre que les
-  // roles atelier — le module Presences doit pouvoir enroler et pointer
-  // n'importe quel employe du garage, tous roles confondus.
-  var employes = loadComptes();
-  var html = '<div class="card" style="padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
+  // Utilise la liste dediee EMPLOYES_PRESENCE (issue des comptes de
+  // connexion au depart, mais geree independamment ensuite) plutot que
+  // les comptes eux-memes — permet de selectionner/desactiver qui doit
+  // pointer, et d'ajouter des employes qui n'ont pas de compte GarageOS.
+  initialiserEmployesPresence();
+  var employesTries = EMPLOYES_PRESENCE.slice().sort(function(a,b){
+    if(a.actif!==b.actif) return a.actif ? -1 : 1; // actifs en premier
+    return (a.nom||'').localeCompare(b.nom||'');
+  });
+
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">';
+  html += '<div></div>';
+  if(currentRole==='direction'){
+    html += '<button class="btn btn-primary btn-sm" onclick="ouvrirAjoutEmployePresence()">+ Ajouter un employe</button>';
+  }
+  html += '</div>';
+
+  html += '<div class="card" style="padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
   html += '<span class="xs muted">Sensibilite de reconnaissance (plus bas = plus strict, moins d\'erreurs mais plus de refus) :</span>';
   html += '<input type="range" min="0.30" max="0.55" step="0.01" value="'+SEUIL_RECONNAISSANCE_FACIALE+'" style="width:150px" oninput="document.getElementById(\'seuilRecoValeur\').textContent=this.value" onchange="modifierSeuilReconnaissance(this.value)">';
   html += '<span id="seuilRecoValeur" style="font-weight:700">'+SEUIL_RECONNAISSANCE_FACIALE+'</span>';
   html += '</div>';
-  html += '<div class="info-box" style="margin-bottom:16px">Enrolez chaque employe avec <strong>3 captures</strong> (angles/expressions legerement differents) : la camera enregistre plusieurs signatures pour ameliorer la fiabilite de reconnaissance. Refaire l\'enrolement remplace les anciennes signatures.</div>';
-  html += '<div class="tw"><table><thead><tr><th>Employe</th><th>Role</th><th>Statut</th><th></th></tr></thead><tbody>';
-  employes.forEach(function(c){
-    var estEnrole = !!DESCRIPTEURS_FACIAUX[c.id];
-    html += '<tr><td><strong>'+c.nom+'</strong></td>';
-    html += '<td class="xs muted">'+(c.role||'')+'</td>';
+  html += '<div class="info-box" style="margin-bottom:16px">'+(currentRole==='direction'
+    ? 'Cochez les employes qui doivent pouvoir pointer. Un employe decoche reste visible (grise) mais n\'apparait plus dans la reconnaissance ni la selection manuelle.'
+    : 'La selection des employes actifs pour le pointage est reservee a la Direction.')
+    +' Enrolez chaque employe avec <strong>3 captures</strong> (angles/expressions legerement differents) pour une reconnaissance plus fiable.</div>';
+
+  html += '<div class="tw"><table><thead><tr><th style="width:40px"></th><th>Nom</th><th>Prenom</th><th>Fonction</th><th>Statut</th><th></th></tr></thead><tbody>';
+  employesTries.forEach(function(e){
+    var estEnrole = !!DESCRIPTEURS_FACIAUX[e.id];
+    var styleGrise = e.actif ? '' : 'opacity:0.45';
+    html += '<tr style="'+styleGrise+'">';
+    if(currentRole==='direction'){
+      html += '<td><input type="checkbox" '+(e.actif?'checked':'')+' style="width:16px;height:16px;cursor:pointer" onchange="toggleActifEmployePresence(\''+e.id+'\',this.checked)"></td>';
+    } else {
+      html += '<td><input type="checkbox" '+(e.actif?'checked':'')+' disabled title="Reserve a la Direction" style="width:16px;height:16px"></td>';
+    }
+    html += '<td><strong>'+(e.nom||'')+'</strong></td>';
+    html += '<td>'+(e.prenom||'—')+'</td>';
+    html += '<td class="xs muted">'+(e.fonction||'—')+'</td>';
     html += '<td>'+(estEnrole?'<span class="badge b-green">&#x2714; Enrole</span>':'<span class="badge b-gray">Non enrole</span>')+'</td>';
-    html += '<td><button class="btn btn-sm" onclick="ouvrirEnrolementFacial(\''+c.id+'\')">'+(estEnrole?'&#x1F504; Refaire':'&#x1F4F7; Enroler')+'</button></td></tr>';
+    html += '<td><div class="flex gap6">';
+    html += '<button class="btn btn-sm" onclick="ouvrirEnrolementFacial(\''+e.id+'\')">'+(estEnrole?'&#x1F504; Refaire':'&#x1F4F7; Enroler')+'</button>';
+    if(e.manuel && currentRole==='direction'){
+      html += '<button class="btn btn-sm" style="color:#A32D2D" onclick="supprimerEmployePresence(\''+e.id+'\')">&#x1F5D1;</button>';
+    }
+    html += '</div></td></tr>';
   });
   html += '</tbody></table></div>';
+
+  // Modale d'ajout manuel d'employe
+  html += '<div class="overlay" id="modalAjoutEmployePresence" style="display:none" onclick="if(event.target===this)document.getElementById(\'modalAjoutEmployePresence\').style.display=\'none\'">';
+  html += '<div class="modal" style="max-width:420px">';
+  html += '<div class="mhead"><h2>+ Ajouter un employe</h2><button class="btn btn-sm" onclick="document.getElementById(\'modalAjoutEmployePresence\').style.display=\'none\'">X</button></div>';
+  html += '<div class="mbody">';
+  html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Nom <span style="color:red">*</span></label><input class="inp" id="ep_nom" placeholder="Ex: Kouassi"></div>';
+  html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Prenom</label><input class="inp" id="ep_prenom" placeholder="Ex: Jean"></div>';
+  html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Fonction</label><input class="inp" id="ep_fonction" placeholder="Ex: Technicien mecanique"></div>';
+  html += '</div>';
+  html += '<div class="mfoot"><button class="btn" onclick="document.getElementById(\'modalAjoutEmployePresence\').style.display=\'none\'">Annuler</button><button class="btn btn-primary" onclick="confirmerAjoutEmployePresence()">Ajouter</button></div>';
+  html += '</div></div>';
 
   // Modale d'enrolement, cachee par defaut
   html += '<div class="overlay" id="modalEnrolementFacial" style="display:none" onclick="if(event.target===this)fermerEnrolementFacial()">';
@@ -20666,6 +20923,49 @@ function pagePresencesEnrolement(){
   html += '</div></div></div>';
 
   return html;
+}
+
+function toggleActifEmployePresence(id, actif){
+  if(currentRole!=='direction') return; // reserve a la Direction
+  var e = EMPLOYES_PRESENCE.find(function(x){return x.id===id;});
+  if(!e) return;
+  e.actif = actif;
+  saveEmployesPresence();
+  renderPage();
+}
+
+function ouvrirAjoutEmployePresence(){
+  if(currentRole!=='direction') return; // reserve a la Direction
+  document.getElementById('ep_nom').value = '';
+  document.getElementById('ep_prenom').value = '';
+  document.getElementById('ep_fonction').value = '';
+  document.getElementById('modalAjoutEmployePresence').style.display = 'flex';
+}
+
+function confirmerAjoutEmployePresence(){
+  if(currentRole!=='direction') return; // reserve a la Direction
+  var nom = document.getElementById('ep_nom').value.trim();
+  var prenom = document.getElementById('ep_prenom').value.trim();
+  var fonction = document.getElementById('ep_fonction').value.trim();
+  if(!nom){ alert('Indiquez au moins le nom.'); return; }
+
+  var id = 'emp_'+Date.now()+'_'+Math.random().toString(36).substr(2,5);
+  EMPLOYES_PRESENCE.push({id:id, nom:nom, prenom:prenom, fonction:fonction, actif:true, manuel:true});
+  saveEmployesPresence();
+  document.getElementById('modalAjoutEmployePresence').style.display = 'none';
+  renderPage();
+}
+
+function supprimerEmployePresence(id){
+  if(currentRole!=='direction') return; // reserve a la Direction
+  var e = EMPLOYES_PRESENCE.find(function(x){return x.id===id;});
+  if(!e || !e.manuel) return; // securite : seuls les employes ajoutes manuellement sont supprimables
+  if(!confirm('Supprimer '+e.nom+' '+(e.prenom||'')+' de la liste des employes ? Sa signature faciale (si enrolee) sera aussi supprimee.')) return;
+  EMPLOYES_PRESENCE = EMPLOYES_PRESENCE.filter(function(x){return x.id!==id;});
+  delete DESCRIPTEURS_FACIAUX[id];
+  saveEmployesPresence();
+  saveDescripteursFaciaux();
+  renderPage();
 }
 
 // Etats de filtre pour l'historique des presences
@@ -21113,8 +21413,8 @@ function pagePresencesHistorique(){
   var html = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px">';
   html += '<select class="inp" style="width:200px" onchange="presencesHistoEmploye=this.value;renderPage()">';
   html += '<option value="">Tous les employes</option>';
-  loadComptes().forEach(function(c){
-    html += '<option value="'+c.id+'"'+(presencesHistoEmploye===c.id?' selected':'')+'>'+c.nom+'</option>';
+  EMPLOYES_PRESENCE.forEach(function(e){
+    html += '<option value="'+e.id+'"'+(presencesHistoEmploye===e.id?' selected':'')+'>'+e.nom+(e.prenom?' '+e.prenom:'')+'</option>';
   });
   html += '</select>';
   html += '<input type="date" class="inp" style="width:150px" value="'+presencesHistoDateDebut+'" onchange="presencesHistoDateDebut=this.value;renderPage()">';
@@ -21164,7 +21464,11 @@ function pagePresencesHistorique(){
   });
 
   html += '<div class="section-title" style="font-weight:700;margin-bottom:8px">Recapitulatif par employe</div>';
-  html += '<div class="card" style="margin-bottom:20px"><div class="tw"><table><thead><tr><th>Employe</th><th style="text-align:center">Jours presents</th><th style="text-align:center">Ponctualite</th><th style="text-align:right">Heures travaillees</th><th></th></tr></thead><tbody>';
+
+  var moisReference = presencesHistoDateDebut ? new Date(presencesHistoDateDebut) : new Date();
+
+  html += '<div class="card" style="margin-bottom:20px;overflow:hidden">';
+  html += '<div class="tw"><table><thead><tr><th>Employe</th><th style="text-align:center">Jours presents</th><th style="text-align:center">Ponctualite</th><th style="text-align:right">Heures travaillees</th><th></th></tr></thead><tbody>';
   Object.keys(parEmploye).forEach(function(employeId){
     var e = parEmploye[employeId];
     var nbJours = e.jours.length;
@@ -21187,58 +21491,61 @@ function pagePresencesHistorique(){
     html += '<button class="btn btn-sm" style="font-size:11px" onclick="presencesImprimerEmploye(\''+employeId+'\')">&#128424; Imprimer</button>';
     html += '</div></td>';
     html += '</tr>';
+
+    // Calendrier et/ou detail de CET employe precis, insere juste apres
+    // sa ligne (pas de tableau HTML classique ici, sinon impossible
+    // d'inserer du contenu entre deux <tr> sans casser la structure) —
+    // rendu dans une ligne unique occupant toute la largeur.
+    var afficherCalendrier = presencesVueCalendrierGlobale || !!presencesCalendrierParEmploye[employeId];
+    var afficherDetail = !!presencesDetailParEmploye[employeId];
+    if(afficherCalendrier || afficherDetail){
+      html += '<tr><td colspan="5" style="background:#faf9f7;padding:12px">';
+      if(afficherCalendrier){
+        html += renderCalendrierEmploye(employeId, e.employeNom, e.jours, moisReference.getFullYear(), moisReference.getMonth());
+      }
+      if(afficherDetail){
+        html += renderDetailJourParJourEmploye(employeId, e.employeNom, e.jours);
+      }
+      html += '</td></tr>';
+    }
   });
   html += '</tbody></table></div></div>';
 
-  // ── Calendrier visuel par employe : affiche seulement si le bouton
-  // global "Voir calendrier" est actif, OU si le bouton "Calendrier" de
-  // cet employe precis l'est.
-  var moisReference = presencesHistoDateDebut ? new Date(presencesHistoDateDebut) : new Date();
-  Object.keys(parEmploye).forEach(function(employeId){
-    var e = parEmploye[employeId];
-    var afficherPourCet = presencesVueCalendrierGlobale || !!presencesCalendrierParEmploye[employeId];
-    if(afficherPourCet){
-      html += renderCalendrierEmploye(employeId, e.employeNom, e.jours, moisReference.getFullYear(), moisReference.getMonth());
-    }
-  });
+  return html;
+}
 
-  // ── Detail jour par jour : affiche uniquement pour les employes dont
-  // le bouton "Detail" de leur ligne a ete active (pas de bouton global
-  // pour le detail, uniquement individuel comme demande).
-  var journeesAffichees = journees.filter(function(j){
-    return !!presencesDetailParEmploye[j.employeId];
-  });
-  if(journeesAffichees.length){
-    html += '<div class="section-title" style="font-weight:700;margin-bottom:8px">Detail jour par jour</div>';
-    journeesAffichees.sort(function(a,b){return b.jour-a.jour;});
-    html += '<div class="card"><div class="tw"><table><thead><tr><th>Employe</th><th>Date</th><th>Arrivee(s) / Depart(s)</th><th style="text-align:center">Ponctualite</th><th style="text-align:center">Pause</th><th style="text-align:right">Heures</th><th>Photo</th></tr></thead><tbody>';
-    journeesAffichees.forEach(function(j){
-      var stats = calculerStatsJournee(j);
-      var segmentsTxt = j.segments.map(function(s){
-        var hArr = new Date(s.arrivee.date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
-        var hDep = s.depart ? new Date(s.depart.date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}) : 'en cours';
-        return hArr+' &rarr; '+hDep;
-      }).join(' &middot; ');
-      var premierPointage = j.segments[0].arrivee;
-      var badgesPonctualite = [];
-      if(stats.estEnRetard) badgesPonctualite.push('<span class="badge b-red">+'+stats.minutesRetard+' min</span>');
-      if(stats.estDepartAnticipe) badgesPonctualite.push('<span class="badge b-amber">-'+stats.minutesDepartAnticipe+' min</span>');
-      if(!badgesPonctualite.length) badgesPonctualite.push('<span class="badge b-green">A l\'heure</span>');
-      var badgesPause = stats.pauses.length
-        ? stats.pauses.map(function(p){ return '<span class="badge '+(p.depassement?'b-red':'b-gray')+'">'+p.minutes+' min</span>'; }).join(' ')
-        : '—';
-      html += '<tr>';
-      html += '<td><strong>'+j.employeNom+'</strong></td>';
+// Construit le tableau "detail jour par jour" pour UN SEUL employe —
+// reutilisee a l'interieur de sa propre carte (juste sous sa ligne dans
+// le recapitulatif), au lieu d'un bloc global place tout en bas de page.
+function renderDetailJourParJourEmploye(employeId, employeNom, jours){
+  var joursTries = jours.slice().sort(function(a,b){return b.jour-a.jour;});
+  var html = '<div class="section-title" style="font-weight:700;margin:12px 0 8px">Detail jour par jour — '+employeNom+'</div>';
+  html += '<div class="tw"><table><thead><tr><th>Date</th><th>Arrivee(s) / Depart(s)</th><th style="text-align:center">Ponctualite</th><th style="text-align:center">Pause</th><th style="text-align:right">Heures</th><th>Photo</th></tr></thead><tbody>';
+  joursTries.forEach(function(j){
+    var stats = calculerStatsJournee(j);
+    var segmentsTxt = j.segments.map(function(s){
+      var hArr = new Date(s.arrivee.date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+      var hDep = s.depart ? new Date(s.depart.date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}) : 'en cours';
+      return hArr+' &rarr; '+hDep;
+    }).join(' &middot; ');
+    var premierPointage = j.segments[0].arrivee;
+    var badgesPonctualite = [];
+    if(stats.estEnRetard) badgesPonctualite.push('<span class="badge b-red">+'+stats.minutesRetard+' min</span>');
+    if(stats.estDepartAnticipe) badgesPonctualite.push('<span class="badge b-amber">-'+stats.minutesDepartAnticipe+' min</span>');
+    if(!badgesPonctualite.length) badgesPonctualite.push('<span class="badge b-green">A l\'heure</span>');
+    var badgesPause = stats.pauses.length
+      ? stats.pauses.map(function(p){ return '<span class="badge '+(p.depassement?'b-red':'b-gray')+'">'+p.minutes+' min</span>'; }).join(' ')
+      : '—';
+    html += '<tr>';
     html += '<td>'+new Date(j.jour).toLocaleDateString('fr-FR')+'</td>';
     html += '<td class="xs">'+segmentsTxt+'</td>';
     html += '<td style="text-align:center">'+badgesPonctualite.join(' ')+'</td>';
     html += '<td style="text-align:center">'+badgesPause+'</td>';
     html += '<td style="text-align:right">'+(stats.heuresTravaillees>0?formaterHeuresDecimal(stats.heuresTravaillees):'—')+'</td>';
-      html += '<td>'+(premierPointage.photo?'<img src="'+premierPointage.photo+'" style="width:40px;height:30px;object-fit:cover;border-radius:4px;cursor:pointer" onclick="window.open(this.src)">':'—')+'</td>';
-      html += '</tr>';
-    });
-    html += '</tbody></table></div>';
-  }
+    html += '<td>'+(premierPointage.photo?'<img src="'+premierPointage.photo+'" style="width:40px;height:30px;object-fit:cover;border-radius:4px;cursor:pointer" onclick="window.open(this.src)">':'—')+'</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
   return html;
 }
 
@@ -22668,8 +22975,15 @@ function tryInitFirebase(){
           if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
         });
       });
+      syncDettesManuellesFromFirebase(function(){
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      });
       syncPersonnelFromFirebase(function(){
         syncComptesFromFirebase(function(comptes){
+          syncEmployesPresenceFromFirebase(function(){
+            initialiserEmployesPresence();
+            if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+          });
           syncApiKeyFromFirebase(function(){
             console.log('Firebase sync OK — Personnel:'+PERSONNEL.length+' Comptes:'+comptes.length+' ApiKey:'+(localStorage.getItem('gos_api_key')?'OK':'—'));
           });
