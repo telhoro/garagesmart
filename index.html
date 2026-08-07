@@ -5121,6 +5121,13 @@ function advance(id){
         // Reporter automatiquement les pieces non validees en "travaux a prevoir"
         creerTravauxAPrevoir(v);
       }
+      // Date precise du DEPOT de la facture — distincte de la validation
+      // financiere direction (qui peut avoir lieu bien avant la
+      // livraison reelle) : c'est cette date qui doit faire demarrer le
+      // decompte du delai de paiement client.
+      if(next==='facture_deposee' && !v.factureDeposeeLe){
+        v.factureDeposeeLe = Date.now();
+      }
       break;
     }
   }
@@ -6648,19 +6655,44 @@ function pageCreances(){
 
   // Collecter tous les véhicules avec chiffrage valorisé
   var dossiers = vehicles.filter(function(v){
-    return v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;
+    // Un dossier n'entre en facturation qu'une fois LIVRE (LIV_ST) — pas
+    // avant, meme si un chiffrage existe deja (diagnostic, attente
+    // validation client, travaux en cours... n'ont rien a voir ici).
+    return v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length && LIV_ST.indexOf(v.status)>=0;
   }).map(function(v){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
     var montantFacture = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
     if(!montantFacture) return null;
-    var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
+    // Le decompte du delai de paiement ne demarre QUE si la facture a
+    // reellement ete deposee — sinon le dossier apparait mais sans
+    // echeance (voir statut 'attente_depot' plus bas).
+    var factureDeposee = !!v.factureDeposeeLe;
+    var dateFacture = v.factureDeposeeLe || 0;
     var datePaiement = v.paiementDate || null;
     var montantPaye  = parseFloat(v.montantPaye)||0;
-    var statut = v.paiementStatut || (LIV_ST.indexOf(v.status)>=0 ? 'en_attente' : 'en_cours');
+    // Echeance reelle (regle du client : delai fixe, fin de mois, ou a
+    // la livraison), calculee uniquement si la facture est deposee —
+    // sert a distinguer "en retard" de "pas encore echu" pour un meme
+    // dossier en attente de paiement.
+    var dateEcheance = 0, enRetard = false;
+    if(factureDeposee){
+      var regle = delaiEcheanceClient(v);
+      if(regle.mode==='fin_mois'){
+        var dEch = new Date(dateFacture);
+        dateEcheance = new Date(dEch.getFullYear(), dEch.getMonth()+1, 0, 23,59,59).getTime();
+      } else if(regle.mode==='delai'){
+        dateEcheance = dateFacture + regle.jours*86400000;
+      } else {
+        dateEcheance = dateFacture;
+      }
+      enRetard = dateEcheance>0 && dateEcheance<Date.now();
+    }
+    var statut = v.paiementStatut || (factureDeposee ? 'en_attente' : 'attente_depot');
     if(datePaiement && montantPaye>=montantFacture) statut='paye';
     else if(montantPaye>0 && montantPaye<montantFacture) statut='partiel';
-    else if(!datePaiement) statut='en_attente';
-    var delaiJours = dateFacture ? Math.floor((Date.now()-dateFacture)/86400000) : 0;
+    else if(!factureDeposee) statut='attente_depot';
+    else if(!datePaiement) statut = enRetard ? 'retard' : 'en_attente';
+    var delaiJours = (factureDeposee && dateFacture) ? Math.floor((Date.now()-dateFacture)/86400000) : 0;
     var resteARecouvrir = montantFacture - montantPaye;
     return {
       id:v.id, immat:v.immat, marque:v.marque, modele:v.modele,
@@ -6671,6 +6703,9 @@ function pageCreances(){
       montantPaye:montantPaye,
       resteARecouvrir:resteARecouvrir,
       dateFacture:dateFacture,
+      dateEcheance:dateEcheance,
+      enRetard:enRetard,
+      factureDeposee:factureDeposee,
       datePaiement:datePaiement,
       delaiJours:delaiJours,
       statut:statut
@@ -6705,7 +6740,7 @@ function pageCreances(){
 
   // Filtrer par statut
   var filtres = dossiers;
-  if(creancesFiltre==='en_attente') filtres = dossiers.filter(function(d){return d.statut==='en_attente';});
+  if(creancesFiltre==='en_attente') filtres = dossiers.filter(function(d){return d.statut==='en_attente'||d.statut==='retard';});
   else if(creancesFiltre==='partiel') filtres = dossiers.filter(function(d){return d.statut==='partiel';});
   else if(creancesFiltre==='paye')   filtres = dossiers.filter(function(d){return d.statut==='paye';});
 
@@ -6721,7 +6756,7 @@ function pageCreances(){
   var totalFacture   = dossiers.reduce(function(s,d){return s+d.montantFacture;},0);
   var totalPaye      = dossiers.reduce(function(s,d){return s+d.montantPaye;},0);
   var totalDehors    = dossiers.filter(function(d){return d.statut!=='paye';}).reduce(function(s,d){return s+d.resteARecouvrir;},0);
-  var nbEnAttente    = dossiers.filter(function(d){return d.statut==='en_attente';}).length;
+  var nbEnAttente    = dossiers.filter(function(d){return d.statut==='en_attente'||d.statut==='retard';}).length;
   var nbPartiel      = dossiers.filter(function(d){return d.statut==='partiel';}).length;
   var nbPaye         = dossiers.filter(function(d){return d.statut==='paye';}).length;
   var nbRetard30     = dossiers.filter(function(d){return d.statut!=='paye'&&d.delaiJours>30;}).length;
@@ -6779,12 +6814,14 @@ function pageCreances(){
   html += '</tr></thead><tbody>';
 
   filtres.forEach(function(d){
-    var delaiColor = d.statut==='paye'?'#3B6D11':d.delaiJours>60?'#A32D2D':d.delaiJours>30?'#854F0B':'#185FA5';
-    var statutBadge = d.statut==='paye'?'b-green':d.statut==='partiel'?'b-amber':'b-red';
-    var statutLabel = d.statut==='paye'?'&#x2714; Paye':d.statut==='partiel'?'Partiel':'En attente';
-    var alerte = d.statut!=='paye' ? (d.delaiJours>60?'&#x1F534;':d.delaiJours>30?'&#x1F7E1;':'') : '';
+    var estAttenteDepot = d.statut==='attente_depot';
+    var estRetard = d.statut==='retard';
+    var delaiColor = d.statut==='paye'?'#3B6D11':estAttenteDepot?'#888':estRetard?'#A32D2D':'#185FA5';
+    var statutBadge = d.statut==='paye'?'b-green':d.statut==='partiel'?'b-amber':estAttenteDepot?'b-gray':estRetard?'b-red':'b-blue';
+    var statutLabel = d.statut==='paye'?'&#x2714; Paye':d.statut==='partiel'?'Partiel':estAttenteDepot?'En attente de depot':estRetard?'En retard':'Pas encore echue';
+    var alerte = estRetard ? (d.delaiJours>60?'&#x1F534;':d.delaiJours>30?'&#x1F7E1;':'') : '';
 
-    html += '<tr style="'+(d.statut!=='paye'&&d.delaiJours>60?'background:#FFF5F5':d.statut!=='paye'&&d.delaiJours>30?'background:#FFFBF0':'')+'">';
+    html += '<tr style="'+(estRetard&&d.delaiJours>60?'background:#FFF5F5':estRetard&&d.delaiJours>30?'background:#FFFBF0':'')+'">';
     html += '<td><div class="fw7">'+d.immat+'</div><div class="xs muted">'+d.marque+' '+d.modele+'</div></td>';
     html += '<td>'+d.client+'<div class="xs muted">'+d.entite+'</div></td>';
     html += '<td>'+tbadge(d.typeClient)+'</td>';
@@ -7292,52 +7329,31 @@ function creancesParClient(dossiers, enCoursNonFactures){
       .reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
   }
 
-  // Agréger par client
-  var clients = {};
+  // ── KPI globaux (exposition, reste a encaisser, delai moyen) — meme
+  // calcul qu'avant, sur TOUS les dossiers/en-cours, tous statuts confondus ──
+  var clientsKpi = {};
   dossiers.forEach(function(d){
     var key = d.client;
-    if(!clients[key]) clients[key]={
-      client:d.client, tel:d.tel, entite:d.entite,
-      typeClient:d.typeClient||'devis',
-      dossiers:[], enCours:[], totalEngage:0, totalFacture:0, totalPaye:0, totalReste:0
-    };
-    var c = clients[key];
-    c.dossiers.push(d);
-    c.totalEngage  += montantEngageDe(d);
-    c.totalFacture += d.montantFacture;
-    c.totalPaye    += d.montantPaye;
-    c.totalReste   += d.resteARecouvrir;
+    if(!clientsKpi[key]) clientsKpi[key] = {totalEngage:0, totalPaye:0, totalReste:0};
+    clientsKpi[key].totalEngage += montantEngageDe(d);
+    clientsKpi[key].totalPaye   += d.montantPaye;
+    clientsKpi[key].totalReste  += d.resteARecouvrir;
   });
-  // Ajouter les vehicules en cours (engage, pas encore facture) au meme client
   enCoursNonFactures.forEach(function(e){
     var key = e.client;
-    if(!clients[key]) clients[key]={
-      client:e.client, tel:e.tel, entite:e.entite,
-      typeClient:e.typeClient||'devis',
-      dossiers:[], enCours:[], totalEngage:0, totalFacture:0, totalPaye:0, totalReste:0
-    };
-    var c = clients[key];
-    c.enCours.push(e);
-    c.totalEngage += e.montantEngage;
+    if(!clientsKpi[key]) clientsKpi[key] = {totalEngage:0, totalPaye:0, totalReste:0};
+    clientsKpi[key].totalEngage += e.montantEngage;
   });
-
-  // Exposition = argent engage (depense reelle) non couvert par l'encaisse du client
-  Object.keys(clients).forEach(function(k){
-    var c = clients[k];
-    c.exposition = c.totalEngage - c.totalPaye;
-    if(c.exposition<0) c.exposition = 0;
+  var totalExpo=0, totalReste=0, clientsExposes=0;
+  Object.keys(clientsKpi).forEach(function(k){
+    var c = clientsKpi[k];
+    var expo = c.totalEngage - c.totalPaye; if(expo<0) expo=0;
+    totalExpo += expo;
+    totalReste += c.totalReste;
+    if(expo>0) clientsExposes++;
   });
-
-  var liste = Object.keys(clients).map(function(k){ return clients[k]; })
-    .filter(function(c){ return c.dossiers.length || c.enCours.length; })
-    .sort(function(a,b){ return b.exposition-a.exposition; });
-
-  var totalExpo = liste.reduce(function(s,c){return s+c.exposition;},0);
-  var totalReste = liste.reduce(function(s,c){return s+c.totalReste;},0);
-  var clientsExposes = liste.filter(function(c){return c.exposition>0;}).length;
   var delaiGlobal = (function(){
-    var tousPayes = [];
-    liste.forEach(function(c){ c.dossiers.forEach(function(d){ if(d.statut==='paye'&&d.datePaiement&&d.dateFacture) tousPayes.push(d); }); });
+    var tousPayes = dossiers.filter(function(d){return d.statut==='paye'&&d.datePaiement&&d.dateFacture;});
     if(!tousPayes.length) return '—';
     return (tousPayes.reduce(function(s,d){return s+Math.floor((d.datePaiement-d.dateFacture)/86400000);},0)/tousPayes.length).toFixed(0)+' j';
   })();
@@ -7350,121 +7366,96 @@ function creancesParClient(dossiers, enCoursNonFactures){
   html += kpi('Clients exposes', clientsExposes, clientsExposes>0?'amber':'green');
   html += '</div>';
 
-  html += '<div class="card"><div class="card-head">Exposition par client ('+liste.length+')</div>';
-  if(!liste.length){ html += '<div class="empty">Aucun client</div></div>'; return html; }
+  // ── Classification en 4 categories, regroupees par client dans chacune ──
+  // Non deposee : facture pas encore deposee (pas d'echeance encore).
+  // Retard : deposee, impayee, echeance depassee.
+  // Proche echeance : deposee, impayee, echeance dans les 3 prochains jours.
+  // Non echue : deposee, impayee, echeance dans plus de 3 jours.
+  // Les factures payees n'apparaissent dans aucune des 4 categories.
+  var TROIS_JOURS_MS = 3*86400000;
+  var maintenant = Date.now();
+  var buckets = { non_deposee:{}, retard:{}, proche_echeance:{}, non_echue:{} };
 
-  // ─── Étape 1 : liste compacte, une ligne par client ───
-  html += '<div class="tw"><table><thead><tr>';
-  html += '<th>Client</th><th>Engage</th><th>Facture</th><th>Encaisse</th><th>Reste a encaisser</th><th>Exposition</th><th></th>';
-  html += '</tr></thead><tbody>';
+  dossiers.forEach(function(d){
+    if(d.statut==='paye') return;
+    if(d.resteARecouvrir<=0) return;
+    var cat;
+    if(!d.factureDeposee) cat = 'non_deposee';
+    else if(d.enRetard) cat = 'retard';
+    else if(d.dateEcheance && (d.dateEcheance-maintenant)<=TROIS_JOURS_MS) cat = 'proche_echeance';
+    else cat = 'non_echue';
 
-  liste.forEach(function(c){
-    var expanded = !!creancesClientExpand[c.client];
-    var nbVeh = c.dossiers.length + c.enCours.length;
-    var rowBg = c.exposition>0 ? 'background:#FCEBEB' : '';
-
-    html += '<tr style="'+rowBg+';cursor:pointer" data-ccexp="'+encodeURIComponent(c.client)+'" onclick="toggleCreancesClientExpandByEl(this)">';
-    html += '<td><strong>'+(expanded?'&#9662; ':'&#9656; ')+c.client+'</strong> <span class="xs muted">'+nbVeh+' vehicule(s) &middot; '+c.entite+'</span></td>';
-    html += '<td style="font-family:monospace">'+(c.totalEngage?c.totalEngage.toLocaleString('fr-FR'):'—')+'</td>';
-    html += '<td style="font-family:monospace">'+(c.totalFacture?c.totalFacture.toLocaleString('fr-FR'):'—')+'</td>';
-    html += '<td style="font-family:monospace;color:#3B6D11">'+(c.totalPaye?c.totalPaye.toLocaleString('fr-FR'):'0')+'</td>';
-    html += '<td style="font-family:monospace;font-weight:700;color:'+(c.totalReste>0?'#A32D2D':'#3B6D11')+'">'+c.totalReste.toLocaleString('fr-FR')+'</td>';
-    html += '<td style="font-family:monospace;font-weight:700;color:'+(c.exposition>0?'#A32D2D':'#3B6D11')+'">'+c.exposition.toLocaleString('fr-FR')+'</td>';
-    html += '<td><button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-export-client="'+encodeURIComponent(c.client)+'" onclick="event.stopPropagation();exporterFacturesClientExcelByEl(this)" title="Exporter les factures en Excel">&#x1F4E5;</button></td>';
-    html += '</tr>';
-
-    // ─── Étape 2 : détail du client, affiché seulement si déplié ───
-    if(expanded){
-      html += '<tr><td colspan="7" style="padding:0;background:#faf9f7">';
-      html += '<div style="padding:10px 16px 14px 32px">';
-
-      var nbPayes   = c.dossiers.filter(function(d){return d.statut==='paye';}).length;
-      var nbPartiel = c.dossiers.filter(function(d){return d.statut==='partiel';}).length;
-      var nbAttente = c.dossiers.filter(function(d){return d.statut==='en_attente';}).length;
-      var nbEnCours = c.enCours.length;
-      var payesAvecDate = c.dossiers.filter(function(d){return d.statut==='paye'&&d.datePaiement&&d.dateFacture;});
-      var delaiMoyenClient = payesAvecDate.length
-        ? (payesAvecDate.reduce(function(s,d){return s+Math.floor((d.datePaiement-d.dateFacture)/86400000);},0)/payesAvecDate.length).toFixed(0)+' j'
-        : '—';
-
-      html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">';
-      html += '<div>';
-      html += '<div class="xs muted">'+c.tel+'</div>';
-      html += '<div style="margin-top:3px">'+tbadge(c.typeClient)+'</div>';
-      html += '<div class="xs muted" style="margin-top:2px">Delai moyen de paiement : <strong style="color:#185FA5">'+delaiMoyenClient+'</strong></div>';
-      html += '<div style="margin-top:4px;display:flex;gap:8px;flex-wrap:wrap">';
-      if(nbEnCours)  html += '<span class="badge b-blue" style="font-size:9px">'+nbEnCours+' en cours</span>';
-      if(nbPayes)    html += '<span class="badge b-green" style="font-size:9px">'+nbPayes+' paye(s)</span>';
-      if(nbPartiel)  html += '<span class="badge b-amber" style="font-size:9px">'+nbPartiel+' partiel(s)</span>';
-      if(nbAttente)  html += '<span class="badge b-red" style="font-size:9px">'+nbAttente+' en attente</span>';
-      html += '</div></div></div>';
-
-      html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:#888">';
-      html += '<th style="text-align:left;padding:3px 8px">Vehicule</th>';
-      html += '<th style="text-align:left;padding:3px 8px">N&deg; Facture</th>';
-      html += '<th style="padding:3px 8px">Engage</th>';
-      html += '<th style="padding:3px 8px">Facture</th>';
-      html += '<th style="padding:3px 8px">Encaisse</th>';
-      html += '<th style="padding:3px 8px">Reste a encaisser</th>';
-      html += '<th style="padding:3px 8px">Exposition</th>';
-      html += '<th style="padding:3px 8px"></th>';
-      html += '</tr></thead><tbody>';
-      c.dossiers.forEach(function(d){
-        var sb = d.statut==='paye'?'b-green':d.statut==='partiel'?'b-amber':'b-red';
-        var sl = d.statut==='paye'?'Paye':d.statut==='partiel'?'Partiel':'En attente';
-        var engage = montantEngageDe(d);
-        var expoLigne = engage - d.montantPaye; if(expoLigne<0) expoLigne=0;
-        var vOrig = vehicles.find(function(x){return x.id===d.id;});
-        var numFact = vOrig ? (vOrig.numeroFactureExterne||'') : '';
-        var numSec = vOrig ? (vOrig.numeroSecondaire||'') : '';
-        var estEntreprise = (d.entite||'').toLowerCase()!=='particulier';
-        var numFactCell;
-        if(numFact){
-          numFactCell = '<span style="font-family:monospace">'+numFact+'</span>'+(numSec?' <span class="xs muted">/ '+numSec+'</span>':'');
-        } else if(estEntreprise && !d.isForfaitFacture){
-          numFactCell = '<span class="badge b-red" style="font-size:9px">&#9888; Manquant</span>';
-        } else {
-          numFactCell = '<span class="xs muted">—</span>';
-        }
-        // Depot de la facture : distinct du statut de paiement. Se base sur
-        // le statut de workflow du vehicule (facture_deposee/dossier_cloture
-        // = deposee ; tout le reste = pas encore deposee physiquement).
-        var estDeposee = d.isForfaitFacture || d.status==='facture_deposee' || d.status==='dossier_cloture';
-        var depotBadge = estDeposee
-          ? '<span class="badge b-blue" style="font-size:9px">&#x2714; Deposee</span>'
-          : '<span class="badge b-gray" style="font-size:9px">&#9888; Non deposee</span>';
-        html += '<tr style="border-top:1px solid #f0ede8">';
-        html += '<td style="padding:4px 8px"><strong>'+d.immat+'</strong> '+d.marque+' '+d.modele+' <span class="badge '+sb+'" style="font-size:9px;margin-left:4px">'+sl+' &middot; '+d.delaiJours+'j</span> '+depotBadge+'</td>';
-        if(d.isForfaitFacture){
-          html += '<td style="padding:4px 8px"><span class="xs muted">—</span></td>';
-        } else {
-          html += '<td style="padding:4px 8px">'+numFactCell+' <button class="btn btn-sm" style="font-size:9px;padding:1px 5px" data-vid="'+d.id+'" onclick="event.stopPropagation();ouvrirNumerosFactureByEl(this)">&#x270F;</button></td>';
-        }
-        html += '<td style="padding:4px 8px;font-family:monospace">'+(engage?engage.toLocaleString('fr-FR'):'—')+'</td>';
-        html += '<td style="padding:4px 8px;font-family:monospace">'+d.montantFacture.toLocaleString('fr-FR')+'</td>';
-        html += '<td style="padding:4px 8px;font-family:monospace;color:#3B6D11">'+(d.montantPaye?d.montantPaye.toLocaleString('fr-FR'):'0')+'</td>';
-        html += '<td style="padding:4px 8px;font-family:monospace;font-weight:700;color:'+(d.resteARecouvrir>0?'#A32D2D':'#3B6D11')+'">'+d.resteARecouvrir.toLocaleString('fr-FR')+'</td>';
-        html += '<td style="padding:4px 8px;font-family:monospace;font-weight:700;color:'+(expoLigne>0?'#A32D2D':'#3B6D11')+'">'+expoLigne.toLocaleString('fr-FR')+'</td>';
-        html += '<td style="padding:4px 8px"><button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 6px" data-vid="'+d.id+'" onclick="event.stopPropagation();ouvrirSaisiePaiement(this)">&#x1F4B5;</button> <button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-vid="'+d.id+'" onclick="event.stopPropagation();imprimerFactureById(this)" title="Imprimer / PDF">&#x1F5A8;</button></td>';
-        html += '</tr>';
-      });
-      c.enCours.forEach(function(e){
-        html += '<tr style="border-top:1px solid #f0ede8">';
-        html += '<td style="padding:4px 8px"><strong>'+e.immat+'</strong> '+e.marque+' '+e.modele+' <span class="badge b-blue" style="font-size:9px;margin-left:4px">En cours</span></td>';
-        html += '<td style="padding:4px 8px;font-family:monospace;color:#A32D2D">'+e.montantEngage.toLocaleString('fr-FR')+'</td>';
-        html += '<td style="padding:4px 8px;font-family:monospace;color:#ccc">—</td>';
-        html += '<td style="padding:4px 8px;font-family:monospace;color:#999">0</td>';
-        html += '<td style="padding:4px 8px;font-family:monospace;color:#ccc">—</td>';
-        html += '<td style="padding:4px 8px;font-family:monospace;font-weight:700;color:#A32D2D">'+e.montantEngage.toLocaleString('fr-FR')+'</td>';
-        html += '<td style="padding:4px 8px"><button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-vid="'+e.id+'" onclick="event.stopPropagation();openDetById(this)">&#x1F441;</button></td>';
-        html += '</tr>';
-      });
-      html += '</tbody></table>';
-      html += '</div></td></tr>';
-    }
+    if(!buckets[cat][d.client]) buckets[cat][d.client] = {client:d.client, tel:d.tel, entite:d.entite, factures:[], total:0};
+    buckets[cat][d.client].factures.push(d);
+    buckets[cat][d.client].total += d.resteARecouvrir;
   });
 
-  html += '</tbody></table></div></div>';
+  var sections = [
+    {key:'non_deposee',     titre:'Factures non deposees',        couleur:'#5a5956', bg:'#f5f4f1'},
+    {key:'retard',          titre:'Factures en retard',           couleur:'#A32D2D', bg:'#FCEBEB'},
+    {key:'proche_echeance', titre:'Arrivent a echeance (3 jours)', couleur:'#854F0B', bg:'#FDF3E3'},
+    {key:'non_echue',       titre:'Non echues',                   couleur:'#185FA5', bg:'#EAF1FA'}
+  ];
+
+  sections.forEach(function(sec){
+    var clientsListe = Object.keys(buckets[sec.key]).map(function(k){return buckets[sec.key][k];})
+      .sort(function(a,b){return b.total-a.total;});
+    var totalSection = clientsListe.reduce(function(s,c){return s+c.total;},0);
+
+    html += '<div class="card" style="margin-bottom:16px">';
+    html += '<div class="card-head" style="background:'+sec.bg+';color:'+sec.couleur+'">'+sec.titre
+      + ' <span class="badge" style="background:'+sec.couleur+';color:#fff">'+clientsListe.length+' client'+(clientsListe.length>1?'s':'')+' &middot; '+totalSection.toLocaleString('fr-FR')+' FCFA</span></div>';
+
+    if(!clientsListe.length){
+      html += '<div class="empty">Aucune facture dans cette categorie.</div></div>';
+      return;
+    }
+
+    html += '<div class="tw"><table><thead><tr>';
+    html += '<th>Client</th><th>Vehicule</th><th style="text-align:right">Montant</th><th></th>';
+    html += '</tr></thead><tbody>';
+
+    clientsListe.forEach(function(c){
+      if(c.factures.length===1){
+        // Un seul dossier dans cette categorie pour ce client : on
+        // affiche directement la facture, sans ligne de regroupement.
+        var d = c.factures[0];
+        html += '<tr>';
+        html += '<td><strong>'+c.client+'</strong></td>';
+        html += '<td class="xs">'+(d.isForfaitFacture?'Forfait':d.immat+' '+(d.marque||'')+' '+(d.modele||''))+'</td>';
+        html += '<td style="text-align:right;font-family:monospace;font-weight:700;color:'+sec.couleur+'">'+d.resteARecouvrir.toLocaleString('fr-FR')+'</td>';
+        html += '<td>'+(d.isForfaitFacture?'':'<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-vid="'+d.id+'" onclick="openDetById(this)">&#x1F441;</button>')+'</td>';
+        html += '</tr>';
+      } else {
+        // Plusieurs dossiers : ligne agregee, cliquable pour deplier le detail.
+        var expandKey = sec.key+'::'+c.client;
+        var expanded = !!creancesClientExpand[expandKey];
+        html += '<tr style="cursor:pointer" data-ccexp="'+encodeURIComponent(expandKey)+'" onclick="toggleCreancesClientExpandByEl(this)">';
+        html += '<td><strong>'+(expanded?'&#9662; ':'&#9656; ')+c.client+'</strong></td>';
+        html += '<td class="xs muted">'+c.factures.length+' factures</td>';
+        html += '<td style="text-align:right;font-family:monospace;font-weight:700;color:'+sec.couleur+'">'+c.total.toLocaleString('fr-FR')+'</td>';
+        html += '<td></td>';
+        html += '</tr>';
+
+        if(expanded){
+          html += '<tr><td colspan="4" style="padding:0;background:'+sec.bg+'">';
+          html += '<div style="padding:8px 16px 10px 32px">';
+          html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>';
+          c.factures.forEach(function(d){
+            html += '<tr style="border-top:1px solid rgba(0,0,0,0.06)">';
+            html += '<td style="padding:4px 8px">'+(d.isForfaitFacture?'Forfait':'<strong>'+d.immat+'</strong> '+(d.marque||'')+' '+(d.modele||''))+'</td>';
+            html += '<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:700">'+d.resteARecouvrir.toLocaleString('fr-FR')+'</td>';
+            html += '<td style="padding:4px 8px;text-align:right">'+(d.isForfaitFacture?'':'<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-vid="'+d.id+'" onclick="event.stopPropagation();openDetById(this)">&#x1F441;</button>')+'</td>';
+            html += '</tr>';
+          });
+          html += '</tbody></table></div></td></tr>';
+        }
+      }
+    });
+
+    html += '</tbody></table></div></div>';
+  });
+
   return html;
 }
 
@@ -8814,23 +8805,37 @@ function collecterEncaissementsAttendus(){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
     var montantFacture = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
     if(!montantFacture) return;
+    // Un dossier n'est vraiment "en attente de paiement" qu'une fois
+    // livre (LIV_ST : livre/facture_deposee/dossier_cloture) — avant
+    // cela (diagnostic, attente validation client, travaux...), il n'y
+    // a rien a encaisser, meme si un chiffrage existe deja.
+    if(LIV_ST.indexOf(v.status)<0) return;
     var montantPaye = parseFloat(v.montantPaye)||0;
     var reste = montantFacture - montantPaye;
     if(reste<=0) return;
-    var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
+    // Le decompte du delai de paiement ne demarre QUE si la facture a
+    // reellement ete deposee (factureDeposeeLe renseigne) — un vehicule
+    // simplement "Livre" (facture pas encore deposee) apparait dans la
+    // liste mais sans echeance/compte a rebours, marque en attente.
+    var factureDeposee = !!v.factureDeposeeLe;
+    var dateFacture = v.factureDeposeeLe || 0;
     var regle = delaiEcheanceClient(v);
-    var dateEcheance;
-    if(regle.mode==='fin_mois'){
-      var d = dateFacture ? new Date(dateFacture) : new Date();
-      dateEcheance = new Date(d.getFullYear(), d.getMonth()+1, 0, 23,59,59).getTime();
-    } else if(regle.mode==='delai'){
-      dateEcheance = dateFacture ? dateFacture + regle.jours*86400000 : 0;
-    } else { // livraison : deja livre => echeance = date de facturation (du immediatement)
-      dateEcheance = dateFacture;
+    var dateEcheance = 0;
+    if(factureDeposee){
+      if(regle.mode==='fin_mois'){
+        var d = new Date(dateFacture);
+        dateEcheance = new Date(d.getFullYear(), d.getMonth()+1, 0, 23,59,59).getTime();
+      } else if(regle.mode==='delai'){
+        dateEcheance = dateFacture + regle.jours*86400000;
+      } else { // livraison : deja livre => echeance = date de facturation (du immediatement)
+        dateEcheance = dateFacture;
+      }
     }
     items.push({
       nom:v.client, immat:v.immat, marque:v.marque, modele:v.modele,
-      montant:reste, dateEcheance:dateEcheance, enRetard:(dateEcheance>0 && dateEcheance<maintenant),
+      montant:reste, dateEcheance:dateEcheance,
+      enRetard:(factureDeposee && dateEcheance>0 && dateEcheance<maintenant),
+      factureDeposee:factureDeposee,
       categorieClient:'devis', vid:v.id, periodeKey:null
     });
   });
