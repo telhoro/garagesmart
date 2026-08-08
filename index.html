@@ -6594,12 +6594,15 @@ function pageFacturation(){
   html += '<button class="btn'+(facturationOnglet==='devis'?' btn-primary':'')+'" data-fo="devis" onclick="setFacturationOngletByEl(this)">Devis</button>';
   html += '<button class="btn'+(facturationOnglet==='forfait'?' btn-primary':'')+'" data-fo="forfait" onclick="setFacturationOngletByEl(this)">Forfaits</button>';
   html += '<button class="btn'+(facturationOnglet==='echeances'?' btn-primary':'')+'" data-fo="echeances" onclick="setFacturationOngletByEl(this)">Echeances</button>';
+  html += '<button class="btn'+(facturationOnglet==='exposition'?' btn-primary':'')+'" data-fo="exposition" onclick="setFacturationOngletByEl(this)">&#x1F4C9; Exposition financiere</button>';
   html += '</div>';
 
   if(facturationOnglet==='forfait'){
     html += pageFacturationForfait();
   } else if(facturationOnglet==='echeances'){
     html += pageFacturationEcheances();
+  } else if(facturationOnglet==='exposition'){
+    html += pageExpositionFinanciere();
   } else {
     html += pageCreances();
   }
@@ -7786,6 +7789,215 @@ function rendreQuatreTableauxParClient(dossiers, prefixeExpand, titreNonDeposee)
 // ============================================================
 var forfaitMois = new Date().getMonth();   // mois affiché (0-11)
 var forfaitAnnee = new Date().getFullYear();
+
+// ── Exposition financiere : ressources (cout d'achat des pieces) engagees
+// par le garage pour realiser les travaux d'un client, non encore
+// couvertes par un paiement — regroupees par client, avec le delai moyen
+// historique de reglement de ce client et le temps d'exposition de
+// chaque dossier (jours ecoules depuis l'engagement des ressources).
+// ── Exposition financiere : ressources (cout d'achat des pieces) engagees
+// par le garage pour realiser les travaux d'un client, non encore
+// couvertes par un paiement — regroupees par client, avec le delai moyen
+// historique de reglement de ce client et le temps d'exposition de
+// chaque dossier (jours ecoules depuis l'engagement des ressources).
+function delaiMoyenReglementClient(client){
+  var delais = [];
+  vehicles.filter(function(v){return v.client===client && v.chiffrage && v.chiffrage.lignes;}).forEach(function(v){
+    if(v.paiementDate && v.factureDeposeeLe){
+      delais.push(Math.floor((v.paiementDate - v.factureDeposeeLe)/86400000));
+    }
+  });
+  FORFAIT_FACTURES.filter(function(f){return f.client===client && f.statut==='payee' && f.paiementDate && f.deposeeDate;}).forEach(function(f){
+    delais.push(Math.floor((f.paiementDate - f.deposeeDate)/86400000));
+  });
+  if(!delais.length) return null;
+  return Math.round(delais.reduce(function(s,d){return s+d;},0)/delais.length);
+}
+
+// Collecte le detail complet, par dossier, avec toutes les colonnes
+// demandees (dates, montants, marge, exposition), differenciees devis vs
+// forfait, plus le total engage global (cout d'achat, tous dossiers
+// actuellement exposes confondus).
+function collecterExpositionFinanciere(){
+  var maintenant = Date.now();
+  var buckets = {};
+  var totalEngageGlobal = 0;
+
+  vehicles.filter(function(v){return v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;}).forEach(function(v){
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    var montantEngage = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
+    if(!montantEngage) return;
+    var montantPaye = parseFloat(v.montantPaye)||0;
+    var montantExpose = Math.max(0, montantEngage - montantPaye);
+    if(montantExpose<=0) return; // couvert, plus expose
+
+    totalEngageGlobal += montantEngage;
+
+    var dateOuverture = v.entree || 0;
+    var dateEngagement = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || maintenant;
+    var joursExposition = Math.floor((maintenant-dateEngagement)/86400000);
+    var estForfait = v.typeClient==='forfait';
+
+    // Devis : montant facture = somme des prix de vente du chiffrage.
+    // Forfait : "Facturation" = montant du forfait INDIVIDUEL de CE
+    // vehicule (v.forfaitMensuel) s'il est renseigne, sinon laisse vide —
+    // la marge previsionnelle suit la meme regle (vide si pas de forfait
+    // renseigne pour ce vehicule precis, pour ne pas fausser le total).
+    var montantFacture, margePrevisionnelle;
+    if(estForfait){
+      var forfaitVehicule = parseFloat(v.forfaitMensuel)||0;
+      montantFacture = forfaitVehicule>0 ? forfaitVehicule : null;
+      margePrevisionnelle = forfaitVehicule>0 ? forfaitVehicule-montantEngage : null;
+    } else {
+      montantFacture = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+      margePrevisionnelle = montantFacture - montantEngage;
+    }
+
+    if(!buckets[v.client]) buckets[v.client] = {client:v.client, type: estForfait?'forfait':'devis', dossiers:[], totalExpose:0, totalFacture:0, totalMarge:0};
+    buckets[v.client].dossiers.push({
+      id:v.id, immat:v.immat, marque:v.marque, modele:v.modele, entite:v.entite,
+      dateOuverture:dateOuverture, montantFacture:montantFacture, montantEngage:montantEngage,
+      montantPaye:montantPaye, montantExpose:montantExpose, margePrevisionnelle:margePrevisionnelle,
+      joursExposition:joursExposition
+    });
+    buckets[v.client].totalExpose += montantExpose;
+    if(montantFacture!==null) buckets[v.client].totalFacture += montantFacture;
+    if(margePrevisionnelle!==null) buckets[v.client].totalMarge += margePrevisionnelle;
+  });
+
+  Object.keys(buckets).forEach(function(client){
+    buckets[client].delaiMoyenReglement = delaiMoyenReglementClient(client);
+    buckets[client].dossiers.sort(function(a,b){return b.montantExpose-a.montantExpose;});
+  });
+
+  return {buckets:buckets, totalEngageGlobal:totalEngageGlobal};
+}
+
+function pageExpositionFinanciere(){
+  var collecte = collecterExpositionFinanciere();
+  var buckets = collecte.buckets;
+  var clientsListe = Object.keys(buckets).map(function(k){return buckets[k];}).sort(function(a,b){return b.totalExpose-a.totalExpose;});
+  var totalExposeGlobal = clientsListe.reduce(function(s,c){return s+c.totalExpose;},0);
+
+  var html = '<div class="kgrid k4" style="margin-bottom:16px">';
+  html += kpi('Total engage en cours', collecte.totalEngageGlobal?collecte.totalEngageGlobal.toLocaleString('fr-FR')+' FCFA':'—', 'blue');
+  html += kpi('Total expose (non couvert)', totalExposeGlobal?totalExposeGlobal.toLocaleString('fr-FR')+' FCFA':'—', totalExposeGlobal>0?'red':'green');
+  html += kpi('Clients exposes', clientsListe.length, clientsListe.length>0?'amber':'green');
+  html += kpi('Total dossiers exposes', clientsListe.reduce(function(s,c){return s+c.dossiers.length;},0), '');
+  html += '</div>';
+
+  html += '<div class="info-box" style="margin-bottom:16px">"Engage" = cout d\'achat des pieces utilisees pour les travaux du client. "Expose" = part de ce cout non encore couverte par un paiement du client. La marge previsionnelle et le montant facture restent vides pour un vehicule forfait sans montant individuel renseigne.</div>';
+
+  if(!clientsListe.length){
+    html += '<div class="card"><div class="empty">Aucune exposition financiere actuellement — toutes les ressources engagees sont couvertes.</div></div>';
+    return html;
+  }
+
+  html += '<div class="card"><div class="tw"><table><thead><tr>';
+  html += '<th>Client</th><th>Type</th><th style="text-align:right">Facturation</th><th style="text-align:right">Expose</th><th style="text-align:right">Marge previs.</th><th style="text-align:right">% Marge</th><th>Delai moyen</th><th></th>';
+  html += '</tr></thead><tbody>';
+
+  clientsListe.forEach(function(c){
+    var delaiTxt = c.delaiMoyenReglement!==null ? c.delaiMoyenReglement+' j' : '—';
+    var typeBadge = c.type==='forfait' ? '<span class="badge b-purple">Forfait</span>' : '<span class="badge b-blue">Devis</span>';
+
+    if(c.dossiers.length===1){
+      // Une seule facture exposee pour ce client : affichage direct avec
+      // TOUTES les colonnes detaillees demandees (pas de ligne agregee).
+      // Pour un client forfait, la colonne Facturation reprend TOUJOURS
+      // le montant mensuel TOTAL du client (tous ses vehicules forfait
+      // confondus), pas seulement le forfait individuel du vehicule
+      // actuellement expose — coherent avec la ligne agregee.
+      var d = c.dossiers[0];
+      var dateOuvTxt = d.dateOuverture ? new Date(d.dateOuverture).toLocaleDateString('fr-FR') : '—';
+      var factureAffichee = c.type==='forfait' ? forfaitMensuelEffectifClient(c.client) : d.montantFacture;
+      var factureTxt = factureAffichee ? factureAffichee.toLocaleString('fr-FR') : '—';
+      var margeTxt = d.margePrevisionnelle!==null ? d.margePrevisionnelle.toLocaleString('fr-FR') : '—';
+      var pctMarge = (d.margePrevisionnelle!==null && factureAffichee>0) ? (d.margePrevisionnelle/factureAffichee*100) : null;
+      var pctMargeTxt = pctMarge!==null ? pctMarge.toFixed(1)+'%' : '—';
+      html += '<tr>';
+      html += '<td><strong>'+c.client+'</strong></td>';
+      html += '<td>'+typeBadge+'</td>';
+      html += '<td style="text-align:right;font-weight:700">'+factureTxt+'</td>';
+      html += '<td style="text-align:right;font-weight:700;color:#A32D2D">'+d.montantExpose.toLocaleString('fr-FR')+'</td>';
+      html += '<td style="text-align:right">'+margeTxt+'</td>';
+      html += '<td style="text-align:right">'+pctMargeTxt+'</td>';
+      html += '<td class="xs">'+delaiTxt+'</td>';
+      html += '<td></td>';
+      html += '</tr>';
+      html += '<tr style="background:#faf9f7"><td colspan="8" style="padding:6px 10px 10px 24px" class="xs muted">';
+      html += (c.type==='forfait' ? d.immat+' '+(d.marque||'')+' '+(d.modele||'') : (d.entite||'')+' — '+d.immat+' '+(d.marque||'')+' '+(d.modele||''));
+      html += ' &middot; Ouvert le '+dateOuvTxt;
+      html += ' &middot; Avance client : '+d.montantPaye.toLocaleString('fr-FR')+' FCFA';
+      html += ' &middot; Expose depuis '+d.joursExposition+' j';
+      html += '</td></tr>';
+    } else {
+      // Plusieurs dossiers exposes : ligne agregee (montant mensuel du
+      // forfait / total facture selon le type, total expose, marge
+      // previsionnelle totale, delai moyen), detail au clic.
+      var expandKey = 'expo::'+c.client;
+      var expanded = !!creancesClientExpand[expandKey];
+      var factureAggTxt = c.type==='forfait'
+        ? (forfaitMensuelEffectifClient(c.client)>0 ? forfaitMensuelEffectifClient(c.client).toLocaleString('fr-FR') : '—')
+        : (c.totalFacture ? c.totalFacture.toLocaleString('fr-FR') : '—');
+      var margeAggTxt = c.totalMarge ? c.totalMarge.toLocaleString('fr-FR') : '—';
+      var factureAggValeur = c.type==='forfait' ? forfaitMensuelEffectifClient(c.client) : c.totalFacture;
+      var pctMargeAgg = (c.totalMarge && factureAggValeur>0) ? (c.totalMarge/factureAggValeur*100) : null;
+      var pctMargeAggTxt = pctMargeAgg!==null ? pctMargeAgg.toFixed(1)+'%' : '—';
+
+      html += '<tr style="cursor:pointer" data-ccexp="'+encodeURIComponent(expandKey)+'" onclick="toggleCreancesClientExpandByEl(this)">';
+      html += '<td><strong>'+(expanded?'&#9662; ':'&#9656; ')+c.client+'</strong></td>';
+      html += '<td>'+typeBadge+'</td>';
+      html += '<td style="text-align:right;font-weight:700">'+factureAggTxt+'</td>';
+      html += '<td style="text-align:right;font-weight:700;color:#A32D2D">'+c.totalExpose.toLocaleString('fr-FR')+'</td>';
+      html += '<td style="text-align:right">'+margeAggTxt+'</td>';
+      html += '<td style="text-align:right">'+pctMargeAggTxt+'</td>';
+      html += '<td class="xs">'+delaiTxt+'</td>';
+      html += '<td class="xs muted">'+c.dossiers.length+' dossiers</td>';
+      html += '</tr>';
+
+      if(expanded){
+        html += '<tr><td colspan="8" style="padding:0;background:#FCEBEB">';
+        html += '<div style="padding:8px 16px 10px 24px">';
+        html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>';
+        if(c.type==='forfait'){
+          html += '<th style="padding:4px 8px;text-align:left">Vehicule</th><th style="padding:4px 8px;text-align:left">Ouvert le</th><th style="padding:4px 8px;text-align:right">Facturation</th><th style="padding:4px 8px;text-align:right">Marge previs.</th><th style="padding:4px 8px;text-align:right">Expose</th><th style="padding:4px 8px;text-align:right">Jours</th>';
+        } else {
+          html += '<th style="padding:4px 8px;text-align:left">Ouvert le</th><th style="padding:4px 8px;text-align:left">Vehicule</th><th style="padding:4px 8px;text-align:left">Type</th><th style="padding:4px 8px;text-align:right">Facture</th><th style="padding:4px 8px;text-align:right">Marge previs.</th><th style="padding:4px 8px;text-align:right">Avance client</th><th style="padding:4px 8px;text-align:right">Expose</th><th style="padding:4px 8px;text-align:right">Jours</th>';
+        }
+        html += '</tr></thead><tbody>';
+        c.dossiers.forEach(function(d){
+          var dateOuvTxt = d.dateOuverture ? new Date(d.dateOuverture).toLocaleDateString('fr-FR') : '—';
+          var factureTxt = d.montantFacture!==null ? d.montantFacture.toLocaleString('fr-FR') : '—';
+          var margeTxt = d.margePrevisionnelle!==null ? d.margePrevisionnelle.toLocaleString('fr-FR') : '—';
+          html += '<tr style="border-top:1px solid rgba(0,0,0,0.06)">';
+          if(c.type==='forfait'){
+            html += '<td style="padding:4px 8px">'+d.immat+' '+(d.marque||'')+' '+(d.modele||'')+'</td>';
+            html += '<td style="padding:4px 8px">'+dateOuvTxt+'</td>';
+            html += '<td style="padding:4px 8px;text-align:right">'+factureTxt+'</td>';
+            html += '<td style="padding:4px 8px;text-align:right">'+margeTxt+'</td>';
+            html += '<td style="padding:4px 8px;text-align:right;font-weight:700;color:#A32D2D">'+d.montantExpose.toLocaleString('fr-FR')+'</td>';
+            html += '<td style="padding:4px 8px;text-align:right">'+d.joursExposition+'</td>';
+          } else {
+            html += '<td style="padding:4px 8px">'+dateOuvTxt+'</td>';
+            html += '<td style="padding:4px 8px">'+d.immat+' '+(d.marque||'')+' '+(d.modele||'')+'</td>';
+            html += '<td style="padding:4px 8px">'+(d.entite||'—')+'</td>';
+            html += '<td style="padding:4px 8px;text-align:right">'+factureTxt+'</td>';
+            html += '<td style="padding:4px 8px;text-align:right">'+margeTxt+'</td>';
+            html += '<td style="padding:4px 8px;text-align:right">'+d.montantPaye.toLocaleString('fr-FR')+'</td>';
+            html += '<td style="padding:4px 8px;text-align:right;font-weight:700;color:#A32D2D">'+d.montantExpose.toLocaleString('fr-FR')+'</td>';
+            html += '<td style="padding:4px 8px;text-align:right">'+d.joursExposition+'</td>';
+          }
+          html += '</tr>';
+        });
+        html += '</tbody></table></div></td></tr>';
+      }
+    }
+  });
+
+  html += '</tbody></table></div></div>';
+  return html;
+}
 
 function pageFacturationForfait(){
   var moisLabel = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
