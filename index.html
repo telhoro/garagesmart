@@ -6532,7 +6532,8 @@ function pageFacturationEcheances(){
   var totalEcheanceProche = encaissements.filter(function(e){return !e.enRetard && e.dateEcheance<=dans3Jours;}).reduce(function(s,i){return s+i.montant;},0);
   var totalNonEchues = encaissements.filter(function(e){return !e.enRetard && e.dateEcheance>dans3Jours;}).reduce(function(s,i){return s+i.montant;},0);
 
-  var html = '<div class="kgrid k4" style="margin-bottom:16px">';
+  var html = htmlBarreRechercheClientFacturation();
+  html += '<div class="kgrid k4" style="margin-bottom:16px">';
   html += kpi('Non deposees', totalNonDeposees?totalNonDeposees.toLocaleString('fr-FR')+' FCFA':'—', totalNonDeposees>0?'amber':'green');
   html += kpi('En retard', totalEnRetard?totalEnRetard.toLocaleString('fr-FR')+' FCFA':'—', totalEnRetard>0?'red':'green');
   html += kpi('Arrivent a echeance (3j)', totalEcheanceProche?totalEcheanceProche.toLocaleString('fr-FR')+' FCFA':'—', totalEcheanceProche>0?'amber':'green');
@@ -6540,6 +6541,7 @@ function pageFacturationEcheances(){
   html += '</div>';
 
   html += rendreQuatreTableauxParClient(dossiersUnifies, 'echeances');
+  html += htmlModalStatutFacturesClient();
   return html;
 }
 
@@ -6722,6 +6724,7 @@ function pageCreances(){
   })();
 
   var html = '';
+  html += htmlBarreRechercheClientFacturation();
 
   // KPI principaux
   html += '<div class="card" style="margin-bottom:16px;border:2px solid #A32D2D;padding:12px 16px">';
@@ -6759,9 +6762,9 @@ function pageCreances(){
   html += '</div></div>';
 
   // Tableau
-  if(creancesVue==='clients'){ html += creancesParClient(dossiers, enCoursNonFactures); return html; }
+  if(creancesVue==='clients'){ html += creancesParClient(dossiers, enCoursNonFactures); html += htmlModalStatutFacturesClient(); return html; }
   html += '<div class="card"><div class="card-head">Dossiers ('+filtres.length+')</div>';
-  if(!filtres.length){ html += '<div class="empty">Aucun dossier</div></div>'; return html; }
+  if(!filtres.length){ html += '<div class="empty">Aucun dossier</div></div>'; html += htmlModalStatutFacturesClient(); return html; }
   html += '<div class="tw"><table><thead><tr>';
   html += '<th>Vehicule</th><th>Client</th><th>Type</th><th>Montant facture</th><th>Paye</th><th>Reste</th><th>N&deg; Facture / Ref.</th><th>Date facture</th><th>Delai</th><th>Statut</th><th>Action</th>';
   html += '</tr></thead><tbody>';
@@ -6797,6 +6800,7 @@ function pageCreances(){
     html += '</tr>';
   });
   html += '</tbody></table></div></div>';
+  html += htmlModalStatutFacturesClient();
   return html;
 }
 
@@ -6900,8 +6904,14 @@ function ouvrirNumerosFactureForfaitByEl(btn){
   var v0 = vehicles.find(function(x){return x.client===f.client;});
   var estEntreprise = v0 ? ((v0.entite||'').toLowerCase()!=='particulier') : false;
   document.getElementById('numFactureRequisTag').textContent = estEntreprise ? '(recommande pour client entreprise)' : '';
-  // Les forfaits gardent toujours la regle fixe (echeance = fin de mois) : pas de delai personnalise ici.
-  document.getElementById('numFactureDelaiWrap').style.display = 'none';
+  // Le delai est desormais modifiable pour le forfait aussi : par defaut
+  // vide (regle fixe fin de mois), ou preremplit avec la valeur deja
+  // personnalisee si elle existe.
+  document.getElementById('numFactureDelaiWrap').style.display = '';
+  document.getElementById('numFactureDelai').value = typeof f.delaiPaiementPersonnalise==='number' ? f.delaiPaiementPersonnalise : '';
+  document.getElementById('numFactureDelaiHint').textContent = typeof f.delaiPaiementPersonnalise==='number'
+    ? 'Delai personnalise actuel : '+f.delaiPaiementPersonnalise+' jours apres depot'
+    : 'Par defaut : echeance = fin du mois de la periode facturee. Laissez vide pour garder cette regle.';
   document.getElementById('modalNumerosFacture').style.display = 'flex';
 }
 function closeNumerosFacture(){ document.getElementById('modalNumerosFacture').style.display='none'; }
@@ -6960,6 +6970,14 @@ function validerNumerosFacture(){
     if(conflit){ alert('Impossible d\'enregistrer : '+conflit+'.\nChaque numero doit etre unique et appartenir a un seul client.'); return; }
     f.numeroFactureExterne = numExterne;
     f.numeroSecondaire = numSecondaire;
+    var delaiSaisiForfait = parseInt(document.getElementById('numFactureDelai').value,10);
+    if(!isNaN(delaiSaisiForfait) && delaiSaisiForfait>=0){
+      f.delaiPaiementPersonnalise = delaiSaisiForfait;
+      // Retenu comme nouveau defaut pour TOUS les futurs mois de ce meme
+      // client, exactement comme pour les devis.
+      CLIENT_DELAIS_PAIEMENT[f.client] = delaiSaisiForfait;
+      saveClientDelaisPaiement();
+    }
     saveForfaitFactures();
   } else {
     var vid = document.getElementById('numFactureVid').value;
@@ -7281,12 +7299,41 @@ function toggleCreancesClientExpandByEl(el){
 // importe le tableau ou elle apparait : N° facture + reference
 // particuliere, delai/echeance, et les deux actions (Payer, Modifier).
 // Reutilisee par creancesParClient (4 tableaux) et la vue plate.
+var MOIS_LABEL_COURT_GLOBAL = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
+
+// Extrait un libelle lisible "Forfait <Mois> <Annee>" depuis un periodeKey
+// (format "YYYY-MM-client") — utilise partout ou une facture forfait est
+// affichee, pour que le mois concerne soit toujours precise (jamais juste
+// "Forfait" seul).
+function libelleMoisForfait(periodeKey){
+  if(!periodeKey) return 'Forfait';
+  var parts = periodeKey.split('-');
+  var annee = parts[0], moisIdx = parseInt(parts[1],10)-1;
+  if(!annee || isNaN(moisIdx) || moisIdx<0 || moisIdx>11) return 'Forfait';
+  return 'Forfait '+MOIS_LABEL_COURT_GLOBAL[moisIdx]+' '+annee;
+}
+
 function htmlCellulesFactureDetail(d){
   var h = '';
   if(d.isForfaitFacture){
-    h += '<td class="xs muted">—</td>';
-    h += '<td class="xs muted">Fin de mois</td>';
-    h += '<td><button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" data-montant="'+d.montantFacture+'" onclick="event.stopPropagation();payerFactureForfaitByEl(this)" title="Enregistrer paiement">&#x1F4B5;</button></td>';
+    var numFactCellF = d.numeroFactureExterne ? '<span style="font-family:monospace">'+d.numeroFactureExterne+'</span>' : '<span class="xs muted">—</span>';
+    var refCellF = d.numeroSecondaire ? '<span class="xs">'+d.numeroSecondaire+'</span>' : '<span class="xs muted">—</span>';
+    h += '<td class="xs">'+numFactCellF+'<br>'+refCellF+'</td>';
+
+    var delaiTxtF;
+    if(!d.factureDeposee) delaiTxtF = '<span class="xs muted">A emettre / a deposer</span>';
+    else if(d.dateEcheance) delaiTxtF = '<span class="xs" style="font-weight:600">'+new Date(d.dateEcheance).toLocaleDateString('fr-FR')+'</span>';
+    else delaiTxtF = '<span class="xs muted">—</span>';
+    h += '<td>'+delaiTxtF+'</td>';
+
+    h += '<td><div class="flex gap6">';
+    if(d.factureDeposee){
+      h += '<button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" data-montant="'+d.montantFacture+'" onclick="event.stopPropagation();payerFactureForfaitByEl(this)" title="Enregistrer paiement">&#x1F4B5;</button>';
+      h += '<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" onclick="event.stopPropagation();ouvrirNumerosFactureForfaitByEl(this)" title="Modifier N° facture / reference / delai">&#x270F;</button>';
+    }
+    h += '<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" onclick="event.stopPropagation();imprimerFactureForfaitByEl(this)" title="'+(d.factureDeposee?'Imprimer / PDF':'Imprimer un apercu / brouillon')+'">&#x1F5A8;</button>';
+    h += '<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" onclick="event.stopPropagation();exporterFactureForfaitExcelByEl(this)" title="Exporter cette facture en Excel">&#128202;</button>';
+    h += '</div></td>';
     return h;
   }
   var numFactCell;
@@ -7372,7 +7419,199 @@ function creancesParClient(dossiers, enCoursNonFactures){
 // actions). Reutilisable par plusieurs pages (Devis, Echeances) — chaque
 // appelant passe un prefixe distinct pour l'etat de depliage (evite toute
 // interference entre deux tableaux affichant le meme client).
-function rendreQuatreTableauxParClient(dossiers, prefixeExpand){
+// ── Barre de recherche client, reutilisable sur Devis/Forfait/Echeances ──
+// Permet de choisir un client et de voir le statut de toutes ses factures
+// NON totalement payees (devis + forfait), avec impression/export Excel
+// des factures deja deposees.
+function htmlBarreRechercheClientFacturation(){
+  var html = '<div class="card" style="padding:10px 14px;margin-bottom:16px;position:relative">';
+  html += '<input class="inp" id="rechercheClientFacturation" placeholder="Rechercher un client..." oninput="rechercherClientFacturation(this.value)" autocomplete="off">';
+  html += '<div id="rechercheClientFacturationResultats" style="position:absolute;left:14px;right:14px;top:44px;z-index:50"></div>';
+  html += '</div>';
+  return html;
+}
+
+function rechercherClientFacturation(texte){
+  var zone = document.getElementById('rechercheClientFacturationResultats');
+  if(!zone) return;
+  var q = texte.trim().toLowerCase();
+  if(q.length<2){ zone.innerHTML=''; return; }
+  var noms = {};
+  vehicles.forEach(function(v){ if(v.client && v.client.toLowerCase().indexOf(q)>=0) noms[v.client]=true; });
+  FORFAIT_FACTURES.forEach(function(f){ if(f.client && f.client.toLowerCase().indexOf(q)>=0) noms[f.client]=true; });
+  var resultats = Object.keys(noms).sort().slice(0,8);
+  if(!resultats.length){ zone.innerHTML = '<div class="card xs muted" style="padding:8px 12px">Aucun client trouve.</div>'; return; }
+  var html = '<div class="card" style="padding:4px;overflow:hidden">';
+  resultats.forEach(function(nom){
+    html += '<div style="padding:7px 10px;cursor:pointer;border-radius:6px" onmouseover="this.style.background=\'#f5f4f1\'" onmouseout="this.style.background=\'\'" onclick="ouvrirStatutFacturesClient(\''+nom.replace(/'/g,"\\'")+'\')">'+nom+'</div>';
+  });
+  html += '</div>';
+  zone.innerHTML = html;
+}
+
+// Collecte TOUTES les factures NON totalement payees d'un client (devis +
+// forfait) — les factures deja soldees ne sont pas presentees.
+function collecterToutesFacturesClient(client){
+  var factures = [];
+  vehicles.filter(function(v){return v.client===client && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;})
+    .forEach(function(v){
+      var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+      var montant = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+      if(!montant) return;
+      var montantPaye = parseFloat(v.montantPaye)||0;
+      var reste = montant - montantPaye;
+      if(reste<=0) return;
+      factures.push({
+        type:'devis', id:v.id, immat:v.immat, marque:v.marque, modele:v.modele,
+        montant:montant, montantPaye:montantPaye, reste:reste,
+        deposee:!!v.factureDeposeeLe, dateFacture:v.factureDeposeeLe||0,
+        numeroFactureExterne:v.numeroFactureExterne||'', numeroSecondaire:v.numeroSecondaire||''
+      });
+    });
+  FORFAIT_FACTURES.filter(function(f){return f.client===client;}).forEach(function(f){
+    var montantPaye = f.statut==='payee' ? f.montant : (f.montantPaye||0);
+    var reste = f.montant - montantPaye;
+    if(reste<=0) return;
+    factures.push({
+      type:'forfait', periodeKey:f.periodeKey,
+      montant:f.montant, montantPaye:montantPaye, reste:reste,
+      deposee: f.statut==='deposee', dateFacture:f.deposeeDate||f.emiseDate||0,
+      numeroFactureExterne:f.numeroFactureExterne||'', numeroSecondaire:f.numeroSecondaire||''
+    });
+  });
+  return factures;
+}
+
+function ouvrirStatutFacturesClient(client){
+  document.getElementById('rechercheClientFacturation').value = '';
+  document.getElementById('rechercheClientFacturationResultats').innerHTML = '';
+  var factures = collecterToutesFacturesClient(client);
+  var totalReste = factures.reduce(function(s,f){return s+f.reste;},0);
+
+  var html = '<div class="kgrid k2" style="margin-bottom:14px">';
+  html += kpi('Factures non soldees', factures.length, factures.length>0?'amber':'green');
+  html += kpi('Reste a encaisser (total)', totalReste?totalReste.toLocaleString('fr-FR')+' FCFA':'—', totalReste>0?'red':'green');
+  html += '</div>';
+
+  if(!factures.length){
+    html += '<div class="empty">Aucune facture en cours pour ce client — tout est solde.</div>';
+  } else {
+    html += '<div class="tw"><table><thead><tr><th>Type</th><th>Vehicule / Mois</th><th style="text-align:right">Reste</th><th>Statut depot</th></tr></thead><tbody>';
+    factures.forEach(function(f){
+      var libelle = f.type==='forfait' ? libelleMoisForfait(f.periodeKey) : (f.immat+' '+(f.marque||'')+' '+(f.modele||''));
+      html += '<tr>';
+      html += '<td>'+(f.type==='forfait'?'<span class="badge b-purple">Forfait</span>':'<span class="badge b-blue">Devis</span>')+'</td>';
+      html += '<td class="xs">'+libelle+'</td>';
+      html += '<td style="text-align:right;font-weight:700">'+f.reste.toLocaleString('fr-FR')+'</td>';
+      html += '<td>'+(f.deposee?'<span class="badge b-green">Deposee</span>':'<span class="badge b-gray">Non deposee</span>')+'</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+
+  document.getElementById('statutFacturesClientTitre').textContent = 'Statut des factures — '+client;
+  document.getElementById('statutFacturesClientContenu').innerHTML = html;
+  document.getElementById('statutFacturesClientBtnImprimer').setAttribute('data-client', client);
+  document.getElementById('statutFacturesClientBtnExcel').setAttribute('data-client', client);
+  document.getElementById('modalStatutFacturesClient').style.display = 'flex';
+}
+
+function imprimerStatutFacturesClientByEl(btn){
+  imprimerStatutFacturesClient(btn.getAttribute('data-client'));
+}
+function imprimerStatutFacturesClient(client){
+  var factures = collecterToutesFacturesClient(client).filter(function(f){return f.deposee;});
+  var dateEdit = new Date().toLocaleDateString('fr-FR');
+  var totalReste = factures.reduce(function(s,f){return s+f.reste;},0);
+
+  var rowsHtml = !factures.length
+    ? '<tr><td colspan="4" style="border:1px solid #bbb;padding:10px;text-align:center;color:#888;font-size:11px">Aucune facture deposee en attente pour ce client.</td></tr>'
+    : factures.map(function(f){
+        var libelle = f.type==='forfait' ? libelleMoisForfait(f.periodeKey) : (f.immat+' '+(f.marque||'')+' '+(f.modele||''));
+        return '<tr>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+(f.type==='forfait'?'Forfait':'Devis')+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+libelle+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+(f.numeroFactureExterne||'—')+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px;text-align:right;font-weight:700">'+f.reste.toLocaleString('fr-FR')+'</td>'
+          +'</tr>';
+      }).join('');
+
+  var html = ''
+    +'<style>'
+    +'*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}'
+    +'@page{size:A4 portrait;margin:15mm}'
+    +'html,body{width:210mm;background:#fff;font-size:11px;color:#1a1a1a}'
+    +'table{width:100%;border-collapse:collapse}'
+    +'.page{padding:8mm 10mm}'
+    +'</style>'
+    +'<div class="page">'
+    +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px">'
+    +'<img src="'+LOGO_BASE64+'" style="height:65px;width:auto" alt="Smart Services">'
+    +'<div style="text-align:center"><div style="border:3px solid #1a1a1a;padding:8px 20px;display:inline-block"><span style="font-size:18px;font-weight:900">STATUT DES FACTURES DEPOSEES</span></div></div>'
+    +'</div>'
+    +'<div style="font-size:13px;font-weight:700;margin-bottom:4px">CLIENT : '+client+'</div>'
+    +'<div style="font-size:11px;color:#555;margin-bottom:20px">Edite le '+dateEdit+'</div>'
+    +'<table><thead><tr style="background:#e8e8e8">'
+    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:left">Type</th>'
+    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:left">Vehicule / Mois</th>'
+    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:left">N&deg; Facture</th>'
+    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:right">Reste a payer</th>'
+    +'</tr></thead><tbody>'+rowsHtml+'</tbody></table>'
+    +'<div style="margin-top:20px;padding:14px 16px;background:#1a1a1a;color:#fff;display:flex;justify-content:space-between">'
+    +'<span style="font-size:13px;font-weight:700">Total restant du (factures deposees)</span>'
+    +'<span style="font-size:16px;font-weight:900">'+totalReste.toLocaleString('fr-FR')+' FCFA</span>'
+    +'</div></div>';
+
+  var w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+  setTimeout(function(){ w.print(); }, 300);
+}
+
+function exporterStatutFacturesClientExcelByEl(btn){
+  exporterStatutFacturesClientExcel(btn.getAttribute('data-client'));
+}
+function exporterStatutFacturesClientExcel(client){
+  var factures = collecterToutesFacturesClient(client).filter(function(f){return f.deposee;});
+  var dateEdit = new Date().toLocaleDateString('fr-FR');
+  var totalReste = factures.reduce(function(s,f){return s+f.reste;},0);
+
+  var data = [];
+  data.push(['STATUT DES FACTURES DEPOSEES']);
+  data.push(['CLIENT', client]);
+  data.push(['Edite le', dateEdit]);
+  data.push([]);
+  data.push(['Type', 'Vehicule / Mois', 'N° Facture', 'Reste a payer']);
+  if(!factures.length){
+    data.push(['Aucune facture deposee en attente pour ce client.', '', '', '']);
+  } else {
+    factures.forEach(function(f){
+      var libelle = f.type==='forfait' ? libelleMoisForfait(f.periodeKey) : (f.immat+' '+(f.marque||'')+' '+(f.modele||''));
+      data.push([f.type==='forfait'?'Forfait':'Devis', libelle, f.numeroFactureExterne||'', f.reste]);
+    });
+  }
+  data.push([]);
+  data.push(['Total restant du (factures deposees)', '', '', totalReste]);
+
+  var ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:12},{wch:28},{wch:18},{wch:16}];
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Statut factures');
+  var cleanClient = client.replace(/[^\w\s\-]/g,'').trim().replace(/\s+/g,'_');
+  XLSX.writeFile(wb, 'Statut_factures_'+cleanClient+'_'+new Date().toISOString().split('T')[0]+'.xlsx');
+}
+
+function htmlModalStatutFacturesClient(){
+  var html = '<div class="overlay" id="modalStatutFacturesClient" style="display:none" onclick="if(event.target===this)document.getElementById(\'modalStatutFacturesClient\').style.display=\'none\'">';
+  html += '<div class="modal" style="max-width:640px;max-height:85vh;display:flex;flex-direction:column">';
+  html += '<div class="mhead"><h2 id="statutFacturesClientTitre"></h2><button class="btn btn-sm" onclick="document.getElementById(\'modalStatutFacturesClient\').style.display=\'none\'">X</button></div>';
+  html += '<div class="mbody" id="statutFacturesClientContenu" style="overflow-y:auto"></div>';
+  html += '<div class="mfoot"><button class="btn btn-sm" id="statutFacturesClientBtnImprimer" onclick="imprimerStatutFacturesClientByEl(this)">&#x1F5A8; Imprimer les deposees</button><button class="btn btn-sm" id="statutFacturesClientBtnExcel" onclick="exporterStatutFacturesClientExcelByEl(this)">&#128202; Exporter en Excel</button></div>';
+  html += '</div></div>';
+  return html;
+}
+
+function rendreQuatreTableauxParClient(dossiers, prefixeExpand, titreNonDeposee){
   var html = '';
   var TROIS_JOURS_MS = 3*86400000;
   var maintenant = Date.now();
@@ -7393,7 +7632,7 @@ function rendreQuatreTableauxParClient(dossiers, prefixeExpand){
   });
 
   var sections = [
-    {key:'non_deposee',     titre:'Factures non deposees',        couleur:'#5a5956', bg:'#f5f4f1'},
+    {key:'non_deposee',     titre:titreNonDeposee||'Factures non deposees', couleur:'#5a5956', bg:'#f5f4f1'},
     {key:'retard',          titre:'Factures en retard',           couleur:'#A32D2D', bg:'#FCEBEB'},
     {key:'proche_echeance', titre:'Arrivent a echeance (3 jours)', couleur:'#854F0B', bg:'#FDF3E3'},
     {key:'non_echue',       titre:'Non echues',                   couleur:'#185FA5', bg:'#EAF1FA'}
@@ -7424,7 +7663,7 @@ function rendreQuatreTableauxParClient(dossiers, prefixeExpand){
         var d = c.factures[0];
         html += '<tr>';
         html += '<td><strong>'+c.client+'</strong></td>';
-        html += '<td class="xs">'+(d.isForfaitFacture?'Forfait':d.immat+' '+(d.marque||'')+' '+(d.modele||''))+'</td>';
+        html += '<td class="xs">'+(d.isForfaitFacture?libelleMoisForfait(d.periodeKey):d.immat+' '+(d.marque||'')+' '+(d.modele||''))+'</td>';
         html += '<td style="text-align:right;font-family:monospace;font-weight:700;color:'+sec.couleur+'">'+d.resteARecouvrir.toLocaleString('fr-FR')+'</td>';
         html += htmlCellulesFactureDetail(d);
         html += '</tr>';
@@ -7445,7 +7684,7 @@ function rendreQuatreTableauxParClient(dossiers, prefixeExpand){
           html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>';
           c.factures.forEach(function(d){
             html += '<tr style="border-top:1px solid rgba(0,0,0,0.06)">';
-            html += '<td style="padding:4px 8px">'+(d.isForfaitFacture?'Forfait':'<strong>'+d.immat+'</strong> '+(d.marque||'')+' '+(d.modele||''))+'</td>';
+            html += '<td style="padding:4px 8px">'+(d.isForfaitFacture?libelleMoisForfait(d.periodeKey):'<strong>'+d.immat+'</strong> '+(d.marque||'')+' '+(d.modele||''))+'</td>';
             html += '<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:700">'+d.resteARecouvrir.toLocaleString('fr-FR')+'</td>';
             html += htmlCellulesFactureDetail(d);
             html += '</tr>';
@@ -7650,7 +7889,7 @@ function pageFacturationForfait(){
     }
   });
 
-  var html = '';
+  var html = htmlBarreRechercheClientFacturation();
 
   // Sélecteur de mois
   html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">';
@@ -7722,10 +7961,72 @@ function pageFacturationForfait(){
     html += '</div>';
   }
 
+  // ── 4 tableaux par echeance, meme principe que Devis/Echeances : les
+  // factures forfait DEPOSEES (statut 'deposee') sont reparties selon leur
+  // echeance (fin du mois de la periode facturee) en retard/proche/non
+  // echue ; les mois pas encore emis ou emis-mais-pas-deposes tombent dans
+  // "A emettre". La presentation detaillee ci-dessous (liste des clients
+  // avec toutes leurs caracteristiques) reste totalement inchangee.
+  var dossiersForfaitUnifies = [];
+
+  // A emettre : mois jamais factures (reutilise la partie forfait de
+  // collecterFacturesNonDeposees) + factures deja emises mais pas deposees.
+  collecterFacturesNonDeposees().filter(function(it){return it.type==='forfait';}).forEach(function(it){
+    dossiersForfaitUnifies.push({
+      id:null, client:it.nom, immat:'', marque:'', modele:'',
+      resteARecouvrir:it.montant, montantFacture:it.montant,
+      factureDeposee:false, dateEcheance:0, enRetard:false, statut:'attente_depot',
+      isForfaitFacture:true, periodeKey:it.periodeKey,
+      numeroFactureExterne:it.numeroFactureExterne||'', numeroSecondaire:''
+    });
+  });
+  FORFAIT_FACTURES.filter(function(f){return f.statut==='emise';}).forEach(function(f){
+    dossiersForfaitUnifies.push({
+      id:null, client:f.client, immat:'', marque:'', modele:'',
+      resteARecouvrir:f.montant, montantFacture:f.montant,
+      factureDeposee:false, dateEcheance:0, enRetard:false, statut:'attente_depot',
+      isForfaitFacture:true, periodeKey:f.periodeKey,
+      numeroFactureExterne:f.numeroFactureExterne||'', numeroSecondaire:f.numeroSecondaire||''
+    });
+  });
+
+  // Deposees (pas encore payees) : echeance = fin du mois de la periode,
+  // SAUF si un delai personnalise a ete saisi (compte alors depuis la date
+  // de depot reelle, exactement comme pour les devis). Priorite : 1) delai
+  // personnalise sur CE mois precis, 2) delai retenu pour ce CLIENT (dernier
+  // modifie), 3) regle par defaut (fin du mois de la periode facturee).
+  FORFAIT_FACTURES.filter(function(f){return f.statut==='deposee';}).forEach(function(f){
+    var parts = f.periodeKey.split('-');
+    var annee = parseInt(parts[0],10), moisIdx = parseInt(parts[1],10)-1;
+    var dateEcheance;
+    var delaiApplicable = typeof f.delaiPaiementPersonnalise==='number' ? f.delaiPaiementPersonnalise
+      : (typeof CLIENT_DELAIS_PAIEMENT[f.client]==='number' ? CLIENT_DELAIS_PAIEMENT[f.client] : null);
+    if(delaiApplicable!==null){
+      var dateDepot = f.deposeeDate || f.emiseDate || new Date(annee, moisIdx, 1).getTime();
+      dateEcheance = dateDepot + delaiApplicable*86400000;
+    } else {
+      dateEcheance = new Date(annee, moisIdx+1, 0, 23,59,59).getTime();
+    }
+    var montantPaye = f.montantPaye||0;
+    var reste = f.montant - montantPaye;
+    if(reste<=0) return;
+    var enRetard = dateEcheance < Date.now();
+    dossiersForfaitUnifies.push({
+      id:null, client:f.client, immat:'', marque:'', modele:'',
+      resteARecouvrir:reste, montantFacture:f.montant,
+      factureDeposee:true, dateEcheance:dateEcheance, enRetard:enRetard,
+      statut: enRetard?'retard':'en_attente',
+      isForfaitFacture:true, periodeKey:f.periodeKey,
+      numeroFactureExterne:f.numeroFactureExterne||'', numeroSecondaire:f.numeroSecondaire||''
+    });
+  });
+
+  html += rendreQuatreTableauxParClient(dossiersForfaitUnifies, 'forfait', 'Factures forfait a emettre');
+
   // Tableau clients
   html += '<div class="card">';
-  html += '<div class="card-head">Facturation '+moisLabel[forfaitMois]+' '+forfaitAnnee+' ('+clients.length+' clients)</div>';
-  if(!clients.length){ html += '<div class="empty">Aucun client en forfait</div></div>'; return html; }
+  html += '<div class="card-head">Liste clients forfait ('+clients.length+' clients)</div>';
+  if(!clients.length){ html += '<div class="empty">Aucun client en forfait</div></div>'; html += htmlModalStatutFacturesClient(); return html; }
 
   clients.forEach(function(c){
     var f = c.facture;
@@ -7787,6 +8088,7 @@ function pageFacturationForfait(){
     html += '<div class="flex gap6" style="margin-top:8px">';
     if(statut==='a_emettre'){
       html += '<button class="btn btn-primary btn-sm" data-pk="'+c.periodeKey+'" data-client="'+c.client+'" data-montant="'+c.montantTotal+'" onclick="emettreFactureForfaitByEl(this)">&#x1F4CB; Emettre la facture</button>';
+      html += '<button class="btn btn-sm" data-pk="'+c.periodeKey+'" onclick="imprimerFactureForfaitByEl(this)" title="Imprimer un apercu / brouillon">&#x1F5A8;</button>';
     }    if(statut==='emise'){
       html += '<span class="badge b-amber">Facture emise</span>';
       html += '<button class="btn btn-success btn-sm" data-pk="'+c.periodeKey+'" onclick="deposerFactureForfaitByEl(this)">&#x2714; Marquer deposee</button>';
@@ -7801,35 +8103,14 @@ function pageFacturationForfait(){
       html += '<span class="badge b-green">&#x2714; Payee</span>';
       html += '<button class="btn btn-sm" data-pk="'+c.periodeKey+'" onclick="imprimerFactureForfaitByEl(this)" title="Imprimer / PDF">&#x1F5A8;</button>';
     }
+    html += '<button class="btn btn-sm" data-pk="'+c.periodeKey+'" onclick="exporterFactureForfaitExcelByEl(this)" title="Exporter cette facture en Excel">&#128202;</button>';
     html += '<button class="btn btn-sm" style="color:#A32D2D;border-color:#E0A0A0;margin-left:auto" data-client-supp="'+encodeURIComponent(c.client)+'" onclick="supprimerClientForfaitByEl(this)">&#x1F5D1; Supprimer</button>';
     html += '</div>';
 
-    // Autres mois (hors mois affiche) emis/deposes mais pas encore payes :
-    // sans cette liste, un mois en retard de paiement devient invisible des
-    // qu'on navigue vers un autre mois — impossible de savoir PRECISEMENT
-    // quel mois regler. Un bouton "Payer" distinct par mois concerne.
-    var autresFacturesNonPayees = FORFAIT_FACTURES.filter(function(f2){
-      return f2.client===c.client && f2.periodeKey!==c.periodeKey && f2.statut!=='payee';
-    }).sort(function(a,b){return a.periodeKey.localeCompare(b.periodeKey);});
-    if(autresFacturesNonPayees.length){
-      html += '<div style="margin-top:8px;background:#FAEEDA;border-radius:6px;padding:8px 10px">';
-      html += '<div class="xs" style="color:#854F0B;font-weight:700;margin-bottom:5px">'+autresFacturesNonPayees.length+' autre'+(autresFacturesNonPayees.length>1?'s':'')+' mois en attente de paiement</div>';
-      autresFacturesNonPayees.forEach(function(f2){
-        var moisIdxF = parseInt(f2.periodeKey.split('-')[1],10)-1;
-        var anneeF = f2.periodeKey.split('-')[0];
-        var labelMoisF = moisLabel[moisIdxF]+' '+anneeF;
-        var resteF = f2.montant-(f2.montantPaye||0);
-        var statutF = f2.statut==='deposee' ? 'Deposee' : 'Emise (pas encore deposee)';
-        html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-top:1px solid #f5e5c8">';
-        html += '<span class="xs">'+labelMoisF+' — '+statutF+' — <span style="font-family:monospace">'+resteF.toLocaleString('fr-FR')+' FCFA</span></span>';
-        html += '<button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 7px" data-pk="'+f2.periodeKey+'" data-montant="'+f2.montant+'" onclick="payerFactureForfaitByEl(this)">&#x1F4B5; Payer</button>';
-        html += '</div>';
-      });
-      html += '</div>';
-    }
     html += '</div></div>';
   });
   html += '</div>';
+  html += htmlModalStatutFacturesClient();
   return html;
 }
 
@@ -19403,6 +19684,75 @@ function imprimerFactureForfait(periodeKey){
   msg.innerHTML = '<strong>Fichier telecharge !</strong><br>Ouvrez-le &rarr; Imprimer &rarr; Enregistrer en PDF';
   document.body.appendChild(msg);
   setTimeout(function(){ msg.style.opacity='0'; msg.style.transition='opacity 0.5s'; setTimeout(function(){ if(msg.parentNode)msg.parentNode.removeChild(msg); },600); },4000);
+}
+
+// Export Excel d'UNE facture forfait precise — reproduit EXACTEMENT le
+// meme contenu que imprimerFactureForfait() (meme numero de document,
+// meme regroupement par vehicule/pieces, meme montant), juste au format
+// tableur au lieu du document imprimable. Reutilise la meme logique de
+// collecte de donnees pour ne jamais diverger de la version imprimee.
+function exporterFactureForfaitExcelByEl(btn){
+  exporterFactureForfaitExcel(btn.getAttribute('data-pk'));
+}
+function exporterFactureForfaitExcel(periodeKey){
+  var f = FORFAIT_FACTURES.find(function(x){return x.periodeKey===periodeKey;});
+  var client = f ? f.client : (periodeKey||'').split('-').slice(2).join('-');
+  var montant = f ? f.montant : forfaitMensuelEffectifClient(client);
+  var parts = (periodeKey||'').split('-');
+  var annee = parts[0], moisIdx = parseInt(parts[1],10)-1;
+  var moisLabelsComplets = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
+  var moisNom = moisLabelsComplets[moisIdx]||'';
+  var debutMois = new Date(parseInt(annee,10), moisIdx, 1).getTime();
+  var finMois = new Date(parseInt(annee,10), moisIdx+1, 0, 23,59,59).getTime();
+
+  var vehiculesClient = vehicles.filter(function(v){return v.client===client && v.typeClient==='forfait';});
+  var lignesParVehicule = [];
+  vehiculesClient.forEach(function(v){
+    if(!v.chiffrage || !v.chiffrage.lignes) return;
+    var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
+    if(dateRef<debutMois || dateRef>finMois) return;
+    var pieces = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).map(function(cl){return cl.piece;});
+    if(pieces.length){
+      lignesParVehicule.push({immat:v.immat, marque:v.marque, modele:v.modele, pieces:pieces});
+    }
+  });
+
+  var dateEdit = new Date().toLocaleDateString('fr-FR');
+  var numDoc = 'FOR'+annee.slice(-2)+moisIdx+'-'+(periodeKey||'').slice(-4).toUpperCase().replace(/[^A-Z0-9]/g,'');
+
+  var data = [];
+  data.push(['FACTURE FORFAIT N° '+numDoc]);
+  data.push([]);
+  data.push(['CLIENT']);
+  data.push([client]);
+  data.push([]);
+  data.push(['Forfait mensuel — '+moisNom+' '+annee, '', 'Edite le '+dateEdit]);
+  data.push([]);
+  data.push(['PIECES REMPLACEES CE MOIS (par vehicule)']);
+  data.push(['Vehicule', 'Pieces']);
+  if(!lignesParVehicule.length){
+    data.push(['Aucune piece enregistree pour ce mois.', '']);
+  } else {
+    lignesParVehicule.forEach(function(lv){
+      // Une ligne par vehicule/passage (fidele au document imprime, y
+      // compris quand une meme immatriculation apparait plusieurs fois
+      // pour des interventions distinctes le meme mois) — immat puis
+      // marque/modele sur une 2e ligne DANS LA MEME CELLULE, et chaque
+      // piece a puce sur sa propre ligne dans la cellule d'a cote.
+      var celluleVehicule = lv.immat+'\n'+(lv.marque||'')+' '+(lv.modele||'');
+      var celluleP = lv.pieces.map(function(p){return '• '+p;}).join('\n');
+      data.push([celluleVehicule, celluleP]);
+    });
+  }
+  data.push([]);
+  data.push(['Forfait mensuel '+moisNom+' '+annee, montant]);
+
+  var ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:26},{wch:55}];
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Facture');
+  var nom = ('Forfait_'+client+'_'+moisNom+annee).replace(/[^a-zA-Z0-9_-]/g,'_');
+  XLSX.writeFile(wb, nom+'.xlsx');
 }
 
 function imprimerProspectById(btn){ imprimerDevisProspect(btn.getAttribute('data-vid')); }
