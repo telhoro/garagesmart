@@ -7907,8 +7907,11 @@ function traiterClientForfaitExposition(client){
       .forEach(function(m){ dossiersDansFenetre = dossiersDansFenetre.concat(dossiersParMois[m]); });
   }
   var nbMoisFenetre = ledger.detail.filter(function(d){return ledger.debutExpositionActuelle && d.mois>=ledger.debutExpositionActuelle;}).length;
-  var factureFenetre = forfaitMensuel*nbMoisFenetre;
-  var margeTotale = factureFenetre - ledger.montantExpose;
+  // "Facturation" = le montant MENSUEL du forfait (pas multiplie par le
+  // nombre de mois en retard), conformement a la demande explicite : la
+  // colonne montre le tarif mensuel du client, pas un cumul sur plusieurs
+  // mois — meme si l'expostion, elle, peut cumuler plusieurs mois.
+  var margeTotale = forfaitMensuel - ledger.montantExpose;
   var joursExposition = ledger.debutExpositionActuelle
     ? Math.floor((maintenant - new Date(ledger.debutExpositionActuelle+'-01').getTime())/86400000)
     : 0;
@@ -7916,7 +7919,7 @@ function traiterClientForfaitExposition(client){
   return {
     client:client, type:'forfait',
     montantExpose:ledger.montantExpose, forfaitMensuel:forfaitMensuel,
-    factureFenetre:factureFenetre, nbMoisFenetre:nbMoisFenetre,
+    factureFenetre:forfaitMensuel, nbMoisFenetre:nbMoisFenetre,
     margeTotale:margeTotale, joursExposition:joursExposition,
     dossiers:dossiersDansFenetre,
     delaiMoyenReglement: delaiMoyenReglementClient(client)
