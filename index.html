@@ -7424,9 +7424,11 @@ function creancesParClient(dossiers, enCoursNonFactures){
 // NON totalement payees (devis + forfait), avec impression/export Excel
 // des factures deja deposees.
 function htmlBarreRechercheClientFacturation(){
-  var html = '<div class="card" style="padding:10px 14px;margin-bottom:16px;position:relative">';
+  var html = '<div style="position:relative;margin-bottom:16px">';
+  html += '<div class="card" style="padding:10px 14px">';
   html += '<input class="inp" id="rechercheClientFacturation" placeholder="Rechercher un client..." oninput="rechercherClientFacturation(this.value)" autocomplete="off">';
-  html += '<div id="rechercheClientFacturationResultats" style="position:absolute;left:14px;right:14px;top:44px;z-index:50"></div>';
+  html += '</div>';
+  html += '<div id="rechercheClientFacturationResultats" style="position:absolute;left:0;right:0;top:52px;z-index:50"></div>';
   html += '</div>';
   return html;
 }
@@ -7452,7 +7454,10 @@ function rechercherClientFacturation(texte){
 // Collecte TOUTES les factures NON totalement payees d'un client (devis +
 // forfait) — les factures deja soldees ne sont pas presentees.
 function collecterToutesFacturesClient(client){
+  var maintenant = Date.now();
+  var TROIS_JOURS_MS = 3*86400000;
   var factures = [];
+
   vehicles.filter(function(v){return v.client===client && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;})
     .forEach(function(v){
       var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
@@ -7461,21 +7466,53 @@ function collecterToutesFacturesClient(client){
       var montantPaye = parseFloat(v.montantPaye)||0;
       var reste = montant - montantPaye;
       if(reste<=0) return;
+      var deposee = !!v.factureDeposeeLe;
+      var dateEcheance = 0, enRetard = false;
+      if(deposee){
+        var regle = delaiEcheanceClient(v);
+        if(regle.mode==='fin_mois'){
+          var dEch = new Date(v.factureDeposeeLe);
+          dateEcheance = new Date(dEch.getFullYear(), dEch.getMonth()+1, 0, 23,59,59).getTime();
+        } else if(regle.mode==='delai'){
+          dateEcheance = v.factureDeposeeLe + regle.jours*86400000;
+        } else {
+          dateEcheance = v.factureDeposeeLe;
+        }
+        enRetard = dateEcheance < maintenant;
+      }
+      var statut = !deposee ? 'attente_depot' : (enRetard ? 'retard' : ((dateEcheance-maintenant)<=TROIS_JOURS_MS ? 'proche_echeance' : 'non_echue'));
       factures.push({
         type:'devis', id:v.id, immat:v.immat, marque:v.marque, modele:v.modele,
         montant:montant, montantPaye:montantPaye, reste:reste,
-        deposee:!!v.factureDeposeeLe, dateFacture:v.factureDeposeeLe||0,
+        deposee:deposee, dateEcheance:dateEcheance, statut:statut,
         numeroFactureExterne:v.numeroFactureExterne||'', numeroSecondaire:v.numeroSecondaire||''
       });
     });
+
   FORFAIT_FACTURES.filter(function(f){return f.client===client;}).forEach(function(f){
     var montantPaye = f.statut==='payee' ? f.montant : (f.montantPaye||0);
     var reste = f.montant - montantPaye;
     if(reste<=0) return;
+    var deposee = f.statut==='deposee';
+    var dateEcheance = 0, enRetard = false;
+    if(deposee){
+      var parts = f.periodeKey.split('-');
+      var annee = parseInt(parts[0],10), moisIdx = parseInt(parts[1],10)-1;
+      var delaiApplicable = typeof f.delaiPaiementPersonnalise==='number' ? f.delaiPaiementPersonnalise
+        : (typeof CLIENT_DELAIS_PAIEMENT[f.client]==='number' ? CLIENT_DELAIS_PAIEMENT[f.client] : null);
+      if(delaiApplicable!==null){
+        var dateDepot = f.deposeeDate || f.emiseDate || new Date(annee, moisIdx, 1).getTime();
+        dateEcheance = dateDepot + delaiApplicable*86400000;
+      } else {
+        dateEcheance = new Date(annee, moisIdx+1, 0, 23,59,59).getTime();
+      }
+      enRetard = dateEcheance < maintenant;
+    }
+    var statut = !deposee ? 'attente_depot' : (enRetard ? 'retard' : ((dateEcheance-maintenant)<=TROIS_JOURS_MS ? 'proche_echeance' : 'non_echue'));
     factures.push({
       type:'forfait', periodeKey:f.periodeKey,
       montant:f.montant, montantPaye:montantPaye, reste:reste,
-      deposee: f.statut==='deposee', dateFacture:f.deposeeDate||f.emiseDate||0,
+      deposee:deposee, dateEcheance:dateEcheance, statut:statut,
       numeroFactureExterne:f.numeroFactureExterne||'', numeroSecondaire:f.numeroSecondaire||''
     });
   });
@@ -7496,14 +7533,21 @@ function ouvrirStatutFacturesClient(client){
   if(!factures.length){
     html += '<div class="empty">Aucune facture en cours pour ce client — tout est solde.</div>';
   } else {
-    html += '<div class="tw"><table><thead><tr><th>Type</th><th>Vehicule / Mois</th><th style="text-align:right">Reste</th><th>Statut depot</th></tr></thead><tbody>';
+    html += '<div class="tw"><table><thead><tr><th>Type</th><th>Vehicule / Mois</th><th style="text-align:right">Reste</th><th>Echeance</th><th>Statut</th></tr></thead><tbody>';
     factures.forEach(function(f){
       var libelle = f.type==='forfait' ? libelleMoisForfait(f.periodeKey) : (f.immat+' '+(f.marque||'')+' '+(f.modele||''));
+      var statutBadge, statutLabel;
+      if(f.statut==='attente_depot'){ statutBadge='b-gray'; statutLabel='En attente de depot'; }
+      else if(f.statut==='retard'){ statutBadge='b-red'; statutLabel='En retard'; }
+      else if(f.statut==='proche_echeance'){ statutBadge='b-amber'; statutLabel='Echeance proche'; }
+      else { statutBadge='b-blue'; statutLabel='Non echue'; }
+      var echeanceTxt = f.deposee && f.dateEcheance ? new Date(f.dateEcheance).toLocaleDateString('fr-FR') : '—';
       html += '<tr>';
       html += '<td>'+(f.type==='forfait'?'<span class="badge b-purple">Forfait</span>':'<span class="badge b-blue">Devis</span>')+'</td>';
       html += '<td class="xs">'+libelle+'</td>';
       html += '<td style="text-align:right;font-weight:700">'+f.reste.toLocaleString('fr-FR')+'</td>';
-      html += '<td>'+(f.deposee?'<span class="badge b-green">Deposee</span>':'<span class="badge b-gray">Non deposee</span>')+'</td>';
+      html += '<td class="xs">'+echeanceTxt+'</td>';
+      html += '<td><span class="badge '+statutBadge+'">'+statutLabel+'</span></td>';
       html += '</tr>';
     });
     html += '</tbody></table></div>';
