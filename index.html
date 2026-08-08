@@ -5919,8 +5919,20 @@ function suiviForfaitAnneeNext(){ suiviForfaitAnneeRef++; renderPage(); }
 function forfaitMensuelEffectifClient(client){
   var fc = FORFAITS_CLIENTS.find(function(x){return x.client===client;});
   if(fc) return fc.montantMensuel;
-  return vehicles.filter(function(v){return v.client===client && v.typeClient==='forfait';})
-    .reduce(function(s,v){return s+(parseFloat(v.forfaitMensuel)||0);},0);
+  // Dedupliquer par immatriculation : un vehicule physique peut avoir
+  // PLUSIEURS dossiers (visites successives dans vehicles[]), chacun
+  // portant le meme forfaitMensuel copie dessus — sans deduplication,
+  // chaque dossier supplementaire du meme vehicule multipliait a tort le
+  // total (ex: 2 dossiers pour le meme vehicule = total double).
+  var parImmat = {};
+  vehicles.filter(function(v){return v.client===client && v.typeClient==='forfait';}).forEach(function(v){
+    var immatKey = (v.immat||'').toUpperCase().replace(/[\s\-]/g,'');
+    if(!immatKey) return;
+    if(!parImmat[immatKey] || (v.entree||0) > (parImmat[immatKey].entree||0)){
+      parImmat[immatKey] = v; // garde le dossier le plus recent pour cette immat
+    }
+  });
+  return Object.keys(parImmat).reduce(function(s,k){return s+(parseFloat(parImmat[k].forfaitMensuel)||0);},0);
 }
 function forfaitAnnuelEffectifClient(client){
   var fc = FORFAITS_CLIENTS.find(function(x){return x.client===client;});
@@ -8096,8 +8108,15 @@ function pageExpositionFinanciere(){
 function pageFacturationForfait(){
   var moisLabel = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
 
-  // Collecter les clients forfait uniques avec leurs paramètres
+  // Collecter les clients forfait uniques avec leurs paramètres —
+  // dedupliquer par immatriculation : un vehicule physique peut avoir
+  // plusieurs dossiers (visites successives), chacun portant le meme
+  // forfaitMensuel copie dessus. Sans deduplication, un vehicule avec 2
+  // dossiers actuels comptait deux fois son forfait dans le total. Garde
+  // le dossier le PLUS RECENT par immatriculation (coherent avec
+  // forfaitMensuelEffectifClient), au cas ou le montant aurait change.
   var clientsMap = {};
+  var vehiculeParImmat = {}; // {client::immat: dossier le plus recent}
   vehicles.filter(function(v){return v.typeClient==='forfait';}).forEach(function(v){
     var key = v.client;
     if(!clientsMap[key]){
@@ -8108,10 +8127,17 @@ function pageFacturationForfait(){
         jourDepot: v.forfaitJourDepot || 25  // jour configurable par client
       };
     }
-    clientsMap[key].vehicules.push({immat:v.immat, marque:v.marque, modele:v.modele, forfait:parseFloat(v.forfaitMensuel)||0});
-    clientsMap[key].montantTotal += parseFloat(v.forfaitMensuel)||0;
+    var immatKey = key+'::'+(v.immat||'').toUpperCase().replace(/[\s\-]/g,'');
+    if(!vehiculeParImmat[immatKey] || (v.entree||0) > (vehiculeParImmat[immatKey].entree||0)){
+      vehiculeParImmat[immatKey] = v;
+    }
     // Mettre à jour le jour de dépôt si configuré sur n'importe quel véhicule du client
     if(v.forfaitJourDepot) clientsMap[key].jourDepot = v.forfaitJourDepot;
+  });
+  Object.keys(vehiculeParImmat).forEach(function(immatKey){
+    var v = vehiculeParImmat[immatKey];
+    clientsMap[v.client].vehicules.push({immat:v.immat, marque:v.marque, modele:v.modele, forfait:parseFloat(v.forfaitMensuel)||0});
+    clientsMap[v.client].montantTotal += parseFloat(v.forfaitMensuel)||0;
   });
   var clients = Object.values ? Object.values(clientsMap) : Object.keys(clientsMap).map(function(k){return clientsMap[k];});
 
