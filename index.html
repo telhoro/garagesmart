@@ -7878,7 +7878,10 @@ function traiterClientForfaitExposition(client){
 
   vehicles.filter(function(v){return v.client===client && v.typeClient==='forfait' && v.chiffrage && v.chiffrage.lignes;})
     .forEach(function(v){
-      var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+      // Meme regle que pour les devis : seules les pieces dont l'achat a
+      // ete valide (cl.valideDir) representent un engagement financier
+      // reel a inclure dans l'exposition.
+      var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
       var montantEngage = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
       if(!montantEngage) return;
       var dateEngagement = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree;
@@ -7938,7 +7941,11 @@ function collecterExpositionFinanciere(){
 
   // ── DEVIS : inchange, par dossier ──
   vehicles.filter(function(v){return v.typeClient!=='forfait' && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;}).forEach(function(v){
-    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    // Seules les pieces dont l'ACHAT A ETE VALIDE par Direction (cl.valideDir)
+    // representent un vrai engagement financier reel — une piece juste
+    // presente dans le chiffrage mais jamais validee n'a pas encore ete
+    // achetee, elle ne doit pas compter dans l'exposition.
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     var montantEngage = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
     if(!montantEngage) return;
     var montantPaye = parseFloat(v.montantPaye)||0;
