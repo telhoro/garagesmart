@@ -9261,6 +9261,30 @@ function pageFinancesDashboard(){
   var tauxForfait = caForfait>0 ? (margeForfait/caForfait*100) : null;
   var tauxTotal = caTotal>0 ? (margeTotal/caTotal*100) : null;
 
+  // ═══ Marge OPERATIONNELLE : tient compte, en plus du cout des pieces,
+  // des charges VARIABLES de fonctionnement (toutes les sorties de
+  // Caisse sur la periode) et des charges FIXES (loyer, salaires...,
+  // proratisees sur la duree reelle de la periode selectionnee). Repond
+  // a la question "suis-je rentable une fois TOUTES mes charges
+  // couvertes ?", contrairement a la marge brute ci-dessus qui ne
+  // regarde que le cout des pieces. ═══
+  var chargesVariablesCaisse = CAISSE_MOUVEMENTS.filter(function(m){
+    return m.type==='sortie' && m.date>=bornesActivite.deb && m.date<=bornesActivite.fin;
+  }).reduce(function(s,m){return s+(parseFloat(m.montant)||0);},0);
+
+  var chargesFixesActives = CHARGES_FIXES.filter(function(c){return c.actif;});
+  var chargesFixesMensuelEquiv = chargesFixesActives.reduce(function(s,c){
+    var m = parseFloat(c.montant)||0;
+    if(c.periodicite==='trimestriel') return s+m/3;
+    if(c.periodicite==='annuel') return s+m/12;
+    return s+m;
+  },0);
+  var joursPeriodeActivite = Math.max(1, Math.round((bornesActivite.fin-bornesActivite.deb)/86400000));
+  var chargesFixesPeriode = chargesFixesMensuelEquiv * (joursPeriodeActivite/30);
+
+  var resultatOperationnel = caTotal - achatTotal - chargesVariablesCaisse - chargesFixesPeriode;
+  var margeOperationnelle = caTotal>0 ? (resultatOperationnel/caTotal*100) : null;
+
   // ═══ Ligne 2 : Tresorerie (encaissements / exposition / echeances) ═══
   var bornesTreso = calculerBornesPeriode(dashTresoFiltre, dashTresoDebut, dashTresoFin);
 
@@ -9361,6 +9385,18 @@ function pageFinancesDashboard(){
   html += bloc('Taux de marge', tauxTotal!==null?tauxTotal.toFixed(1)+'%':'—', tauxTotal!==null&&tauxTotal>=20?'#3B6D11':'#854F0B', [
     {label:'Devis', value:tauxDevis!==null?tauxDevis.toFixed(1)+'%':'—'},
     {label:'Forfaits', value:tauxForfait!==null?tauxForfait.toFixed(1)+'%':'—'}
+  ]);
+  html += '</div>';
+
+  // ── Marge operationnelle : CA - pieces - charges variables (Caisse) -
+  // charges fixes proratisees. Indicateur de rentabilite REELLE, plus
+  // exigeant que la marge brute ci-dessus. ──
+  html += '<div class="kgrid k4" style="margin-bottom:20px">';
+  html += bloc('Charges variables (Caisse)', chargesVariablesCaisse?chargesVariablesCaisse.toLocaleString('fr-FR')+' FCFA':'—', '#854F0B', []);
+  html += bloc('Charges fixes (periode)', chargesFixesPeriode?Math.round(chargesFixesPeriode).toLocaleString('fr-FR')+' FCFA':'—', '#854F0B', []);
+  html += bloc('Resultat operationnel', resultatOperationnel?(resultatOperationnel>0?'+':'')+Math.round(resultatOperationnel).toLocaleString('fr-FR')+' FCFA':'—', resultatOperationnel>=0?'#3B6D11':'#A32D2D', []);
+  html += bloc('Marge operationnelle', margeOperationnelle!==null?margeOperationnelle.toFixed(1)+'%':'—', margeOperationnelle!==null&&margeOperationnelle>=10?'#3B6D11':(margeOperationnelle!==null&&margeOperationnelle>=0?'#854F0B':'#A32D2D'), [
+    {label:'CA - pieces - Caisse - charges fixes', value:'/ CA'}
   ]);
   html += '</div>';
 
