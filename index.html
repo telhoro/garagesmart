@@ -1070,12 +1070,12 @@ tr:hover td{background:#faf9f7}
 </div>
 
 <div class="overlay" id="modalFactureManuelle" style="display:none" onclick="if(event.target===this)closeFactureManuelleForm()">
-<div class="modal" style="max-width:700px">
+<div class="modal" style="max-width:860px">
   <div class="mhead"><h2>Facture manuelle</h2><button class="btn btn-sm" onclick="closeFactureManuelleForm()">X</button></div>
   <div class="mbody">
-    <div class="xs muted" style="margin-bottom:14px">Cree une facture directement, sans passer par le workflow habituel de dossier vehicule. Utile pour une regularisation ou un cas particulier.</div>
+    <div class="xs muted" style="margin-bottom:10px">Cree une facture directement, sans passer par le workflow habituel de dossier vehicule. Utile pour une regularisation ou un cas particulier.</div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:10px">
       <div class="fr">
         <label class="fl">Vehicule existant (optionnel)</label>
         <select class="inp" id="fmVehiculeExistant" onchange="onChangeFmVehiculeExistant()">
@@ -1086,9 +1086,17 @@ tr:hover td{background:#faf9f7}
         <label class="fl">Immatriculation <span style="color:red">*</span></label>
         <input class="inp" id="fmImmat" placeholder="Ex: 1234AB01">
       </div>
+      <div class="fr">
+        <label class="fl">Marque (optionnel)</label>
+        <input class="inp" id="fmMarque" placeholder="Ex: Toyota">
+      </div>
+      <div class="fr">
+        <label class="fl">Type / Modele (optionnel)</label>
+        <input class="inp" id="fmModele" placeholder="Ex: Hilux">
+      </div>
     </div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
       <div class="fr">
         <label class="fl">Client existant (optionnel)</label>
         <select class="inp" id="fmClientExistant" onchange="onChangeFmClientExistant()">
@@ -1097,19 +1105,19 @@ tr:hover td{background:#faf9f7}
       </div>
       <div class="fr">
         <label class="fl">Nom du client <span style="color:red">*</span></label>
-        <input class="inp" id="fmClientNom" placeholder="Nom du client">
+        <input class="inp" id="fmClientNom" placeholder="Nom du client" oninput="onChangeFmTypeOuEntite()">
       </div>
     </div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr" >
-      <div class="fr" style="margin-right:8px">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px">
+      <div class="fr">
         <label class="fl">Type de client</label>
         <select class="inp" id="fmTypeClient" onchange="onChangeFmTypeOuEntite()">
           <option value="devis">Devis</option>
           <option value="forfait">Forfait</option>
         </select>
       </div>
-      <div class="fr" style="margin-right:8px">
+      <div class="fr">
         <label class="fl">Entite</label>
         <select class="inp" id="fmEntite" onchange="onChangeFmTypeOuEntite()">
           <option value="Particulier">Particulier</option>
@@ -1122,13 +1130,11 @@ tr:hover td{background:#faf9f7}
       </div>
     </div>
 
-    <div class="fr">
-      <label class="fl">Delai de paiement apres depot (jours)</label>
-      <input type="number" class="inp" id="fmDelaiPaiement" min="0" max="365" value="30">
-      <div class="xs muted" style="margin-top:3px" id="fmDelaiHint">Propose automatiquement selon le type de client (modifiable).</div>
-    </div>
-
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px">
+      <div class="fr">
+        <label class="fl">Delai paiement apres depot (j)</label>
+        <input type="number" class="inp" id="fmDelaiPaiement" min="0" max="365" value="30">
+      </div>
       <div class="fr">
         <label class="fl">N&deg; de facture externe</label>
         <input class="inp" id="fmNumFacture" placeholder="Ex: FA-2026-00312">
@@ -1138,15 +1144,16 @@ tr:hover td{background:#faf9f7}
         <input class="inp" id="fmNumSecondaire" placeholder="Ex: N° sinistre, bon de commande...">
       </div>
     </div>
+    <div class="xs muted" style="margin-top:3px" id="fmDelaiHint">Propose automatiquement selon le type de client (modifiable).</div>
 
-    <div class="fr" style="margin-top:4px">
+    <div class="fr" style="margin-top:8px">
       <label class="flex" style="align-items:center;gap:6px;cursor:pointer">
         <input type="checkbox" id="fmFactureDeposee" checked style="width:auto">
         <span class="xs">Marquer la facture comme deja deposee</span>
       </label>
     </div>
 
-    <div style="margin-top:16px;border-top:1px solid #e8e6e1;padding-top:14px">
+    <div style="margin-top:14px;border-top:1px solid #e8e6e1;padding-top:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <label class="fl" style="margin-bottom:0">Articles</label>
         <button class="btn btn-sm" onclick="ajouterLigneFactureManuelle()">+ Ajouter une ligne</button>
@@ -7064,6 +7071,8 @@ function openFactureManuelleForm(){
   selClient.innerHTML = htmlClient;
 
   document.getElementById('fmImmat').value = '';
+  document.getElementById('fmMarque').value = '';
+  document.getElementById('fmModele').value = '';
   document.getElementById('fmClientNom').value = '';
   document.getElementById('fmTypeClient').value = 'devis';
   document.getElementById('fmEntite').value = 'Particulier';
@@ -7074,23 +7083,29 @@ function openFactureManuelleForm(){
   document.getElementById('fmLignesBody').innerHTML = '';
   onChangeFmTypeOuEntite();
   ajouterLigneFactureManuelle();
-  ajouterLigneFactureManuelle();
   document.getElementById('modalFactureManuelle').style.display = 'flex';
 }
 function closeFactureManuelleForm(){ document.getElementById('modalFactureManuelle').style.display='none'; }
 
-// Propose le delai standard selon la meme regle que le reste de
-// l'application (forfait => fin de mois, entreprise => 30j, particulier
-// => paiement immediat), mais reste librement modifiable par l'utilisateur.
+// Propose le delai deja retenu pour CE client (CLIENT_DELAIS_PAIEMENT) en
+// priorite, sinon la regle standard (forfait => fin de mois, entreprise
+// => 30j, particulier => paiement immediat) — reste librement modifiable.
 function onChangeFmTypeOuEntite(){
   var typeClient = document.getElementById('fmTypeClient').value;
   var entite = document.getElementById('fmEntite').value;
+  var client = document.getElementById('fmClientNom').value.trim();
   var champDelai = document.getElementById('fmDelaiPaiement');
   var hint = document.getElementById('fmDelaiHint');
+  var delaiRetenuClient = client && typeof CLIENT_DELAIS_PAIEMENT[client]==='number' ? CLIENT_DELAIS_PAIEMENT[client] : null;
+
   if(typeClient==='forfait'){
     champDelai.value = 0;
     champDelai.disabled = true;
     hint.textContent = 'Forfait : echeance = fin du mois de depot (regle standard, non modifiable ici).';
+  } else if(delaiRetenuClient!==null){
+    champDelai.disabled = false;
+    champDelai.value = delaiRetenuClient;
+    hint.textContent = 'Delai deja retenu pour ce client : '+delaiRetenuClient+' jours. Modifiable.';
   } else if(entite==='Entreprise'){
     champDelai.disabled = false;
     champDelai.value = 30;
@@ -7108,6 +7123,8 @@ function onChangeFmVehiculeExistant(){
   var v = vehicles.find(function(x){return x.id===vid;});
   if(!v) return;
   document.getElementById('fmImmat').value = v.immat||'';
+  document.getElementById('fmMarque').value = v.marque||'';
+  document.getElementById('fmModele').value = v.modele||'';
   document.getElementById('fmClientNom').value = v.client||'';
   document.getElementById('fmTypeClient').value = v.typeClient||'devis';
   document.getElementById('fmEntite').value = (v.entite && v.entite.toLowerCase()!=='particulier') ? 'Entreprise' : 'Particulier';
@@ -7128,6 +7145,7 @@ function onChangeFmClientExistant(){
     document.getElementById('fmTypeClient').value = v0.typeClient||'devis';
     document.getElementById('fmEntite').value = (v0.entite && v0.entite.toLowerCase()!=='particulier') ? 'Entreprise' : 'Particulier';
   }
+  onChangeFmTypeOuEntite(); // reprend aussi le delai deja retenu pour ce client, si connu
 }
 
 function ajouterLigneFactureManuelle(){
@@ -7220,10 +7238,12 @@ function validerFactureManuelle(){
   // dossier deja en cours sur le vehicule existant.
   var vidExistant = document.getElementById('fmVehiculeExistant').value;
   var vRef = vidExistant ? vehicles.find(function(x){return x.id===vidExistant;}) : null;
+  var marqueSaisie = document.getElementById('fmMarque').value.trim();
+  var modeleSaisie = document.getElementById('fmModele').value.trim();
 
   var v = {
     id: 'fm_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),
-    immat: immat, marque:(vRef&&vRef.marque)||'', modele:(vRef&&vRef.modele)||'',
+    immat: immat, marque: marqueSaisie||(vRef&&vRef.marque)||'', modele: modeleSaisie||(vRef&&vRef.modele)||'',
     client: client, tel:(vRef&&vRef.tel)||'', email:(vRef&&vRef.email)||'',
     typeClient: typeClient, entite: entite,
     entree: dateDepot,
@@ -7241,6 +7261,14 @@ function validerFactureManuelle(){
   v.numeroFactureExterne = numFacture;
   v.numeroSecondaire = numSecondaire;
   v.montantPaye = 0;
+  // CRUCIAL : sans ce champ, la facture reste consideree "non deposee"
+  // partout ailleurs dans l'app (Devis, Echeances), meme si la case
+  // "Facture deja deposee" est cochee et une date de depot anterieure
+  // saisie — c'est ce champ, pas juste le statut, qui determine
+  // l'echeance et le positionnement (retard/proche/non echue).
+  if(estDeposee){
+    v.factureDeposeeLe = dateDepot;
+  }
   // Le delai personnalise ne s'applique qu'aux devis : les forfaits
   // suivent toujours la regle standard (echeance = fin du mois de depot).
   if(typeClient!=='forfait'){
