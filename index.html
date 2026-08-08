@@ -7880,9 +7880,13 @@ function traiterClientForfaitExposition(client){
     .forEach(function(v){
       // Meme regle que pour les devis : seules les pieces dont l'achat a
       // ete valide (cl.valideDir) representent un engagement financier
-      // reel a inclure dans l'exposition.
+      // reel a inclure dans l'exposition. On y ajoute aussi les depenses
+      // de Caisse attribuees a ce vehicule precis.
       var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
-      var montantEngage = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
+      var montantEngagePieces = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
+      var montantEngageCaisse = CAISSE_MOUVEMENTS.filter(function(m){return m.type==='sortie' && m.vehiculeId===v.id;})
+        .reduce(function(s,m){return s+(parseFloat(m.montant)||0);},0);
+      var montantEngage = montantEngagePieces + montantEngageCaisse;
       if(!montantEngage) return;
       var dateEngagement = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree;
       if(!dateEngagement) return;
@@ -7946,7 +7950,13 @@ function collecterExpositionFinanciere(){
     // presente dans le chiffrage mais jamais validee n'a pas encore ete
     // achetee, elle ne doit pas compter dans l'exposition.
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
-    var montantEngage = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
+    var montantEngagePieces = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
+    // Ajoute aussi les depenses de Caisse attribuees a ce vehicule precis
+    // (carburant, frais divers... rattaches lors de la saisie) — completent
+    // le cout reel engage sur la prestation, en plus des pieces.
+    var montantEngageCaisse = CAISSE_MOUVEMENTS.filter(function(m){return m.type==='sortie' && m.vehiculeId===v.id;})
+      .reduce(function(s,m){return s+(parseFloat(m.montant)||0);},0);
+    var montantEngage = montantEngagePieces + montantEngageCaisse;
     if(!montantEngage) return;
     var montantPaye = parseFloat(v.montantPaye)||0;
     var montantExpose = Math.max(0, montantEngage - montantPaye);
