@@ -7395,39 +7395,27 @@ function htmlCellulesFactureDetail(d){
 function creancesParClient(dossiers, enCoursNonFactures){
   enCoursNonFactures = enCoursNonFactures || [];
 
-  // Calcule le montant engage (cout d'achat reel) d'un dossier facture,
-  // a partir des lignes de chiffrage du vehicule d'origine.
-  function montantEngageDe(d){
-    if(d.isForfaitFacture) return 0; // pas de notion d'engage pour un forfait mensuel
-    var v = vehicles.find(function(x){return x.id===d.id;});
-    if(!v || !v.chiffrage || !v.chiffrage.lignes) return 0;
-    return v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();})
-      .reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
-  }
-
-  // ── KPI globaux (exposition, reste a encaisser, delai moyen) — meme
-  // calcul qu'avant, sur TOUS les dossiers/en-cours, tous statuts confondus ──
+  // ── KPI globaux — "Reste a encaisser" et "Delai moyen" restent calcules
+  // ici (propres a cette vue Devis) ; l'exposition, elle, reutilise
+  // desormais TOUJOURS collecterExpositionFinanciere() — la meme source
+  // que le tableau "Exposition financiere" — pour ne jamais afficher deux
+  // chiffres differents pour la meme notion.
   var clientsKpi = {};
   dossiers.forEach(function(d){
     var key = d.client;
-    if(!clientsKpi[key]) clientsKpi[key] = {totalEngage:0, totalPaye:0, totalReste:0};
-    clientsKpi[key].totalEngage += montantEngageDe(d);
-    clientsKpi[key].totalPaye   += d.montantPaye;
-    clientsKpi[key].totalReste  += d.resteARecouvrir;
+    if(!clientsKpi[key]) clientsKpi[key] = {totalReste:0};
+    clientsKpi[key].totalReste += d.resteARecouvrir;
   });
-  enCoursNonFactures.forEach(function(e){
-    var key = e.client;
-    if(!clientsKpi[key]) clientsKpi[key] = {totalEngage:0, totalPaye:0, totalReste:0};
-    clientsKpi[key].totalEngage += e.montantEngage;
+  var totalReste = 0;
+  Object.keys(clientsKpi).forEach(function(k){ totalReste += clientsKpi[k].totalReste; });
+
+  var collecteExpo = collecterExpositionFinanciere();
+  var totalExpo = 0, clientsExposes = 0;
+  Object.keys(collecteExpo.buckets).forEach(function(k){
+    totalExpo += collecteExpo.buckets[k].totalExpose;
+    if(collecteExpo.buckets[k].totalExpose>0) clientsExposes++;
   });
-  var totalExpo=0, totalReste=0, clientsExposes=0;
-  Object.keys(clientsKpi).forEach(function(k){
-    var c = clientsKpi[k];
-    var expo = c.totalEngage - c.totalPaye; if(expo<0) expo=0;
-    totalExpo += expo;
-    totalReste += c.totalReste;
-    if(expo>0) clientsExposes++;
-  });
+
   var delaiGlobal = (function(){
     var tousPayes = dossiers.filter(function(d){return d.statut==='paye'&&d.datePaiement&&d.dateFacture;});
     if(!tousPayes.length) return '—';
@@ -9273,16 +9261,17 @@ function pageFinancesDashboard(){
   });
   var tauxEncaissement = factureSurPeriode>0 ? Math.min(100, encaisseRealise/factureSurPeriode*100) : null;
 
-  // Exposition financiere globale = somme des expositions par client (engage - encaisse), reprend Creances
+  // Exposition financiere globale — reutilise desormais TOUJOURS
+  // collecterExpositionFinanciere(), la meme source que le tableau
+  // "Exposition financiere" de Facturation, pour ne jamais afficher deux
+  // chiffres differents pour la meme notion.
   var expositionTotale = 0;
-  vehicles.forEach(function(v){
-    if(!v.chiffrage || !v.chiffrage.lignes) return;
-    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
-    var engage = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
-    var paye = parseFloat(v.montantPaye)||0;
-    var expo = engage-paye;
-    if(expo>0) expositionTotale += expo;
-  });
+  (function(){
+    var collecteExpo = collecterExpositionFinanciere();
+    Object.keys(collecteExpo.buckets).forEach(function(k){
+      expositionTotale += collecteExpo.buckets[k].totalExpose;
+    });
+  })();
 
   // Echeances de la periode tresorerie choisie : fournisseurs / charges fixes / engagements
   var decaissementsAttendus = collecterDecaissementsAttendus();
