@@ -6526,6 +6526,20 @@ function pageFacturationEcheances(){
     });
   });
 
+  // Factures forfait deja EMISES mais pas encore deposees — categorie
+  // manquante jusqu'ici : ni "nonDeposees" (mois jamais factures) ni
+  // "encaissements" (deja deposees) ne les couvraient, les rendant
+  // invisibles des qu'une facture etait emise pour un mois choisi.
+  FORFAIT_FACTURES.filter(function(f){return f.statut==='emise';}).forEach(function(f){
+    dossiersUnifies.push({
+      id:null, client:f.client, immat:'', marque:'', modele:'',
+      resteARecouvrir:f.montant, montantFacture:f.montant,
+      factureDeposee:false, dateEcheance:0, enRetard:false, statut:'emise_attente_depot',
+      isForfaitFacture:true, periodeKey:f.periodeKey,
+      numeroFactureExterne:f.numeroFactureExterne||'', numeroSecondaire:f.numeroSecondaire||''
+    });
+  });
+
   var totalNonDeposees = nonDeposees.reduce(function(s,i){return s+i.montant;},0);
   var totalEnRetard = encaissements.filter(function(e){return e.enRetard;}).reduce(function(s,i){return s+i.montant;},0);
   var dans3Jours = Date.now() + 3*86400000;
@@ -7321,12 +7335,16 @@ function htmlCellulesFactureDetail(d){
     h += '<td class="xs">'+numFactCellF+'<br>'+refCellF+'</td>';
 
     var delaiTxtF;
-    if(!d.factureDeposee) delaiTxtF = '<span class="xs muted">A emettre / a deposer</span>';
+    if(d.statut==='emise_attente_depot') delaiTxtF = '<span class="xs" style="color:#854F0B;font-weight:600">Emise, a deposer</span>';
+    else if(!d.factureDeposee) delaiTxtF = '<span class="xs muted">A emettre</span>';
     else if(d.dateEcheance) delaiTxtF = '<span class="xs" style="font-weight:600">'+new Date(d.dateEcheance).toLocaleDateString('fr-FR')+'</span>';
     else delaiTxtF = '<span class="xs muted">—</span>';
     h += '<td>'+delaiTxtF+'</td>';
 
     h += '<td><div class="flex gap6">';
+    if(d.statut==='emise_attente_depot'){
+      h += '<button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" onclick="event.stopPropagation();deposerFactureForfaitByEl(this)" title="Marquer deposee">&#x2714;</button>';
+    }
     if(d.factureDeposee){
       h += '<button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" data-montant="'+d.montantFacture+'" onclick="event.stopPropagation();payerFactureForfaitByEl(this)" title="Enregistrer paiement">&#x1F4B5;</button>';
       h += '<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" onclick="event.stopPropagation();ouvrirNumerosFactureForfaitByEl(this)" title="Modifier N° facture / reference / delai">&#x270F;</button>';
@@ -7673,13 +7691,17 @@ function rendreQuatreTableauxParClient(dossiers, prefixeExpand, titreNonDeposee)
   var html = '';
   var TROIS_JOURS_MS = 3*86400000;
   var maintenant = Date.now();
-  var buckets = { non_deposee:{}, retard:{}, proche_echeance:{}, non_echue:{} };
+  var buckets = { non_deposee:{}, emise_non_deposee:{}, retard:{}, proche_echeance:{}, non_echue:{} };
 
   dossiers.forEach(function(d){
     if(d.statut==='paye') return;
     if(d.resteARecouvrir<=0) return;
     var cat;
-    if(!d.factureDeposee) cat = 'non_deposee';
+    // Facture forfait deja EMISE mais pas encore deposee : categorie
+    // distincte des mois jamais encore factures, sinon la facture
+    // nouvellement emise devient invisible / confondue avec "a emettre".
+    if(d.statut==='emise_attente_depot') cat = 'emise_non_deposee';
+    else if(!d.factureDeposee) cat = 'non_deposee';
     else if(d.enRetard) cat = 'retard';
     else if(d.dateEcheance && (d.dateEcheance-maintenant)<=TROIS_JOURS_MS) cat = 'proche_echeance';
     else cat = 'non_echue';
@@ -7690,10 +7712,11 @@ function rendreQuatreTableauxParClient(dossiers, prefixeExpand, titreNonDeposee)
   });
 
   var sections = [
-    {key:'non_deposee',     titre:titreNonDeposee||'Factures non deposees', couleur:'#5a5956', bg:'#f5f4f1'},
-    {key:'retard',          titre:'Factures en retard',           couleur:'#A32D2D', bg:'#FCEBEB'},
-    {key:'proche_echeance', titre:'Arrivent a echeance (3 jours)', couleur:'#854F0B', bg:'#FDF3E3'},
-    {key:'non_echue',       titre:'Non echues',                   couleur:'#185FA5', bg:'#EAF1FA'}
+    {key:'non_deposee',        titre:titreNonDeposee||'Factures non deposees', couleur:'#5a5956', bg:'#f5f4f1'},
+    {key:'emise_non_deposee',  titre:'Factures a deposer',           couleur:'#854F0B', bg:'#FDF3E3'},
+    {key:'retard',             titre:'Factures en retard',           couleur:'#A32D2D', bg:'#FCEBEB'},
+    {key:'proche_echeance',    titre:'Arrivent a echeance (3 jours)', couleur:'#854F0B', bg:'#FDF3E3'},
+    {key:'non_echue',          titre:'Non echues',                   couleur:'#185FA5', bg:'#EAF1FA'}
   ];
 
   sections.forEach(function(sec){
@@ -8022,13 +8045,16 @@ function pageFacturationForfait(){
   // ── 4 tableaux par echeance, meme principe que Devis/Echeances : les
   // factures forfait DEPOSEES (statut 'deposee') sont reparties selon leur
   // echeance (fin du mois de la periode facturee) en retard/proche/non
-  // echue ; les mois pas encore emis ou emis-mais-pas-deposes tombent dans
-  // "A emettre". La presentation detaillee ci-dessous (liste des clients
+  // echue ; les mois pas encore emis tombent dans "A emettre" ; les
+  // factures deja emises mais pas encore deposees tombent dans leur PROPRE
+  // categorie "Factures a deposer" (sinon une facture qui vient d'etre
+  // emise pour un mois choisi devient invisible / confondue avec "a
+  // emettre"). La presentation detaillee ci-dessous (liste des clients
   // avec toutes leurs caracteristiques) reste totalement inchangee.
   var dossiersForfaitUnifies = [];
 
-  // A emettre : mois jamais factures (reutilise la partie forfait de
-  // collecterFacturesNonDeposees) + factures deja emises mais pas deposees.
+  // A emettre : uniquement les mois JAMAIS encore factures (aucun
+  // enregistrement FORFAIT_FACTURES du tout).
   collecterFacturesNonDeposees().filter(function(it){return it.type==='forfait';}).forEach(function(it){
     dossiersForfaitUnifies.push({
       id:null, client:it.nom, immat:'', marque:'', modele:'',
@@ -8038,11 +8064,13 @@ function pageFacturationForfait(){
       numeroFactureExterne:it.numeroFactureExterne||'', numeroSecondaire:''
     });
   });
+  // Factures a deposer : deja emises, pas encore deposees — categorie
+  // distincte, avec son propre statut 'emise_attente_depot'.
   FORFAIT_FACTURES.filter(function(f){return f.statut==='emise';}).forEach(function(f){
     dossiersForfaitUnifies.push({
       id:null, client:f.client, immat:'', marque:'', modele:'',
       resteARecouvrir:f.montant, montantFacture:f.montant,
-      factureDeposee:false, dateEcheance:0, enRetard:false, statut:'attente_depot',
+      factureDeposee:false, dateEcheance:0, enRetard:false, statut:'emise_attente_depot',
       isForfaitFacture:true, periodeKey:f.periodeKey,
       numeroFactureExterne:f.numeroFactureExterne||'', numeroSecondaire:f.numeroSecondaire||''
     });
@@ -8143,7 +8171,7 @@ function pageFacturationForfait(){
     html += '</div></div>';
 
     // Boutons d'action selon statut
-    html += '<div class="flex gap6" style="margin-top:8px">';
+    html += '<div class="flex gap6" style="margin-top:8px;flex-wrap:wrap">';
     if(statut==='a_emettre'){
       html += '<button class="btn btn-primary btn-sm" data-pk="'+c.periodeKey+'" data-client="'+c.client+'" data-montant="'+c.montantTotal+'" onclick="emettreFactureForfaitByEl(this)">&#x1F4CB; Emettre la facture</button>';
       html += '<button class="btn btn-sm" data-pk="'+c.periodeKey+'" onclick="imprimerFactureForfaitByEl(this)" title="Imprimer un apercu / brouillon">&#x1F5A8;</button>';
@@ -8162,12 +8190,16 @@ function pageFacturationForfait(){
       html += '<button class="btn btn-sm" data-pk="'+c.periodeKey+'" onclick="imprimerFactureForfaitByEl(this)" title="Imprimer / PDF">&#x1F5A8;</button>';
     }
     html += '<button class="btn btn-sm" data-pk="'+c.periodeKey+'" onclick="exporterFactureForfaitExcelByEl(this)" title="Exporter cette facture en Excel">&#128202;</button>';
+    html += '<button class="btn btn-sm" data-client="'+encodeURIComponent(c.client)+'" onclick="ouvrirEmissionFactureForfaitByEl(this)" title="Emettre une facture pour un autre mois (a venir)">&#x1F4C5; Emettre facture...</button>';
+    html += '<button class="btn btn-sm" style="color:#A32D2D" data-client="'+encodeURIComponent(c.client)+'" onclick="ouvrirSuppressionFactureForfaitEmiseByEl(this)" title="Annuler une facture emise par erreur, parmi tous les mois emis de ce client">&#x1F5D1; Annuler une emission...</button>';
     html += '<button class="btn btn-sm" style="color:#A32D2D;border-color:#E0A0A0;margin-left:auto" data-client-supp="'+encodeURIComponent(c.client)+'" onclick="supprimerClientForfaitByEl(this)">&#x1F5D1; Supprimer</button>';
     html += '</div>';
 
     html += '</div></div>';
   });
   html += '</div>';
+  html += htmlModalEmissionFactureForfait();
+  html += htmlModalSuppressionEmiseForfait();
   html += htmlModalStatutFacturesClient();
   return html;
 }
@@ -8230,6 +8262,167 @@ function supprimerClientForfaitByEl(btn){
   saveForfaitFactures();
   renderPage();
 }
+
+// Calcule le premier mois, a partir du mois en cours, qui n'a pas encore
+// de facture (peu importe son statut) pour ce client — sert de defaut
+// intelligent dans le selecteur de mois (mois en cours si libre, sinon le
+// suivant disponible).
+function calculerMoisParDefautForfait(client){
+  var today = new Date();
+  var annee = today.getFullYear(), mois = today.getMonth();
+  for(var securite=0; securite<24; securite++){
+    var pk = annee+'-'+String(mois+1).padStart(2,'0')+'-'+client;
+    var existe = FORFAIT_FACTURES.some(function(f){return f.periodeKey===pk;});
+    if(!existe) return {annee:annee, mois:mois};
+    mois++;
+    if(mois>11){ mois=0; annee++; }
+  }
+  return {annee:annee, mois:mois};
+}
+
+// Ouvre la modale de choix du mois a facturer — toujours disponible, pas
+// seulement quand le mois affiche n'a pas encore ete emis. Propose par
+// defaut le mois en cours s'il n'a pas de facture, sinon le prochain mois
+// libre, mais l'utilisateur peut choisir n'importe quel mois a venir.
+function htmlModalEmissionFactureForfait(){
+  var html = '<div class="overlay" id="modalEmissionForfait" style="display:none" onclick="if(event.target===this)closeEmissionForfait()">';
+  html += '<div class="modal" style="max-width:400px">';
+  html += '<div class="mhead"><h2 id="emissionForfaitTitre"></h2><button class="btn btn-sm" onclick="closeEmissionForfait()">X</button></div>';
+  html += '<div class="mbody">';
+  html += '<input type="hidden" id="emissionForfaitClient">';
+  html += '<div class="info-box" style="margin-bottom:12px">Seuls les mois jamais encore factures sont proposes ci-dessous.</div>';
+  html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Mois a facturer</label><select class="inp" id="emissionForfaitMoisDispo"></select></div>';
+  html += '<div class="fr"><label class="fl">Montant du forfait</label><div class="xs" style="font-weight:700;padding:6px 0" id="emissionForfaitMontant"></div></div>';
+  html += '</div>';
+  html += '<div class="mfoot"><button class="btn" onclick="closeEmissionForfait()">Annuler</button><button class="btn btn-primary" onclick="confirmerEmissionFactureForfait()">&#x1F4CB; Emettre la facture</button></div>';
+  html += '</div></div>';
+  return html;
+}
+
+// Construit la liste des mois DISPONIBLES (jamais encore factures, peu
+// importe le statut ensuite) pour un client, sur une fenetre de 25 mois
+// autour d'aujourd'hui (12 avant, 12 apres) — largement suffisant en
+// pratique, evite de proposer un mois deja emis/depose/paye.
+function construireMoisDisponiblesForfait(client){
+  var moisLabelsComplets = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
+  var today = new Date();
+  var disponibles = [];
+  for(var offset=-12; offset<=12; offset++){
+    var d = new Date(today.getFullYear(), today.getMonth()+offset, 1);
+    var annee = d.getFullYear(), mois = d.getMonth();
+    var pk = annee+'-'+String(mois+1).padStart(2,'0')+'-'+client;
+    var dejaEmis = FORFAIT_FACTURES.some(function(f){return f.periodeKey===pk;});
+    if(!dejaEmis){
+      disponibles.push({annee:annee, mois:mois, periodeKey:pk, label:moisLabelsComplets[mois]+' '+annee});
+    }
+  }
+  return disponibles;
+}
+
+function ouvrirEmissionFactureForfaitByEl(btn){
+  ouvrirEmissionFactureForfait(decodeURIComponent(btn.getAttribute('data-client')));
+}
+function ouvrirEmissionFactureForfait(client){
+  var montant = forfaitMensuelEffectifClient(client);
+  var disponibles = construireMoisDisponiblesForfait(client);
+  var defaut = calculerMoisParDefautForfait(client);
+
+  document.getElementById('emissionForfaitClient').value = client;
+  document.getElementById('emissionForfaitTitre').textContent = 'Emettre une facture forfait — '+client;
+  document.getElementById('emissionForfaitMontant').textContent = montant.toLocaleString('fr-FR')+' FCFA / mois';
+
+  var sel = document.getElementById('emissionForfaitMoisDispo');
+  if(!disponibles.length){
+    sel.innerHTML = '<option value="">Aucun mois disponible</option>';
+  } else {
+    sel.innerHTML = disponibles.map(function(d){ return '<option value="'+d.periodeKey+'">'+d.label+'</option>'; }).join('');
+    var defautPk = defaut.annee+'-'+String(defaut.mois+1).padStart(2,'0')+'-'+client;
+    if(disponibles.some(function(d){return d.periodeKey===defautPk;})) sel.value = defautPk;
+  }
+
+  document.getElementById('modalEmissionForfait').style.display = 'flex';
+}
+function closeEmissionForfait(){ document.getElementById('modalEmissionForfait').style.display='none'; }
+
+function confirmerEmissionFactureForfait(){
+  var client = document.getElementById('emissionForfaitClient').value;
+  var pk = document.getElementById('emissionForfaitMoisDispo').value;
+  if(!pk){ alert('Aucun mois disponible a facturer.'); return; }
+
+  if(FORFAIT_FACTURES.find(function(f){return f.periodeKey===pk;})){
+    alert('Une facture existe deja pour ce mois. Utilisez la suppression si besoin de la refaire.');
+    return;
+  }
+  var montant = forfaitMensuelEffectifClient(client);
+  FORFAIT_FACTURES.push({
+    periodeKey: pk, client: client, montant: montant,
+    statut: 'emise', emiseDate: Date.now(),
+    deposeeDate: null, paiementDate: null
+  });
+  saveForfaitFactures();
+  closeEmissionForfait();
+  renderPage();
+}
+
+// Supprime une facture forfait EMISE par erreur — volontairement limitee
+// aux factures pas encore deposees (statut 'emise'), pour eviter de
+// supprimer accidentellement une facture deja remise au client.
+function supprimerFactureForfaitEmiseByEl(btn){
+  if(currentRole!=='direction') return;
+  var pk = btn.getAttribute('data-pk');
+  var f = FORFAIT_FACTURES.find(function(x){return x.periodeKey===pk;});
+  if(!f || f.statut!=='emise') return;
+  if(!confirm('Supprimer cette facture emise ('+libelleMoisForfait(pk)+') pour '+f.client+' ?\nA utiliser uniquement en cas d\'erreur — cette action est irreversible.')) return;
+  FORFAIT_FACTURES = FORFAIT_FACTURES.filter(function(x){return x.periodeKey!==pk;});
+  saveForfaitFactures();
+  renderPage();
+  // Si la modale de selection etait ouverte, la rafraichir avec la liste a jour
+  if(document.getElementById('modalSuppressionEmiseForfait') && document.getElementById('modalSuppressionEmiseForfait').style.display==='flex'){
+    ouvrirSuppressionFactureForfaitEmise(f.client);
+  }
+}
+
+// Modale listant TOUS les mois deja emis (statut 'emise', pas encore
+// deposes) du client — pas seulement celui affiche a l'ecran — pour
+// choisir precisement lequel annuler en cas d'erreur.
+function htmlModalSuppressionEmiseForfait(){
+  var html = '<div class="overlay" id="modalSuppressionEmiseForfait" style="display:none" onclick="if(event.target===this)closeSuppressionEmiseForfait()">';
+  html += '<div class="modal" style="max-width:440px">';
+  html += '<div class="mhead"><h2 id="suppressionEmiseForfaitTitre"></h2><button class="btn btn-sm" onclick="closeSuppressionEmiseForfait()">X</button></div>';
+  html += '<div class="mbody" id="suppressionEmiseForfaitContenu"></div>';
+  html += '<div class="mfoot"><button class="btn" onclick="closeSuppressionEmiseForfait()">Fermer</button></div>';
+  html += '</div></div>';
+  return html;
+}
+
+function ouvrirSuppressionFactureForfaitEmiseByEl(btn){
+  ouvrirSuppressionFactureForfaitEmise(decodeURIComponent(btn.getAttribute('data-client')));
+}
+function ouvrirSuppressionFactureForfaitEmise(client){
+  document.getElementById('suppressionEmiseForfaitTitre').textContent = 'Annuler une emission — '+client;
+  var emises = FORFAIT_FACTURES.filter(function(f){ return f.client===client && f.statut==='emise'; })
+    .sort(function(a,b){ return a.periodeKey.localeCompare(b.periodeKey); });
+
+  var html;
+  if(!emises.length){
+    html = '<div class="empty">Aucune facture emise (non deposee) a annuler pour ce client.</div>';
+  } else {
+    html = '<div class="info-box" style="margin-bottom:12px">Seuls les mois emis mais PAS ENCORE deposes peuvent etre annules.</div>';
+    html += '<div class="tw"><table><thead><tr><th>Mois</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
+    emises.forEach(function(f){
+      html += '<tr>';
+      html += '<td>'+libelleMoisForfait(f.periodeKey)+'</td>';
+      html += '<td style="text-align:right;font-weight:700">'+f.montant.toLocaleString('fr-FR')+' FCFA</td>';
+      html += '<td><button class="btn btn-sm" style="color:#A32D2D;border-color:#E0A0A0" data-pk="'+f.periodeKey+'" onclick="supprimerFactureForfaitEmiseByEl(this)">&#x1F5D1; Annuler</button></td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+  document.getElementById('suppressionEmiseForfaitContenu').innerHTML = html;
+  document.getElementById('modalSuppressionEmiseForfait').style.display = 'flex';
+}
+function closeSuppressionEmiseForfait(){ document.getElementById('modalSuppressionEmiseForfait').style.display='none'; }
+
 
 function emettreFactureForfaitByEl(btn){
   var pk      = btn.getAttribute('data-pk');
