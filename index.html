@@ -30,6 +30,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;f
 .kgrid{display:grid;gap:12px;margin-bottom:16px}
 @keyframes slideInNotif{from{transform:translateX(120%);opacity:0}to{transform:translateX(0);opacity:1}}
 .k4{grid-template-columns:repeat(4,1fr)}
+.k5{grid-template-columns:repeat(5,1fr)}
 .k3{grid-template-columns:repeat(3,1fr)}
 .k2{grid-template-columns:repeat(2,1fr)}
 .kpi{background:#fff;border:1px solid #e8e6e1;border-radius:9px;padding:13px 15px}
@@ -137,7 +138,7 @@ tr:hover td{background:#faf9f7}
   .sidebar{width:52px;min-width:52px}
   .logo span,.nav-label,.nav-item span,.role-wrap{display:none}
   .nav-item{padding:11px;justify-content:center}
-  .k4,.k3{grid-template-columns:1fr 1fr}
+  .k4,.k3,.k5{grid-template-columns:1fr 1fr}
   .g2,.g3,.g4{grid-template-columns:1fr 1fr}
 }
 </style>
@@ -9282,7 +9283,18 @@ function pageFinancesDashboard(){
   var joursPeriodeActivite = Math.max(1, Math.round((bornesActivite.fin-bornesActivite.deb)/86400000));
   var chargesFixesPeriode = chargesFixesMensuelEquiv * (joursPeriodeActivite/30);
 
-  var resultatOperationnel = caTotal - achatTotal - chargesVariablesCaisse - chargesFixesPeriode;
+  // Dettes fournisseurs MANUELLES (achats generaux non lies a un vehicule
+  // — stock, fournitures...) engagees sur la periode. Comptees peu importe
+  // qu'elles soient deja payees ou non (la depense a bien eu lieu, c'est
+  // une logique d'engagement, pas de tresorerie). Les pieces en credit
+  // rattachees a un vehicule ne sont PAS reprises ici : elles sont deja
+  // comptees dans achatTotal ci-dessus, quel que soit leur mode de
+  // paiement — les reprendre ferait un double comptage.
+  var dettesManuellesPeriode = DETTES_MANUELLES.filter(function(dm){
+    return dm.dateAchat>=bornesActivite.deb && dm.dateAchat<=bornesActivite.fin;
+  }).reduce(function(s,dm){return s+(parseFloat(dm.prixAchat)||0)*(parseInt(dm.qte)||1);},0);
+
+  var resultatOperationnel = caTotal - achatTotal - chargesVariablesCaisse - chargesFixesPeriode - dettesManuellesPeriode;
   var margeOperationnelle = caTotal>0 ? (resultatOperationnel/caTotal*100) : null;
 
   // ═══ Ligne 2 : Tresorerie (encaissements / exposition / echeances) ═══
@@ -9391,12 +9403,13 @@ function pageFinancesDashboard(){
   // ── Marge operationnelle : CA - pieces - charges variables (Caisse) -
   // charges fixes proratisees. Indicateur de rentabilite REELLE, plus
   // exigeant que la marge brute ci-dessus. ──
-  html += '<div class="kgrid k4" style="margin-bottom:20px">';
+  html += '<div class="kgrid k5" style="margin-bottom:20px">';
   html += bloc('Charges variables (Caisse)', chargesVariablesCaisse?chargesVariablesCaisse.toLocaleString('fr-FR')+' FCFA':'—', '#854F0B', []);
+  html += bloc('Dettes fournisseurs (manuelles)', dettesManuellesPeriode?dettesManuellesPeriode.toLocaleString('fr-FR')+' FCFA':'—', '#854F0B', []);
   html += bloc('Charges fixes (periode)', chargesFixesPeriode?Math.round(chargesFixesPeriode).toLocaleString('fr-FR')+' FCFA':'—', '#854F0B', []);
   html += bloc('Resultat operationnel', resultatOperationnel?(resultatOperationnel>0?'+':'')+Math.round(resultatOperationnel).toLocaleString('fr-FR')+' FCFA':'—', resultatOperationnel>=0?'#3B6D11':'#A32D2D', []);
   html += bloc('Marge operationnelle', margeOperationnelle!==null?margeOperationnelle.toFixed(1)+'%':'—', margeOperationnelle!==null&&margeOperationnelle>=10?'#3B6D11':(margeOperationnelle!==null&&margeOperationnelle>=0?'#854F0B':'#A32D2D'), [
-    {label:'CA - pieces - Caisse - charges fixes', value:'/ CA'}
+    {label:'CA - pieces - Caisse - dettes - charges fixes', value:'/ CA'}
   ]);
   html += '</div>';
 
