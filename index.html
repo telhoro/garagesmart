@@ -7484,7 +7484,7 @@ function collecterToutesFacturesClient(client){
       factures.push({
         type:'devis', id:v.id, immat:v.immat, marque:v.marque, modele:v.modele,
         montant:montant, montantPaye:montantPaye, reste:reste,
-        deposee:deposee, dateEcheance:dateEcheance, statut:statut,
+        deposee:deposee, dateDepot:v.factureDeposeeLe||0, dateEcheance:dateEcheance, statut:statut,
         numeroFactureExterne:v.numeroFactureExterne||'', numeroSecondaire:v.numeroSecondaire||''
       });
     });
@@ -7494,7 +7494,7 @@ function collecterToutesFacturesClient(client){
     var reste = f.montant - montantPaye;
     if(reste<=0) return;
     var deposee = f.statut==='deposee';
-    var dateEcheance = 0, enRetard = false;
+    var dateEcheance = 0, enRetard = false, dateDepotForfait = f.deposeeDate || f.emiseDate || 0;
     if(deposee){
       var parts = f.periodeKey.split('-');
       var annee = parseInt(parts[0],10), moisIdx = parseInt(parts[1],10)-1;
@@ -7512,7 +7512,7 @@ function collecterToutesFacturesClient(client){
     factures.push({
       type:'forfait', periodeKey:f.periodeKey,
       montant:f.montant, montantPaye:montantPaye, reste:reste,
-      deposee:deposee, dateEcheance:dateEcheance, statut:statut,
+      deposee:deposee, dateDepot:dateDepotForfait, dateEcheance:dateEcheance, statut:statut,
       numeroFactureExterne:f.numeroFactureExterne||'', numeroSecondaire:f.numeroSecondaire||''
     });
   });
@@ -7533,7 +7533,7 @@ function ouvrirStatutFacturesClient(client){
   if(!factures.length){
     html += '<div class="empty">Aucune facture en cours pour ce client — tout est solde.</div>';
   } else {
-    html += '<div class="tw"><table><thead><tr><th>Type</th><th>Vehicule / Mois</th><th style="text-align:right">Reste</th><th>Echeance</th><th>Statut</th></tr></thead><tbody>';
+    html += '<div class="tw"><table><thead><tr><th>Type</th><th>Vehicule / Mois</th><th style="text-align:right">Reste</th><th>N&deg; Facture</th><th>Ref. interne</th><th>Depot</th><th>Echeance</th><th>Statut</th></tr></thead><tbody>';
     factures.forEach(function(f){
       var libelle = f.type==='forfait' ? libelleMoisForfait(f.periodeKey) : (f.immat+' '+(f.marque||'')+' '+(f.modele||''));
       var statutBadge, statutLabel;
@@ -7541,11 +7541,15 @@ function ouvrirStatutFacturesClient(client){
       else if(f.statut==='retard'){ statutBadge='b-red'; statutLabel='En retard'; }
       else if(f.statut==='proche_echeance'){ statutBadge='b-amber'; statutLabel='Echeance proche'; }
       else { statutBadge='b-blue'; statutLabel='Non echue'; }
+      var depotTxt = f.deposee && f.dateDepot ? new Date(f.dateDepot).toLocaleDateString('fr-FR') : '—';
       var echeanceTxt = f.deposee && f.dateEcheance ? new Date(f.dateEcheance).toLocaleDateString('fr-FR') : '—';
       html += '<tr>';
       html += '<td>'+(f.type==='forfait'?'<span class="badge b-purple">Forfait</span>':'<span class="badge b-blue">Devis</span>')+'</td>';
       html += '<td class="xs">'+libelle+'</td>';
       html += '<td style="text-align:right;font-weight:700">'+f.reste.toLocaleString('fr-FR')+'</td>';
+      html += '<td class="xs">'+(f.numeroFactureExterne||'—')+'</td>';
+      html += '<td class="xs">'+(f.numeroSecondaire||'—')+'</td>';
+      html += '<td class="xs">'+depotTxt+'</td>';
       html += '<td class="xs">'+echeanceTxt+'</td>';
       html += '<td><span class="badge '+statutBadge+'">'+statutLabel+'</span></td>';
       html += '</tr>';
@@ -7569,13 +7573,18 @@ function imprimerStatutFacturesClient(client){
   var totalReste = factures.reduce(function(s,f){return s+f.reste;},0);
 
   var rowsHtml = !factures.length
-    ? '<tr><td colspan="4" style="border:1px solid #bbb;padding:10px;text-align:center;color:#888;font-size:11px">Aucune facture deposee en attente pour ce client.</td></tr>'
+    ? '<tr><td colspan="7" style="border:1px solid #bbb;padding:10px;text-align:center;color:#888;font-size:11px">Aucune facture deposee en attente pour ce client.</td></tr>'
     : factures.map(function(f){
         var libelle = f.type==='forfait' ? libelleMoisForfait(f.periodeKey) : (f.immat+' '+(f.marque||'')+' '+(f.modele||''));
+        var depotTxt = f.dateDepot ? new Date(f.dateDepot).toLocaleDateString('fr-FR') : '—';
+        var echeanceTxt = f.dateEcheance ? new Date(f.dateEcheance).toLocaleDateString('fr-FR') : '—';
         return '<tr>'
           +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+(f.type==='forfait'?'Forfait':'Devis')+'</td>'
           +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+libelle+'</td>'
           +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+(f.numeroFactureExterne||'—')+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+(f.numeroSecondaire||'—')+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+depotTxt+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+echeanceTxt+'</td>'
           +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px;text-align:right;font-weight:700">'+f.reste.toLocaleString('fr-FR')+'</td>'
           +'</tr>';
       }).join('');
@@ -7599,6 +7608,9 @@ function imprimerStatutFacturesClient(client){
     +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:left">Type</th>'
     +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:left">Vehicule / Mois</th>'
     +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:left">N&deg; Facture</th>'
+    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:left">Ref. interne</th>'
+    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:left">Depot</th>'
+    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:left">Echeance</th>'
     +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:right">Reste a payer</th>'
     +'</tr></thead><tbody>'+rowsHtml+'</tbody></table>'
     +'<div style="margin-top:20px;padding:14px 16px;background:#1a1a1a;color:#fff;display:flex;justify-content:space-between">'
@@ -7625,20 +7637,22 @@ function exporterStatutFacturesClientExcel(client){
   data.push(['CLIENT', client]);
   data.push(['Edite le', dateEdit]);
   data.push([]);
-  data.push(['Type', 'Vehicule / Mois', 'N° Facture', 'Reste a payer']);
+  data.push(['Type', 'Vehicule / Mois', 'N° Facture', 'Ref. interne', 'Depot', 'Echeance', 'Reste a payer']);
   if(!factures.length){
-    data.push(['Aucune facture deposee en attente pour ce client.', '', '', '']);
+    data.push(['Aucune facture deposee en attente pour ce client.', '', '', '', '', '', '']);
   } else {
     factures.forEach(function(f){
       var libelle = f.type==='forfait' ? libelleMoisForfait(f.periodeKey) : (f.immat+' '+(f.marque||'')+' '+(f.modele||''));
-      data.push([f.type==='forfait'?'Forfait':'Devis', libelle, f.numeroFactureExterne||'', f.reste]);
+      var depotTxt = f.dateDepot ? new Date(f.dateDepot).toLocaleDateString('fr-FR') : '';
+      var echeanceTxt = f.dateEcheance ? new Date(f.dateEcheance).toLocaleDateString('fr-FR') : '';
+      data.push([f.type==='forfait'?'Forfait':'Devis', libelle, f.numeroFactureExterne||'', f.numeroSecondaire||'', depotTxt, echeanceTxt, f.reste]);
     });
   }
   data.push([]);
-  data.push(['Total restant du (factures deposees)', '', '', totalReste]);
+  data.push(['Total restant du (factures deposees)', '', '', '', '', '', totalReste]);
 
   var ws = XLSX.utils.aoa_to_sheet(data);
-  ws['!cols'] = [{wch:12},{wch:28},{wch:18},{wch:16}];
+  ws['!cols'] = [{wch:12},{wch:28},{wch:16},{wch:16},{wch:12},{wch:12},{wch:16}];
   var wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Statut factures');
   var cleanClient = client.replace(/[^\w\s\-]/g,'').trim().replace(/\s+/g,'_');
