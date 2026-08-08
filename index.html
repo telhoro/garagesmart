@@ -7343,7 +7343,7 @@ function htmlCellulesFactureDetail(d){
 
     h += '<td><div class="flex gap6">';
     if(d.statut==='emise_attente_depot'){
-      h += '<button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" onclick="event.stopPropagation();deposerFactureForfaitByEl(this)" title="Marquer deposee">&#x2714;</button>';
+      h += '<button class="btn btn-success btn-sm" data-pk="'+d.periodeKey+'" onclick="event.stopPropagation();deposerFactureForfaitByEl(this)" title="Marquer deposee">&#x2714; Facture deposee</button>';
     }
     if(d.factureDeposee){
       h += '<button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" data-montant="'+d.montantFacture+'" onclick="event.stopPropagation();payerFactureForfaitByEl(this)" title="Enregistrer paiement">&#x1F4B5;</button>';
@@ -8191,7 +8191,7 @@ function pageFacturationForfait(){
     }
     html += '<button class="btn btn-sm" data-pk="'+c.periodeKey+'" onclick="exporterFactureForfaitExcelByEl(this)" title="Exporter cette facture en Excel">&#128202;</button>';
     html += '<button class="btn btn-sm" data-client="'+encodeURIComponent(c.client)+'" onclick="ouvrirEmissionFactureForfaitByEl(this)" title="Emettre une facture pour un autre mois (a venir)">&#x1F4C5; Emettre facture...</button>';
-    html += '<button class="btn btn-sm" style="color:#A32D2D" data-client="'+encodeURIComponent(c.client)+'" onclick="ouvrirSuppressionFactureForfaitEmiseByEl(this)" title="Annuler une facture emise par erreur, parmi tous les mois emis de ce client">&#x1F5D1; Annuler une emission...</button>';
+    html += '<button class="btn btn-sm" style="color:#A32D2D" data-client="'+encodeURIComponent(c.client)+'" onclick="ouvrirSuppressionFactureForfaitEmiseByEl(this)" title="Voir et supprimer si besoin n\'importe quel mois deja enregistre pour ce client, y compris un mois bloque avec un statut anormal">&#x1F5D1; Gerer / Annuler...</button>';
     html += '<button class="btn btn-sm" style="color:#A32D2D;border-color:#E0A0A0;margin-left:auto" data-client-supp="'+encodeURIComponent(c.client)+'" onclick="supprimerClientForfaitByEl(this)">&#x1F5D1; Supprimer</button>';
     html += '</div>';
 
@@ -8382,12 +8382,15 @@ function supprimerFactureForfaitEmiseByEl(btn){
   }
 }
 
-// Modale listant TOUS les mois deja emis (statut 'emise', pas encore
-// deposes) du client — pas seulement celui affiche a l'ecran — pour
-// choisir precisement lequel annuler en cas d'erreur.
+// Modale listant TOUS les enregistrements FORFAIT_FACTURES du client
+// (peu importe leur statut, meme un statut inattendu/corrompu) — pas
+// seulement ceux au statut 'emise'. Sert a la fois a annuler une
+// emission normale, ET a diagnostiquer/reparer un mois "bloque" (existe
+// deja en base avec un statut anormal, empechant a la fois une nouvelle
+// emission ET son annulation via l'ancien filtre trop strict).
 function htmlModalSuppressionEmiseForfait(){
   var html = '<div class="overlay" id="modalSuppressionEmiseForfait" style="display:none" onclick="if(event.target===this)closeSuppressionEmiseForfait()">';
-  html += '<div class="modal" style="max-width:440px">';
+  html += '<div class="modal" style="max-width:480px">';
   html += '<div class="mhead"><h2 id="suppressionEmiseForfaitTitre"></h2><button class="btn btn-sm" onclick="closeSuppressionEmiseForfait()">X</button></div>';
   html += '<div class="mbody" id="suppressionEmiseForfaitContenu"></div>';
   html += '<div class="mfoot"><button class="btn" onclick="closeSuppressionEmiseForfait()">Fermer</button></div>';
@@ -8399,21 +8402,25 @@ function ouvrirSuppressionFactureForfaitEmiseByEl(btn){
   ouvrirSuppressionFactureForfaitEmise(decodeURIComponent(btn.getAttribute('data-client')));
 }
 function ouvrirSuppressionFactureForfaitEmise(client){
-  document.getElementById('suppressionEmiseForfaitTitre').textContent = 'Annuler une emission — '+client;
-  var emises = FORFAIT_FACTURES.filter(function(f){ return f.client===client && f.statut==='emise'; })
+  document.getElementById('suppressionEmiseForfaitTitre').textContent = 'Gerer les factures forfait — '+client;
+  var toutes = FORFAIT_FACTURES.filter(function(f){ return f.client===client; })
     .sort(function(a,b){ return a.periodeKey.localeCompare(b.periodeKey); });
 
   var html;
-  if(!emises.length){
-    html = '<div class="empty">Aucune facture emise (non deposee) a annuler pour ce client.</div>';
+  if(!toutes.length){
+    html = '<div class="empty">Aucune facture forfait enregistree pour ce client.</div>';
   } else {
-    html = '<div class="info-box" style="margin-bottom:12px">Seuls les mois emis mais PAS ENCORE deposes peuvent etre annules.</div>';
-    html += '<div class="tw"><table><thead><tr><th>Mois</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
-    emises.forEach(function(f){
+    html = '<div class="info-box" style="margin-bottom:12px">Tous les mois enregistres pour ce client, peu importe leur statut — utile pour retrouver un mois bloque avec un statut inattendu.</div>';
+    html += '<div class="tw"><table><thead><tr><th>Mois</th><th>Statut</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
+    toutes.forEach(function(f){
+      var statutConnu = ['emise','deposee','payee'].indexOf(f.statut)>=0;
+      var statutLabel = f.statut==='emise' ? 'Emise' : f.statut==='deposee' ? 'Deposee' : f.statut==='payee' ? 'Payee' : ('Anormal ('+JSON.stringify(f.statut)+')');
+      var statutColor = f.statut==='emise' ? '#854F0B' : f.statut==='deposee' ? '#185FA5' : f.statut==='payee' ? '#3B6D11' : '#A32D2D';
       html += '<tr>';
       html += '<td>'+libelleMoisForfait(f.periodeKey)+'</td>';
-      html += '<td style="text-align:right;font-weight:700">'+f.montant.toLocaleString('fr-FR')+' FCFA</td>';
-      html += '<td><button class="btn btn-sm" style="color:#A32D2D;border-color:#E0A0A0" data-pk="'+f.periodeKey+'" onclick="supprimerFactureForfaitEmiseByEl(this)">&#x1F5D1; Annuler</button></td>';
+      html += '<td style="color:'+statutColor+';font-weight:700">'+statutLabel+'</td>';
+      html += '<td style="text-align:right;font-weight:700">'+(f.montant||0).toLocaleString('fr-FR')+' FCFA</td>';
+      html += '<td><button class="btn btn-sm" style="color:#A32D2D;border-color:#E0A0A0" data-pk="'+f.periodeKey+'" onclick="supprimerFactureForfaitQuelquesoitStatutByEl(this)">&#x1F5D1; Supprimer</button></td>';
       html += '</tr>';
     });
     html += '</tbody></table></div>';
@@ -8422,6 +8429,29 @@ function ouvrirSuppressionFactureForfaitEmise(client){
   document.getElementById('modalSuppressionEmiseForfait').style.display = 'flex';
 }
 function closeSuppressionEmiseForfait(){ document.getElementById('modalSuppressionEmiseForfait').style.display='none'; }
+
+// Suppression forcee, peu importe le statut — reservee a Direction, avec
+// avertissement renforce si la facture est deja deposee/payee (argent
+// deja engage), pour eviter une suppression accidentelle d'une vraie
+// facture reglee. Sert notamment a debloquer un mois avec un statut
+// anormal/corrompu, invisible et bloquant avec l'ancien filtre strict.
+function supprimerFactureForfaitQuelquesoitStatutByEl(btn){
+  if(currentRole!=='direction') return;
+  var pk = btn.getAttribute('data-pk');
+  var f = FORFAIT_FACTURES.find(function(x){return x.periodeKey===pk;});
+  if(!f) return;
+  var msg = 'Supprimer cette facture ('+libelleMoisForfait(pk)+') pour '+f.client+' — statut actuel : '+JSON.stringify(f.statut)+' ?\nCette action est irreversible.';
+  if(f.statut==='deposee' || f.statut==='payee'){
+    msg = '\u26A0 ATTENTION : cette facture est deja '+(f.statut==='payee'?'PAYEE':'DEPOSEE')+' !\n\n'+msg+'\n\nNe supprimez que si vous etes certain qu\'il s\'agit d\'une erreur.';
+  }
+  if(!confirm(msg)) return;
+  FORFAIT_FACTURES = FORFAIT_FACTURES.filter(function(x){return x.periodeKey!==pk;});
+  saveForfaitFactures();
+  renderPage();
+  if(document.getElementById('modalSuppressionEmiseForfait') && document.getElementById('modalSuppressionEmiseForfait').style.display==='flex'){
+    ouvrirSuppressionFactureForfaitEmise(f.client);
+  }
+}
 
 
 function emettreFactureForfaitByEl(btn){
