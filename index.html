@@ -21319,15 +21319,29 @@ function getRapportHtml(){var el=document.getElementById('rapportBody');return e
 // ============================================================
 // INIT
 // ============================================================
+// Liste EXHAUSTIVE de toutes les structures de donnees de GarageOS,
+// chacune avec sa cle localStorage — utilisee a la fois pour l'export et
+// l'import complets. Toute NOUVELLE structure de donnees ajoutee a
+// l'application doit etre ajoutee ICI pour etre incluse dans les
+// sauvegardes/exports — sinon elle sera silencieusement perdue, comme
+// c'etait le cas avant cette correction (Facturation, Caisse, Engagements
+// bancaires... n'etaient pas exportes).
+var STRUCTURES_EXPORT_COMPLET = [
+  'gos_v10', 'gos_personnel', 'gos_fournisseurs', 'gos_banques',
+  'gos_forfait_factures', 'gos_forfaits_clients', 'gos_charges_fixes',
+  'gos_engagements_bancaires', 'gos_caisse_journees', 'gos_caisse_mouvements',
+  'gos_dettes_manuelles', 'gos_employes_presence', 'gos_presences',
+  'gos_descripteurs_faciaux', 'gos_client_delais_paiement',
+  'gos_clients_sans_vehicule', 'gos_stock', 'gos_pieces_catalogue',
+  'gos_comptes_excluded'
+];
+
 function exportData(){
-  var data = {
-    vehicles: JSON.parse(localStorage.getItem('gos_v10')||'[]'),
-    personnel: JSON.parse(localStorage.getItem('gos_personnel')||'[]'),
-    fournisseurs: JSON.parse(localStorage.getItem('gos_fournisseurs')||'[]'),
-    banques: JSON.parse(localStorage.getItem('gos_banques')||'[]'),
-    forfait_factures: JSON.parse(localStorage.getItem('gos_forfait_factures')||'[]'),
-    exportedAt: new Date().toISOString()
-  };
+  var data = { exportedAt: new Date().toISOString() };
+  STRUCTURES_EXPORT_COMPLET.forEach(function(storageKey){
+    var raw = localStorage.getItem(storageKey);
+    if(raw){ try{ data[storageKey] = JSON.parse(raw); }catch(e){} }
+  });
   var json = JSON.stringify(data, null, 2);
   var blob = new Blob([json], {type:'application/json'});
   var url = URL.createObjectURL(blob);
@@ -21353,11 +21367,25 @@ function importData(input){
 
     var nbVehicules = 0;
     if(Array.isArray(data)){
+      // Ancien format : juste un tableau de vehicules
       localStorage.setItem('gos_v10', JSON.stringify(data));
       nbVehicules = data.length;
-    } else if(data && data.vehicles){
-      localStorage.setItem('gos_v10', JSON.stringify(data.vehicles));
-      nbVehicules = data.vehicles.length;
+    } else if(data && (data.gos_v10 || data.vehicles)){
+      // Nouveau format complet : restaure TOUTES les structures presentes
+      // dans le fichier — compatible aussi avec l'ancien format qui
+      // utilisait des cles courtes (vehicles, personnel...) au lieu des
+      // vraies cles localStorage.
+      var vehiculesData = data.gos_v10 || data.vehicles;
+      localStorage.setItem('gos_v10', JSON.stringify(vehiculesData));
+      nbVehicules = vehiculesData.length;
+
+      STRUCTURES_EXPORT_COMPLET.forEach(function(storageKey){
+        if(storageKey==='gos_v10') return; // deja traite ci-dessus
+        if(data[storageKey]!==undefined){
+          localStorage.setItem(storageKey, JSON.stringify(data[storageKey]));
+        }
+      });
+      // Compatibilite avec l'ancien format d'export (cles courtes)
       if(data.personnel)    localStorage.setItem('gos_personnel', JSON.stringify(data.personnel));
       if(data.fournisseurs) localStorage.setItem('gos_fournisseurs', JSON.stringify(data.fournisseurs));
       if(data.banques){ localStorage.setItem('gos_banques', JSON.stringify(data.banques)); localStorage.setItem('gos_banques_init','1'); }
@@ -21369,7 +21397,8 @@ function importData(input){
     localStorage.setItem('gos_init10','1');
     if(fbDb && fbConnected){
       var tsImp=Date.now(); lastLocalTs=tsImp;
-      fbDb.ref('gos_data').set({vehicles:JSON.stringify(importedVehicles),ts:tsImp,deviceId:deviceId,updatedBy:'import'}).then(function(){
+      var vehiculesActuels = JSON.parse(localStorage.getItem('gos_v10')||'[]');
+      fbDb.ref('gos_data').set({vehicles:JSON.stringify(vehiculesActuels),ts:tsImp,deviceId:deviceId,updatedBy:'import'}).then(function(){
         alert(nbVehicules+' vehicule(s) importe(s) avec succes. Rechargement...'); location.reload();
       }).catch(function(){
         alert(nbVehicules+' vehicule(s) importes (local). Rechargement...'); location.reload();
