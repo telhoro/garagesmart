@@ -23272,6 +23272,48 @@ var caisseAnalysePeriode = 'mois';
 var caisseAnalyseDebut = '';
 var caisseAnalyseFin = '';
 
+// ── Recherche contextuelle dans les mouvements de Caisse (Analyse) ──────
+// Permet de retrouver tous les mouvements dont le libelle (motif) ou la
+// categorie contient le texte saisi, avec le detail (date, libelle,
+// montant) et le total correspondant — utile pour analyser finement les
+// depenses liees a un mot-cle precis (ex: un nom de personne).
+function rechercherMouvementsCaisse(texte){
+  var zone = document.getElementById('caisseRechercheResultats');
+  if(!zone) return;
+  var q = texte.trim().toLowerCase();
+  if(q.length<2){ zone.innerHTML=''; return; }
+
+  var resultats = CAISSE_MOUVEMENTS.filter(function(m){
+    return (m.motif||'').toLowerCase().indexOf(q)>=0 || (m.categorie||'').toLowerCase().indexOf(q)>=0;
+  }).sort(function(a,b){return b.date-a.date;});
+
+  if(!resultats.length){
+    zone.innerHTML = '<div class="card xs muted" style="padding:10px 14px;margin-top:8px">Aucun mouvement trouve pour "'+texte+'".</div>';
+    return;
+  }
+
+  var total = resultats.reduce(function(s,m){return s+(parseFloat(m.montant)||0);},0);
+
+  var html = '<div class="card" style="margin-top:8px"><div class="card-head">Resultats pour "'+texte+'" ('+resultats.length+' mouvement'+(resultats.length>1?'s':'')+')</div>';
+  html += '<div class="tw"><table><thead><tr><th>Date</th><th>Type</th><th>Libelle</th><th>Categorie</th><th style="text-align:right">Montant</th></tr></thead><tbody>';
+  resultats.forEach(function(m){
+    html += '<tr>';
+    html += '<td class="xs">'+new Date(m.date).toLocaleDateString('fr-FR')+'</td>';
+    html += '<td>'+(m.type==='sortie'?'<span class="badge b-red">Sortie</span>':'<span class="badge b-green">Entree</span>')+'</td>';
+    html += '<td class="xs">'+(m.motif||'—')+'</td>';
+    html += '<td class="xs muted">'+(m.categorie||'—')+'</td>';
+    html += '<td style="text-align:right;font-weight:700;font-family:monospace">'+(parseFloat(m.montant)||0).toLocaleString('fr-FR')+' FCFA</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+  html += '<div style="padding:10px 16px;background:#1a1a1a;color:#fff;display:flex;justify-content:space-between;align-items:center">';
+  html += '<span class="xs">Total sur '+resultats.length+' mouvement'+(resultats.length>1?'s':'')+'</span>';
+  html += '<span style="font-weight:700;font-size:15px">'+total.toLocaleString('fr-FR')+' FCFA</span>';
+  html += '</div></div>';
+
+  zone.innerHTML = html;
+}
+
 function pageCaisseAnalyse(){
   var today = new Date();
   var borneDebut = 0, borneFin = null;
@@ -23289,7 +23331,12 @@ function pageCaisseAnalyse(){
     return true;
   });
 
-  var html = '<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-bottom:16px">';
+  var html = '<div class="card" style="padding:10px 14px;margin-bottom:8px">';
+  html += '<input class="inp" id="caisseRecherche" placeholder="Rechercher un libelle ou une categorie (ex: un nom, un motif...)..." oninput="rechercherMouvementsCaisse(this.value)" autocomplete="off">';
+  html += '</div>';
+  html += '<div id="caisseRechercheResultats" style="margin-bottom:16px"></div>';
+
+  html += '<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-bottom:16px">';
   ['tous','mois','trimestre','annee','custom'].forEach(function(f){
     var lbl={tous:'Tout',mois:'Mois',trimestre:'Trim.',annee:'Annee',custom:'Personnalise'}[f];
     html += '<button class="btn btn-sm'+(caisseAnalysePeriode===f?' btn-primary':'')+'" onclick="caisseAnalysePeriode=\''+f+'\';renderPage()">'+lbl+'</button>';
@@ -23312,13 +23359,18 @@ function pageCaisseAnalyse(){
   html += kpi('Solde net', (solde>=0?'+':'')+solde.toLocaleString('fr-FR')+' FCFA', solde>=0?'blue':'red');
   html += '</div>';
 
-  // Repartition par categorie (sorties uniquement, plus parlant pour analyser les depenses)
+  // Repartition par categorie (sorties uniquement, plus parlant pour
+  // analyser les depenses), avec le detail des mouvements de chaque
+  // categorie pour permettre un depliage au clic.
   var parCategorie = {};
   mvts.filter(function(m){return m.type==='sortie';}).forEach(function(m){
     var cat = m.categorie || '(sans categorie)';
-    parCategorie[cat] = (parCategorie[cat]||0) + m.montant;
+    if(!parCategorie[cat]) parCategorie[cat] = {categorie:cat, total:0, mouvements:[]};
+    parCategorie[cat].total += m.montant;
+    parCategorie[cat].mouvements.push(m);
   });
-  var categoriesTriees = Object.keys(parCategorie).sort(function(a,b){ return parCategorie[b]-parCategorie[a]; });
+  var categoriesTriees = Object.keys(parCategorie).sort(function(a,b){ return parCategorie[b].total-parCategorie[a].total; });
+  categoriesTriees.forEach(function(cat){ parCategorie[cat].mouvements.sort(function(a,b){return b.date-a.date;}); });
 
   html += '<div class="section-title" style="font-weight:700;margin-bottom:8px">Depenses par categorie</div>';
   if(!categoriesTriees.length){
@@ -23326,8 +23378,27 @@ function pageCaisseAnalyse(){
   } else {
     html += '<div class="card" style="margin-bottom:20px"><div class="tw"><table><thead><tr><th>Categorie</th><th style="text-align:right">Montant</th><th style="text-align:right">% du total</th></tr></thead><tbody>';
     categoriesTriees.forEach(function(cat){
-      var pct = totalSorties>0 ? Math.round((parCategorie[cat]/totalSorties)*100) : 0;
-      html += '<tr><td>'+cat+'</td><td style="text-align:right;font-weight:700">'+parCategorie[cat].toLocaleString('fr-FR')+' FCFA</td><td style="text-align:right">'+pct+'%</td></tr>';
+      var pct = totalSorties>0 ? Math.round((parCategorie[cat].total/totalSorties)*100) : 0;
+      var expandKey = 'caissecat::'+cat;
+      var expanded = !!creancesClientExpand[expandKey];
+      html += '<tr style="cursor:pointer" data-ccexp="'+encodeURIComponent(expandKey)+'" onclick="toggleCreancesClientExpandByEl(this)">';
+      html += '<td>'+(expanded?'&#9662; ':'&#9656; ')+cat+'</td>';
+      html += '<td style="text-align:right;font-weight:700">'+parCategorie[cat].total.toLocaleString('fr-FR')+' FCFA</td>';
+      html += '<td style="text-align:right">'+pct+'%</td>';
+      html += '</tr>';
+      if(expanded){
+        html += '<tr><td colspan="3" style="padding:0;background:#faf9f7">';
+        html += '<div style="padding:6px 16px 10px 28px">';
+        html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>';
+        parCategorie[cat].mouvements.forEach(function(m){
+          html += '<tr style="border-top:1px solid rgba(0,0,0,0.06)">';
+          html += '<td style="padding:4px 8px;width:100px" class="xs">'+new Date(m.date).toLocaleDateString('fr-FR')+'</td>';
+          html += '<td style="padding:4px 8px" class="xs">'+(m.motif||'—')+'</td>';
+          html += '<td style="padding:4px 8px;text-align:right;font-weight:700;font-family:monospace">'+(parseFloat(m.montant)||0).toLocaleString('fr-FR')+' FCFA</td>';
+          html += '</tr>';
+        });
+        html += '</tbody></table></div></td></tr>';
+      }
     });
     html += '</tbody></table></div></div>';
   }
