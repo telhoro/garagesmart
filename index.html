@@ -21326,21 +21326,46 @@ function getRapportHtml(){var el=document.getElementById('rapportBody');return e
 // sauvegardes/exports — sinon elle sera silencieusement perdue, comme
 // c'etait le cas avant cette correction (Facturation, Caisse, Engagements
 // bancaires... n'etaient pas exportes).
-var STRUCTURES_EXPORT_COMPLET = [
-  'gos_v10', 'gos_personnel', 'gos_fournisseurs', 'gos_banques',
-  'gos_forfait_factures', 'gos_forfaits_clients', 'gos_charges_fixes',
-  'gos_engagements_bancaires', 'gos_caisse_journees', 'gos_caisse_mouvements',
-  'gos_dettes_manuelles', 'gos_employes_presence', 'gos_presences',
-  'gos_descripteurs_faciaux', 'gos_client_delais_paiement',
-  'gos_clients_sans_vehicule', 'gos_stock', 'gos_pieces_catalogue',
-  'gos_comptes_excluded'
-];
+// Associe chaque cle de sauvegarde a une fonction qui retourne la
+// VALEUR ACTUELLE, EN MEMOIRE, de la structure correspondante — plutot
+// que de lire localStorage (qui n'est qu'un cache de secours et peut
+// etre en retard sur l'etat reel de l'app, notamment juste apres une
+// mise a jour recue en direct via Firebase). C'est cette desynchronisation
+// qui expliquait que certaines donnees, comme la Caisse, pouvaient
+// manquer a l'export meme si elles etaient bien visibles dans l'app.
+// Exceptions : gos_pieces_catalogue et gos_comptes_excluded n'ont jamais
+// de variable globale persistante, on les lit donc directement depuis
+// localStorage (leur seule source reelle).
+var GETTERS_EXPORT_COMPLET = {
+  'gos_v10': function(){ return vehicles; },
+  'gos_personnel': function(){ return PERSONNEL; },
+  'gos_fournisseurs': function(){ return FOURNISSEURS; },
+  'gos_banques': function(){ return BANQUES; },
+  'gos_forfait_factures': function(){ return FORFAIT_FACTURES; },
+  'gos_forfaits_clients': function(){ return FORFAITS_CLIENTS; },
+  'gos_charges_fixes': function(){ return CHARGES_FIXES; },
+  'gos_engagements_bancaires': function(){ return ENGAGEMENTS_BANCAIRES; },
+  'gos_caisse_journees': function(){ return CAISSE_JOURNEES; },
+  'gos_caisse_mouvements': function(){ return CAISSE_MOUVEMENTS; },
+  'gos_dettes_manuelles': function(){ return DETTES_MANUELLES; },
+  'gos_employes_presence': function(){ return EMPLOYES_PRESENCE; },
+  'gos_presences': function(){ return PRESENCES; },
+  'gos_descripteurs_faciaux': function(){ return DESCRIPTEURS_FACIAUX; },
+  'gos_client_delais_paiement': function(){ return CLIENT_DELAIS_PAIEMENT; },
+  'gos_clients_sans_vehicule': function(){ return CLIENTS_SANS_VEHICULE; },
+  'gos_stock': function(){ return STOCK; },
+  'gos_pieces_catalogue': function(){ return JSON.parse(localStorage.getItem('gos_pieces_catalogue')||'[]'); },
+  'gos_comptes_excluded': function(){ return JSON.parse(localStorage.getItem('gos_comptes_excluded')||'[]'); }
+};
+var STRUCTURES_EXPORT_COMPLET = Object.keys(GETTERS_EXPORT_COMPLET);
 
 function exportData(){
   var data = { exportedAt: new Date().toISOString() };
   STRUCTURES_EXPORT_COMPLET.forEach(function(storageKey){
-    var raw = localStorage.getItem(storageKey);
-    if(raw){ try{ data[storageKey] = JSON.parse(raw); }catch(e){} }
+    try{
+      var valeur = GETTERS_EXPORT_COMPLET[storageKey]();
+      if(valeur!==undefined && valeur!==null) data[storageKey] = valeur;
+    }catch(e){ console.error('Export: erreur sur '+storageKey, e); }
   });
   var json = JSON.stringify(data, null, 2);
   var blob = new Blob([json], {type:'application/json'});
