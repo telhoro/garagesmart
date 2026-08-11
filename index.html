@@ -21420,9 +21420,37 @@ function importData(input){
       return;
     }
     localStorage.setItem('gos_init10','1');
+
+    // Structures reellement synchronisees avec Firebase (chemin identique
+    // a la cle localStorage) — BANQUES, le catalogue de pieces et la
+    // liste d'exclusion de comptes restent volontairement locaux
+    // uniquement, ils sont donc exclus de cette liste.
+    var CLES_SYNC_FIREBASE = [
+      'gos_personnel', 'gos_fournisseurs', 'gos_forfait_factures', 'gos_forfaits_clients',
+      'gos_charges_fixes', 'gos_engagements_bancaires', 'gos_caisse_journees',
+      'gos_caisse_mouvements', 'gos_dettes_manuelles', 'gos_employes_presence',
+      'gos_presences', 'gos_descripteurs_faciaux', 'gos_client_delais_paiement',
+      'gos_clients_sans_vehicule', 'gos_stock'
+    ];
+
     if(fbDb && fbConnected){
       var tsImp=Date.now(); lastLocalTs=tsImp;
       var vehiculesActuels = JSON.parse(localStorage.getItem('gos_v10')||'[]');
+      // IMPORTANT : sans pousser TOUTES les structures importees vers
+      // Firebase (pas seulement les vehicules), la synchronisation
+      // automatique qui se declenche juste apres le rechargement de la
+      // page recupererait l'ANCIENNE version cloud de chacune d'elles et
+      // ecraserait immediatement ce qui vient d'etre importe localement —
+      // c'est exactement ce qui faisait disparaitre la Caisse (et
+      // potentiellement d'autres donnees) apres un import.
+      CLES_SYNC_FIREBASE.forEach(function(cle){
+        var valeurLocale = localStorage.getItem(cle);
+        if(valeurLocale!==null){
+          fbDb.ref(cle).set(valeurLocale).catch(function(err){
+            console.error('Import: echec de synchro Firebase pour '+cle, err);
+          });
+        }
+      });
       fbDb.ref('gos_data').set({vehicles:JSON.stringify(vehiculesActuels),ts:tsImp,deviceId:deviceId,updatedBy:'import'}).then(function(){
         alert(nbVehicules+' vehicule(s) importe(s) avec succes. Rechargement...'); location.reload();
       }).catch(function(){
