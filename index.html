@@ -1015,6 +1015,11 @@ tr:hover td{background:#faf9f7}
       </select>
     </div>
     <div class="fr" id="engagementDateWrap" style="display:none"><label class="fl">Date d'echeance <span style="color:red">*</span></label><input type="date" class="inp" id="engagementDate"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px" id="engagementPeriodeWrap">
+      <div class="fr"><label class="fl">Debut de la periode (optionnel)</label><input type="date" class="inp" id="engagementDateDebut"></div>
+      <div class="fr"><label class="fl">Fin de la periode (optionnel)</label><input type="date" class="inp" id="engagementDateFin"></div>
+    </div>
+    <div class="fr"><label class="fl">Descriptif (optionnel)</label><textarea class="inp" id="engagementDescriptif" rows="2" placeholder="Ex: Pret pour achat du pont elevateur, remboursable sur 24 mois..."></textarea></div>
   </div>
   <div class="mfoot">
     <button class="btn" onclick="closeEngagementForm()">Annuler</button>
@@ -10394,7 +10399,100 @@ function prochainEcheanceEngagement(e){
     var moisAbsoluSuivant = moisAbsoluCandidat + pas;
     candidat = dateAuJour(Math.floor(moisAbsoluSuivant/12), ((moisAbsoluSuivant%12)+12)%12);
   }
+  // Si une date de fin est definie et que la prochaine echeance la
+  // depasse, l'echeancier est termine — plus de prochaine echeance.
+  if(e.dateFin && candidat.getTime()>e.dateFin) return null;
   return candidat.getTime();
+}
+
+// Compte le nombre d'echeances MENSUELLES restantes entre maintenant et
+// la date de fin (incluses), en respectant le jour d'echeance configure —
+// utilise pour le "total restant du" qui tient compte des differentes
+// periodes propres a chaque engagement.
+// ── Systeme unifie d'echeancier et de suivi des paiements ────────────────
+// Genere TOUTES les echeances (dates prevues) d'un engagement, entre son
+// debut (dateDebut, ou 24 mois avant si non precise) et sa fin (dateFin,
+// ou maintenant si periode indefinie — on ne projette pas dans un futur
+// inconnu). Cette meme liste sert a la fois a detecter les echeances en
+// retard ET a calculer le restant du — les deux notions decoulent d'une
+// seule source de verite : quelles echeances sont encore impayees.
+function genererEcheancesEngagement(e){
+  if(e.periodicite==='unique') return e.dateEcheance ? [e.dateEcheance] : [];
+  var maintenant = Date.now();
+  var borneFin = e.dateFin || maintenant;
+  var borneDeb = e.dateDebut || (maintenant - 24*30*86400000);
+  if(borneDeb>borneFin) return [];
+
+  var jour = e.jourEcheance||1;
+  var moisAncrageIdx = (e.moisEcheance||1)-1;
+  var pas = e.periodicite==='trimestriel'?3:(e.periodicite==='annuel'?12:1);
+
+  function dateAuJour(annee, moisIdx){
+    var dernierJour = new Date(annee, moisIdx+1, 0).getDate();
+    return new Date(annee, moisIdx, Math.min(jour, dernierJour)).getTime();
+  }
+
+  var debD = new Date(borneDeb);
+  var moisAbsoluAncrage = debD.getFullYear()*12+moisAncrageIdx;
+  var moisAbsoluDebut = debD.getFullYear()*12+debD.getMonth();
+  var diff = moisAbsoluDebut - moisAbsoluAncrage;
+  var cyclesEcoules = Math.floor(diff/pas);
+  var moisAbsolu = moisAbsoluAncrage + cyclesEcoules*pas;
+
+  var echeances = [];
+  for(var i=0;i<600;i++){
+    var candidat = dateAuJour(Math.floor(moisAbsolu/12), ((moisAbsolu%12)+12)%12);
+    if(candidat>borneFin) break;
+    if(candidat>=borneDeb) echeances.push(candidat);
+    moisAbsolu += pas;
+  }
+  return echeances;
+}
+
+function estEcheancePayee(e, dateEcheance){
+  return (e.echeancesPayees||[]).indexOf(dateEcheance)>=0;
+}
+function echeancesImpayees(e){
+  return genererEcheancesEngagement(e).filter(function(d){ return !estEcheancePayee(e,d); });
+}
+function montantEnRetard(e, maintenant){
+  return echeancesImpayees(e).filter(function(d){return d<maintenant;}).length * (parseFloat(e.montant)||0);
+}
+function montantRestantDu(e){
+  return echeancesImpayees(e).length * (parseFloat(e.montant)||0);
+}
+
+// Marque l'echeance impayee la PLUS ANCIENNE comme payee (comme le reste
+// de l'app : on solde toujours les plus anciennes dettes en premier).
+function marquerEcheancePayeeByEl(btn){
+  var id = btn.getAttribute('data-egid');
+  var e = ENGAGEMENTS_BANCAIRES.find(function(x){return x.id===id;});
+  if(!e) return;
+  var impayees = echeancesImpayees(e).sort(function(a,b){return a-b;});
+  if(!impayees.length){ alert('Aucune echeance impayee pour cet engagement.'); return; }
+  var prochaine = impayees[0];
+  var montant = parseFloat(e.montant)||0;
+  if(!confirm('Marquer l\'echeance du '+new Date(prochaine).toLocaleDateString('fr-FR')+' ('+montant.toLocaleString('fr-FR')+' FCFA) comme payee ?')) return;
+  if(!e.echeancesPayees) e.echeancesPayees = [];
+  e.echeancesPayees.push(prochaine);
+  saveEngagementsBancaires();
+  renderPage();
+}
+
+// Regroupe les engagements ACTIFS par banque/organisme : nombre
+// d'engagements, restant du total, et montant en retard.
+function regrouperEngagementsParBanque(){
+  var buckets = {};
+  var maintenant = Date.now();
+  ENGAGEMENTS_BANCAIRES.filter(function(e){return e.actif;}).forEach(function(e){
+    var banque = e.organisme || 'Non precise';
+    if(!buckets[banque]) buckets[banque] = {banque:banque, nb:0, totalMontant:0, totalRestantDu:0, totalRetard:0};
+    buckets[banque].nb++;
+    buckets[banque].totalMontant += parseFloat(e.montant)||0;
+    buckets[banque].totalRestantDu += montantRestantDu(e);
+    buckets[banque].totalRetard += montantEnRetard(e, maintenant);
+  });
+  return Object.keys(buckets).map(function(k){return buckets[k];}).sort(function(a,b){return b.totalRestantDu-a.totalRestantDu;});
 }
 
 function pageEngagementsBancaires(){
@@ -10403,41 +10501,133 @@ function pageEngagementsBancaires(){
   html += '<button class="btn btn-primary btn-sm" onclick="openEngagementForm(null)">+ Ajouter un engagement</button>';
   html += '</div>';
 
+  var maintenant = Date.now();
   var actifs = ENGAGEMENTS_BANCAIRES.filter(function(e){return e.actif;});
-  var totalMensuelEquiv = actifs.reduce(function(s,e){
-    var m = parseFloat(e.montant)||0;
-    if(e.periodicite==='trimestriel') return s+m/3;
-    if(e.periodicite==='annuel') return s+m/12;
-    if(e.periodicite==='unique') return s; // pas d'equivalent mensuel pour une echeance ponctuelle
-    return s+m;
-  },0);
 
-  html += '<div class="kgrid k3" style="margin-bottom:16px">';
+  // Total des echeances fixes : somme brute des montants periodiques des
+  // engagements actifs (non proratise) — la valeur telle qu'elle sera
+  // effectivement prelevee a chaque echeance, toutes periodicites confondues.
+  var totalEcheancesFixes = actifs.filter(function(e){return e.periodicite!=='unique';})
+    .reduce(function(s,e){return s+(parseFloat(e.montant)||0);},0);
+
+  // Total des engagements : capital restant du, TOUTES periodicites
+  // recurrentes confondues (mensuel/trimestriel/annuel), en tenant
+  // compte de la periode propre a chaque engagement — inclut
+  // naturellement les echeances en retard (elles restent dues tant
+  // qu'elles ne sont pas marquees payees).
+  var totalEngagements = actifs.filter(function(e){return e.periodicite!=='unique' && e.dateFin;})
+    .reduce(function(s,e){return s+montantRestantDu(e);},0);
+
+  // Total des engagements uniques : echeances ponctuelles NON encore payees.
+  var totalUniques = actifs.filter(function(e){return e.periodicite==='unique' && echeancesImpayees(e).length>0;})
+    .reduce(function(s,e){return s+(parseFloat(e.montant)||0);},0);
+
+  // Total restant credit court terme : contrairement a une simple
+  // classification par date de fin du pret (qui exclurait a tort un pret
+  // long terme meme si ses prochaines echeances tombent bien dans
+  // l'annee), on prend ici la vraie definition comptable : la PART de
+  // CHAQUE engagement dont les echeances (impayees, retard inclus)
+  // tombent dans les 12 prochains mois — peu importe la duree totale du
+  // pret. Un pret sur 5 ans a donc, comme un pret court, sa propre part
+  // court terme correspondant a ses 12 prochaines mensualites.
+  var dans12Mois = maintenant + 365*86400000;
+  var totalCourtTerme = actifs.filter(function(e){return e.periodicite!=='unique';})
+    .reduce(function(s,e){
+      var partCourtTerme = echeancesImpayees(e).filter(function(d){return d<=dans12Mois;}).length*(parseFloat(e.montant)||0);
+      return s+partCourtTerme;
+    },0);
+
+  // Total echeances en retard : cumul de toutes les echeances passees et
+  // toujours impayees, tous engagements actifs confondus.
+  var totalRetard = actifs.reduce(function(s,e){return s+montantEnRetard(e, maintenant);},0);
+
+  html += '<div class="kgrid k4" style="margin-bottom:12px">';
   html += kpi('Engagements actifs', actifs.length, '');
-  html += kpi('Equivalent mensuel', totalMensuelEquiv?Math.round(totalMensuelEquiv).toLocaleString('fr-FR')+' FCFA':'—', totalMensuelEquiv>0?'amber':'');
-  html += kpi('Total engagements', ENGAGEMENTS_BANCAIRES.length, '');
+  html += kpi('Total des echeances fixes', totalEcheancesFixes?totalEcheancesFixes.toLocaleString('fr-FR')+' FCFA':'—', totalEcheancesFixes>0?'amber':'');
+  html += kpi('Total des engagements', totalEngagements?Math.round(totalEngagements).toLocaleString('fr-FR')+' FCFA':'—', totalEngagements>0?'red':'green');
+  html += kpi('Total engagements uniques', totalUniques?totalUniques.toLocaleString('fr-FR')+' FCFA':'—', totalUniques>0?'amber':'green');
+  html += '</div>';
+  html += '<div class="kgrid k2" style="margin-bottom:16px">';
+  html += kpi('Echeances dues sous 12 mois (court terme)', totalCourtTerme?Math.round(totalCourtTerme).toLocaleString('fr-FR')+' FCFA':'—', totalCourtTerme>0?'amber':'green');
+  html += kpi('Total echeances en retard', totalRetard?Math.round(totalRetard).toLocaleString('fr-FR')+' FCFA':'—', totalRetard>0?'red':'green');
   html += '</div>';
 
+  // ── Echeances en retard : liste detaillee ──
+  var echeancesEnRetardListe = [];
+  actifs.forEach(function(e){
+    echeancesImpayees(e).filter(function(d){return d<maintenant;}).forEach(function(d){
+      echeancesEnRetardListe.push({engagement:e, dateEcheance:d});
+    });
+  });
+  echeancesEnRetardListe.sort(function(a,b){return a.dateEcheance-b.dateEcheance;});
+  if(echeancesEnRetardListe.length){
+    html += '<div class="card" style="margin-bottom:16px;border:1px solid #E0A0A0">';
+    html += '<div class="card-head" style="color:#A32D2D">&#x26A0; Echeances en retard ('+echeancesEnRetardListe.length+')</div>';
+    html += '<div class="tw"><table><thead><tr><th>Engagement</th><th>Banque</th><th>Date d\'echeance</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
+    echeancesEnRetardListe.forEach(function(item){
+      var jours = Math.floor((maintenant-item.dateEcheance)/86400000);
+      html += '<tr>';
+      html += '<td><strong>'+item.engagement.nom+'</strong></td>';
+      html += '<td class="xs muted">'+(item.engagement.organisme||'—')+'</td>';
+      html += '<td class="xs" style="color:#A32D2D">'+new Date(item.dateEcheance).toLocaleDateString('fr-FR')+' <span class="xs muted">('+jours+' j)</span></td>';
+      html += '<td style="text-align:right;font-family:monospace;font-weight:700">'+(parseFloat(item.engagement.montant)||0).toLocaleString('fr-FR')+' FCFA</td>';
+      html += '<td><button class="btn btn-success btn-sm" data-egid="'+item.engagement.id+'" onclick="marquerEcheancePayeeByEl(this)">&#x2714; Marquer payee</button></td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div></div>';
+  }
+
+  // ── Niveau d'engagement par banque ──
+  var parBanque = regrouperEngagementsParBanque();
+  if(parBanque.length){
+    html += '<div class="card" style="margin-bottom:16px"><div class="card-head">Niveau d\'engagement par banque</div>';
+    html += '<div class="tw"><table><thead><tr><th>Banque / organisme</th><th style="text-align:center">Nb engagements</th><th style="text-align:right">Total periodique</th><th style="text-align:right">Restant du</th><th style="text-align:right">En retard</th></tr></thead><tbody>';
+    parBanque.forEach(function(b){
+      html += '<tr>';
+      html += '<td><strong>'+b.banque+'</strong></td>';
+      html += '<td style="text-align:center">'+b.nb+'</td>';
+      html += '<td style="text-align:right;font-family:monospace">'+b.totalMontant.toLocaleString('fr-FR')+' FCFA</td>';
+      html += '<td style="text-align:right;font-family:monospace;font-weight:700;color:'+(b.totalRestantDu>0?'#A32D2D':'#999')+'">'+(b.totalRestantDu?b.totalRestantDu.toLocaleString('fr-FR')+' FCFA':'—')+'</td>';
+      html += '<td style="text-align:right;font-family:monospace;'+(b.totalRetard>0?'font-weight:700;color:#A32D2D':'color:#999')+'">'+(b.totalRetard?b.totalRetard.toLocaleString('fr-FR')+' FCFA':'—')+'</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div></div>';
+  }
+
   html += '<div class="card"><div class="tw"><table><thead><tr>';
-  html += '<th>Engagement</th><th>Banque / organisme</th><th>Montant</th><th>Periodicite</th><th>Prochaine echeance</th><th>Statut</th><th></th>';
+  html += '<th>Engagement</th><th>Banque / organisme</th><th>Montant</th><th>Periodicite</th><th>Periode</th><th>Prochaine echeance</th><th>Statut</th><th></th>';
   html += '</tr></thead><tbody>';
 
   if(!ENGAGEMENTS_BANCAIRES.length){
-    html += '<tr><td colspan="7"><div class="empty">Aucun engagement bancaire enregistre.</div></td></tr>';
+    html += '<tr><td colspan="8"><div class="empty">Aucun engagement bancaire enregistre.</div></td></tr>';
   }
 
   ENGAGEMENTS_BANCAIRES.forEach(function(e){
     var periodLabel = e.periodicite==='trimestriel'?'Trimestriel':e.periodicite==='annuel'?'Annuel':e.periodicite==='unique'?'Echeance unique':'Mensuel';
-    var prochaine = e.actif ? prochainEcheanceEngagement(e) : null;
+    var impayeesTriees = e.actif ? echeancesImpayees(e).sort(function(a,b){return a-b;}) : [];
+    var prochaineImpayee = impayeesTriees.length ? impayeesTriees[0] : null;
+    var estEnRetard = prochaineImpayee!==null && prochaineImpayee<maintenant;
+    // Pour un engagement SANS date de fin (indefini), on ne genere les
+    // echeances impayees que jusqu'a maintenant — s'il n'y en a aucune,
+    // on retombe sur le calcul purement calendaire pour la prochaine date.
+    var prochaineAffichee = prochaineImpayee!==null ? prochaineImpayee : (e.actif ? prochainEcheanceEngagement(e) : null);
+    var estTermine = e.actif && e.periodicite!=='unique' && e.dateFin && !prochaineImpayee && genererEcheancesEngagement(e).length>0;
     var detailLabel = e.periodicite==='unique' ? '' : ' <span class="xs muted">le '+(e.jourEcheance||1)+' de chaque mois</span>';
+    var periodeTxt = (e.dateDebut||e.dateFin)
+      ? (e.dateDebut?new Date(e.dateDebut).toLocaleDateString('fr-FR'):'—')+' &rarr; '+(e.dateFin?new Date(e.dateFin).toLocaleDateString('fr-FR'):'—')
+      : '<span class="xs muted">Indefinie</span>';
     html += '<tr style="'+(e.actif?'':'opacity:0.5;background:#fafafa')+'">';
-    html += '<td><strong>'+e.nom+'</strong></td>';
+    html += '<td><strong>'+e.nom+'</strong>'+(e.descriptif?'<div class="xs muted" style="margin-top:2px;max-width:220px;white-space:normal">'+e.descriptif+'</div>':'')+'</td>';
     html += '<td class="xs muted">'+(e.organisme||'—')+'</td>';
     html += '<td style="font-family:monospace">'+(parseFloat(e.montant)||0).toLocaleString('fr-FR')+' FCFA</td>';
     html += '<td><span class="badge b-purple">'+periodLabel+'</span>'+detailLabel+'</td>';
-    html += '<td class="xs">'+(prochaine?new Date(prochaine).toLocaleDateString('fr-FR'):'—')+'</td>';
+    html += '<td class="xs">'+periodeTxt+'</td>';
+    html += '<td class="xs">'+(estTermine?'<span class="badge b-gray">Termine</span>':(prochaineAffichee?'<span'+(estEnRetard?' style="color:#A32D2D;font-weight:700"':'')+'>'+new Date(prochaineAffichee).toLocaleDateString('fr-FR')+(estEnRetard?' &#x26A0;':'')+'</span>':'—'))+'</td>';
     html += '<td><span class="badge '+(e.actif?'b-green':'b-gray')+'">'+(e.actif?'Actif':'Inactif')+'</span></td>';
     html += '<td><div class="flex gap6">';
+    if(e.actif && prochaineImpayee!==null){
+      html += '<button class="btn btn-success btn-sm" data-egid="'+e.id+'" onclick="marquerEcheancePayeeByEl(this)" title="Marquer la prochaine echeance payee">&#x2714; Payee</button>';
+    }
     html += '<button class="btn btn-sm" data-egid="'+e.id+'" onclick="openEngagementFormById(this)">&#x270F;</button>';
     html += '<button class="btn btn-sm" data-egid2="'+e.id+'" onclick="toggleEngagementById(this)">'+(e.actif?'Desactiver':'Activer')+'</button>';
     if(currentRole==='direction'){
@@ -10455,6 +10645,7 @@ function onChangePeriodiciteEngagement(){
   document.getElementById('engagementJourWrap').style.display = estUnique ? 'none' : 'block';
   document.getElementById('engagementMoisWrap').style.display = (!estUnique && (p==='trimestriel'||p==='annuel')) ? 'block' : 'none';
   document.getElementById('engagementDateWrap').style.display = estUnique ? 'block' : 'none';
+  document.getElementById('engagementPeriodeWrap').style.display = estUnique ? 'none' : 'grid';
 }
 
 // Peuple le menu deroulant avec les banques enregistrees (BANQUES) + une
@@ -10507,6 +10698,9 @@ function openEngagementForm(id){
   document.getElementById('engagementMois').value = e ? (e.moisEcheance||(new Date().getMonth()+1)) : (new Date().getMonth()+1);
   var dateVal = e && e.dateEcheance ? new Date(e.dateEcheance).toISOString().slice(0,10) : '';
   document.getElementById('engagementDate').value = dateVal;
+  document.getElementById('engagementDateDebut').value = e && e.dateDebut ? new Date(e.dateDebut).toISOString().slice(0,10) : '';
+  document.getElementById('engagementDateFin').value = e && e.dateFin ? new Date(e.dateFin).toISOString().slice(0,10) : '';
+  document.getElementById('engagementDescriptif').value = e ? (e.descriptif||'') : '';
   remplirEngagementOrganismeSelect(e ? (e.organisme||'') : '');
   onChangePeriodiciteEngagement();
   document.getElementById('modalEngagement').style.display = 'flex';
@@ -10519,7 +10713,14 @@ function submitEngagementForm(){
   var organisme = (sel.value==='__autre__') ? document.getElementById('engagementOrganisme').value.trim() : sel.value;
   var montant = parseFloat(document.getElementById('engagementMontant').value)||0;
   var periodicite = document.getElementById('engagementPeriodicite').value;
-  var payload = {nom:nom, organisme:organisme, montant:montant, periodicite:periodicite};
+  var descriptif = document.getElementById('engagementDescriptif').value.trim();
+  var dateDebutStr = document.getElementById('engagementDateDebut').value;
+  var dateFinStr = document.getElementById('engagementDateFin').value;
+  var payload = {
+    nom:nom, organisme:organisme, montant:montant, periodicite:periodicite, descriptif:descriptif,
+    dateDebut: (periodicite!=='unique' && dateDebutStr) ? new Date(dateDebutStr).getTime() : null,
+    dateFin: (periodicite!=='unique' && dateFinStr) ? new Date(dateFinStr).getTime() : null
+  };
   if(periodicite==='unique'){
     var dateStr = document.getElementById('engagementDate').value;
     if(!dateStr){ alert('La date d\'echeance est obligatoire.'); return; }
@@ -10534,7 +10735,11 @@ function submitEngagementForm(){
   }
   if(engagementEditId){
     var e = ENGAGEMENTS_BANCAIRES.find(function(x){return x.id===engagementEditId;});
-    if(e){ e.nom=payload.nom; e.organisme=payload.organisme; e.montant=payload.montant; e.periodicite=payload.periodicite; e.jourEcheance=payload.jourEcheance; e.moisEcheance=payload.moisEcheance; e.dateEcheance=payload.dateEcheance; }
+    if(e){
+      e.nom=payload.nom; e.organisme=payload.organisme; e.montant=payload.montant; e.periodicite=payload.periodicite;
+      e.jourEcheance=payload.jourEcheance; e.moisEcheance=payload.moisEcheance; e.dateEcheance=payload.dateEcheance;
+      e.descriptif=payload.descriptif; e.dateDebut=payload.dateDebut; e.dateFin=payload.dateFin;
+    }
   } else {
     payload.id = 'eb'+Date.now(); payload.actif = true;
     ENGAGEMENTS_BANCAIRES.push(payload);
