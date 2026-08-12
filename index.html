@@ -9817,15 +9817,12 @@ function pageDettesFournisseurs(){
         html += '<td style="font-family:monospace;color:#A32D2D">'+l.montant.toLocaleString('fr-FR')+'</td>';
         html += '<td><span class="badge '+badgeCls+'">'+badgeLabel+'</span></td>';
         if(l.manuel){
-          html += '<td><button class="btn btn-sm" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();marquerDetteManuelleByEl(this)">Payer</button> <button class="btn btn-sm" style="color:#A32D2D" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();supprimerDetteManuelleByEl(this)">&#x1F5D1;</button></td>';
+          html += '<td><button class="btn btn-success btn-sm" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();marquerDetteManuelleByEl(this)">Payer</button> <button class="btn btn-sm" style="color:#A32D2D" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();supprimerDetteManuelleByEl(this)">&#x1F5D1;</button></td>';
         } else {
-          html += '<td><button class="btn btn-sm" data-vid="'+l.vehId+'" data-lid="'+(l.ligneId||'')+'" onclick="event.stopPropagation();marquerLigneFournPayeeByEl(this)">Payer cette ligne</button></td>';
+          html += '<td><button class="btn btn-success btn-sm" data-vid="'+l.vehId+'" data-lid="'+(l.ligneId||'')+'" onclick="event.stopPropagation();marquerLigneFournPayeeByEl(this)">Payer cette ligne</button></td>';
         }
         html += '</tr>';
       });
-      html += '<tr><td colspan="5" style="padding:8px 8px 12px 28px">';
-      html += '<button class="btn btn-sm btn-primary" data-fid="'+g.fournisseur.id+'" onclick="event.stopPropagation();marquerFournisseurPayeByEl(this)">&#x1F4B3; Enregistrer un paiement (tout le fournisseur)</button>';
-      html += '</td></tr>';
     }
   });
 
