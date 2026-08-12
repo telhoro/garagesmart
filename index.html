@@ -1176,6 +1176,24 @@ tr:hover td{background:#faf9f7}
       </label>
     </div>
 
+    <div class="fr" style="margin-top:8px">
+      <label class="flex" style="align-items:center;gap:8px;cursor:pointer;padding:8px 0">
+        <input type="checkbox" id="fmDossierAssurance" style="width:18px;height:18px;cursor:pointer" onchange="toggleFmSectionSinistre()">
+        <span>&#x1F6E1; Dossier assurance (sinistre)</span>
+      </label>
+    </div>
+    <div id="fmSectionSinistre" style="display:none;background:#F3F0FF;border-radius:8px;padding:10px 12px;margin-bottom:8px">
+      <div class="info-box" style="margin-bottom:8px">Le nom de l'assureur devient le client qui pilote la facturation — le vrai proprietaire du vehicule reste trace separement.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+        <div class="fr"><label class="fl">N sinistre</label><input class="inp" id="fmSinistre" placeholder="SIN-2026-001"></div>
+        <div class="fr"><label class="fl">Assureur</label><input class="inp" id="fmAssureur" placeholder="Allianz CI"></div>
+        <div class="fr"><label class="fl">Contact assurance</label><input class="inp" id="fmContactAssurance"></div>
+        <div class="fr"><label class="fl">Nom expert</label><input class="inp" id="fmExpert"></div>
+        <div class="fr"><label class="fl">Contact expert</label><input class="inp" id="fmContactExpert"></div>
+        <div class="fr"><label class="fl">Date sinistre</label><input class="inp" type="date" id="fmDateSinistre"></div>
+      </div>
+    </div>
+
     <div style="margin-top:14px;border-top:1px solid #e8e6e1;padding-top:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <label class="fl" style="margin-bottom:0">Articles</label>
@@ -7271,10 +7289,12 @@ function openFactureManuelleForm(){
   });
   selVeh.innerHTML = htmlVeh;
 
-  // Peupler la liste des clients existants (noms uniques)
+  // Peupler la liste des clients existants (noms uniques) — le VRAI
+  // proprietaire prime sur client, qui peut avoir ete remplace par le nom
+  // d'un assureur pour un dossier sinistre.
   var selClient = document.getElementById('fmClientExistant');
   var clientsUniques = {};
-  vehicles.forEach(function(v){ if(v.client) clientsUniques[v.client]=true; });
+  vehicles.forEach(function(v){ var nomReel=v.proprietaireVehicule||v.client; if(nomReel) clientsUniques[nomReel]=true; });
   var htmlClient = '<option value="">— Saisir un nom de client —</option>';
   Object.keys(clientsUniques).sort().forEach(function(c){
     htmlClient += '<option value="'+c.replace(/"/g,'&quot;')+'">'+c+'</option>';
@@ -7291,12 +7311,28 @@ function openFactureManuelleForm(){
   document.getElementById('fmNumFacture').value = '';
   document.getElementById('fmNumSecondaire').value = '';
   document.getElementById('fmFactureDeposee').checked = true;
+  document.getElementById('fmDossierAssurance').checked = false;
+  document.getElementById('fmSinistre').value = '';
+  document.getElementById('fmAssureur').value = '';
+  document.getElementById('fmContactAssurance').value = '';
+  document.getElementById('fmExpert').value = '';
+  document.getElementById('fmContactExpert').value = '';
+  document.getElementById('fmDateSinistre').value = '';
+  toggleFmSectionSinistre();
   document.getElementById('fmLignesBody').innerHTML = '';
   onChangeFmTypeOuEntite();
   ajouterLigneFactureManuelle();
   document.getElementById('modalFactureManuelle').style.display = 'flex';
 }
 function closeFactureManuelleForm(){ document.getElementById('modalFactureManuelle').style.display='none'; }
+
+// Affiche/masque la section sinistre selon l'etat de la case "Dossier
+// assurance" — meme principe que le formulaire principal de reception.
+function toggleFmSectionSinistre(){
+  var checked = document.getElementById('fmDossierAssurance').checked;
+  var sec = document.getElementById('fmSectionSinistre');
+  if(sec) sec.style.display = checked ? '' : 'none';
+}
 
 // Propose le delai deja retenu pour CE client (CLIENT_DELAIS_PAIEMENT) en
 // priorite, sinon la regle standard (forfait => fin de mois, entreprise
@@ -7333,17 +7369,18 @@ function onChangeFmVehiculeExistant(){
   if(!vid){ return; }
   var v = vehicles.find(function(x){return x.id===vid;});
   if(!v) return;
+  var nomReel = v.proprietaireVehicule||v.client;
   document.getElementById('fmImmat').value = v.immat||'';
   document.getElementById('fmMarque').value = v.marque||'';
   document.getElementById('fmModele').value = v.modele||'';
-  document.getElementById('fmClientNom').value = v.client||'';
+  document.getElementById('fmClientNom').value = nomReel||'';
   document.getElementById('fmTypeClient').value = v.typeClient||'devis';
   document.getElementById('fmEntite').value = (v.entite && v.entite.toLowerCase()!=='particulier') ? 'Entreprise' : 'Particulier';
   // Refleter aussi dans le select client si ce client existe dans la liste
   var selClient = document.getElementById('fmClientExistant');
-  if(v.client){
-    var opt = Array.prototype.find.call(selClient.options, function(o){return o.value===v.client;});
-    if(opt) selClient.value = v.client;
+  if(nomReel){
+    var opt = Array.prototype.find.call(selClient.options, function(o){return o.value===nomReel;});
+    if(opt) selClient.value = nomReel;
   }
 }
 function onChangeFmClientExistant(){
@@ -7351,7 +7388,7 @@ function onChangeFmClientExistant(){
   if(!client) return;
   document.getElementById('fmClientNom').value = client;
   // Reprendre entite/type du premier vehicule trouve pour ce client, comme valeur par defaut
-  var v0 = vehicles.find(function(x){return x.client===client;});
+  var v0 = vehicles.find(function(x){return (x.proprietaireVehicule||x.client)===client;});
   if(v0){
     document.getElementById('fmTypeClient').value = v0.typeClient||'devis';
     document.getElementById('fmEntite').value = (v0.entite && v0.entite.toLowerCase()!=='particulier') ? 'Entreprise' : 'Particulier';
@@ -7410,6 +7447,17 @@ function validerFactureManuelle(){
   if(!client){ alert('Le nom du client est obligatoire.'); return; }
   if(!dateDepotStr){ alert('La date de depot est obligatoire.'); return; }
 
+  // Dossier assurance : meme logique que le formulaire principal — le
+  // "client" qui pilote la facturation devient le nom de l'ASSUREUR, le
+  // vrai proprietaire du vehicule reste trace separement. Calcule tot
+  // dans la fonction pour que la verification d'unicite du numero de
+  // facture (juste en dessous) porte sur le BON client (celui qui sera
+  // effectivement facture), pas sur le proprietaire.
+  var dossierAssuranceCoche = document.getElementById('fmDossierAssurance').checked;
+  var nomAssureurSaisi = (document.getElementById('fmAssureur').value||'').trim();
+  var proprietaireVehicule = client;
+  var clientEffectif = (dossierAssuranceCoche && nomAssureurSaisi) ? nomAssureurSaisi : client;
+
   // Collecter les lignes saisies (article non vide et prix de vente > 0).
   // Le prix d'achat est optionnel : une facture reste valide sans lui,
   // seule la marge/exposition ne sera pas calculable sur la ligne concernee.
@@ -7437,7 +7485,7 @@ function validerFactureManuelle(){
 
   // Verifier l'unicite du numero de facture (meme regle que le reste de l'app)
   if(numFacture || numSecondaire){
-    var conflit = trouverConflitNumeroFacture(numFacture, numSecondaire, client, null, null);
+    var conflit = trouverConflitNumeroFacture(numFacture, numSecondaire, clientEffectif, null, null);
     if(conflit){ alert('Impossible de creer la facture : '+conflit+'.\nChaque numero doit etre unique et appartenir a un seul client.'); return; }
   }
 
@@ -7455,8 +7503,19 @@ function validerFactureManuelle(){
   var v = {
     id: 'fm_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),
     immat: immat, marque: marqueSaisie||(vRef&&vRef.marque)||'', modele: modeleSaisie||(vRef&&vRef.modele)||'',
-    client: client, tel:(vRef&&vRef.tel)||'', email:(vRef&&vRef.email)||'',
+    client: clientEffectif, proprietaireVehicule: proprietaireVehicule, tel:(vRef&&vRef.tel)||'', email:(vRef&&vRef.email)||'',
     typeClient: typeClient, entite: entite,
+    dossierAssurance: dossierAssuranceCoche,
+    // Une facture manuelle demarre directement au stade facture/livre,
+    // hors du circuit normal — aucun passage expert a valider en amont.
+    expertPasse: dossierAssuranceCoche ? true : false,
+    expertPasseLe: dossierAssuranceCoche ? Date.now() : null,
+    sinistre:(document.getElementById('fmSinistre').value||'').trim()||null,
+    assureur: nomAssureurSaisi||null,
+    contactAssurance:(document.getElementById('fmContactAssurance').value||'').trim()||null,
+    expert:(document.getElementById('fmExpert').value||'').trim()||null,
+    contactExpert:(document.getElementById('fmContactExpert').value||'').trim()||null,
+    dateSinistre: document.getElementById('fmDateSinistre').value||null,
     entree: dateDepot,
     status: estDeposee ? 'facture_deposee' : 'livre',
     priorite: 'normal',
