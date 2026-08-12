@@ -977,11 +977,28 @@ tr:hover td{background:#faf9f7}
         <option value="10">Octobre</option><option value="11">Novembre</option><option value="12">Decembre</option>
       </select>
     </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="fr"><label class="fl">Date de debut <span style="color:red">*</span></label><input type="date" class="inp" id="chargeFixeDateDebut"></div>
+      <div class="fr"><label class="fl">Date de fin (optionnel)</label><input type="date" class="inp" id="chargeFixeDateFin"></div>
+    </div>
   </div>
   <div class="mfoot">
     <button class="btn" onclick="closeChargeFixeForm()">Annuler</button>
     <button class="btn btn-primary" onclick="submitChargeFixeForm()">Enregistrer</button>
   </div>
+</div>
+</div>
+
+<div class="overlay" id="modalPaiementChargeFixe" style="display:none" onclick="if(event.target===this)fermerModalPaiementChargeFixe()">
+<div class="modal" style="max-width:400px">
+  <div class="mhead"><h2 id="pcfModalTitre">Paiement</h2><button class="btn btn-sm" onclick="fermerModalPaiementChargeFixe()">X</button></div>
+  <div class="mbody">
+    <input type="hidden" id="pcfModalChargeId"><input type="hidden" id="pcfModalDateEcheance">
+    <div class="xs muted" style="margin-bottom:10px">Reste du pour ce mois : <strong id="pcfModalResteDu" style="color:#A32D2D"></strong></div>
+    <div class="fr"><label class="fl">Montant a regler (FCFA) <span style="color:red">*</span></label><input class="inp" type="number" min="1" id="pcfModalMontant"></div>
+    <div class="xs muted" style="margin-top:6px">Un montant inferieur au reste du enregistre un paiement PARTIEL — le mois reste actif pour le solde restant, et ce versement figurera dans l'historique.</div>
+  </div>
+  <div class="mfoot"><button class="btn" onclick="fermerModalPaiementChargeFixe()">Annuler</button><button class="btn btn-primary" onclick="confirmerPaiementChargeFixe()">Enregistrer le paiement</button></div>
 </div>
 </div>
 
@@ -1519,11 +1536,40 @@ var SAMPLE_BANQUES = [
   {id:'b2', nom:'SGBCI', solde:0, actif:true},
   {id:'b3', nom:'Ecobank', solde:0, actif:true}
 ];
-function saveBanques(){ localStorage.setItem('gos_banques', JSON.stringify(BANQUES)); }
+function saveBanques(){
+  localStorage.setItem('gos_banques', JSON.stringify(BANQUES));
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_banques').set(JSON.stringify(BANQUES)).catch(function(e){
+      console.error('Firebase banques save error:', e);
+    });
+  }
+}
+function syncBanquesFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_banques').once('value').then(function(snap){
+    var val = snap.val();
+    if(val){
+      try{ BANQUES = JSON.parse(val)||[]; localStorage.setItem('gos_banques', val); }catch(e){}
+    } else if(BANQUES.length && fbConnected){
+      // Aucune donnee cote cloud : ce compte n'a encore jamais synchronise
+      // ses banques (ex: tout premier appareil connecte) — on pousse les
+      // donnees locales existantes pour amorcer la synchronisation.
+      fbDb.ref('gos_banques').set(JSON.stringify(BANQUES));
+    }
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
+}
 function initBanques(){
   if(!localStorage.getItem('gos_banques_init')){
     BANQUES = SAMPLE_BANQUES.map(function(b){return Object.assign({},b);});
-    saveBanques(); localStorage.setItem('gos_banques_init','1');
+    // IMPORTANT : ecriture LOCALE uniquement ici, jamais de poussee vers
+    // Firebase — sur un nouvel appareil, ce seed par defaut ne doit pas
+    // ecraser prematurement les vraies donnees du compte avant meme que
+    // syncBanquesFromFirebase() ait pu verifier ce qui existe deja cote
+    // cloud. Seule syncBanquesFromFirebase() decide, en connaissance de
+    // cause, s'il faut pousser des donnees locales vers Firebase.
+    localStorage.setItem('gos_banques', JSON.stringify(BANQUES));
+    localStorage.setItem('gos_banques_init','1');
   } else {
     try{ BANQUES = JSON.parse(localStorage.getItem('gos_banques'))||[]; }catch(e){ BANQUES=[]; }
   }
@@ -5139,6 +5185,27 @@ function migrerFactureDeposeeLe(){
   return nbMigres;
 }
 
+// Migration retroactive : les charges fixes creees AVANT l'introduction
+// du suivi de paiement (dateDebut/echeancesPayees) n'ont pas ce champ.
+// Sans cette migration, le moteur d'echeancier remonterait par defaut 24
+// mois en arriere et ferait apparaitre a tort un enorme arriere sur des
+// charges parfaitement a jour. Fixe leur point de depart au debut du mois
+// EN COURS (pas de rappel retroactif sur des mois anterieurs a
+// l'activation de cette fonctionnalite). Execute une seule fois par
+// charge (ne touche jamais un champ deja renseigne).
+function migrerDateDebutChargesFixes(){
+  var nbMigres = 0;
+  var debutMoisCourant = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+  CHARGES_FIXES.forEach(function(c){
+    if(c.dateDebut) return;
+    c.dateDebut = debutMoisCourant;
+    if(!c.echeancesPayees) c.echeancesPayees = [];
+    nbMigres++;
+  });
+  if(nbMigres>0) saveChargesFixes();
+  return nbMigres;
+}
+
 function advance(id){
   for(var i=0;i<vehicles.length;i++){
     if(vehicles[i].id===id){
@@ -6221,6 +6288,83 @@ function rentaForfaitClients(dossiers){
 var analysePiecesFiltre = 'tous';
 var analysePiecesVue = 'pieces'; // 'pieces','fournisseurs','vehicules'
 
+// Recherche contextuelle d'articles dans Analyse pieces : retrouve toutes
+// les lignes d'achat dont le nom de piece contient le texte saisi, avec
+// comparaison du prix par fournisseur, quantite totale et cout total
+// d'achat de la selection — pour analyser finement un article precis.
+var _analysePiecesToutesLignes = [];
+function rechercherArticlesAnalysePieces(texte){
+  var zone = document.getElementById('analysePiecesRechercheResultats');
+  if(!zone) return;
+  var q = texte.trim().toLowerCase();
+  if(q.length<2){ zone.innerHTML=''; return; }
+
+  var lignesTrouvees = _analysePiecesToutesLignes.filter(function(l){
+    return l.piece.toLowerCase().indexOf(q)>=0;
+  });
+
+  if(!lignesTrouvees.length){
+    zone.innerHTML = '<div class="card xs muted" style="padding:10px 14px;margin-top:8px">Aucun article trouve pour "'+texte+'".</div>';
+    return;
+  }
+
+  var totalQte = lignesTrouvees.reduce(function(s,l){return s+l.qte;},0);
+  var totalAchat = lignesTrouvees.reduce(function(s,l){return s+l.montantAchat;},0);
+
+  var parFournisseur = {};
+  lignesTrouvees.forEach(function(l){
+    var fourn = l.fournisseurNom || '—';
+    if(!parFournisseur[fourn]) parFournisseur[fourn] = {fournisseur:fourn, qte:0, montantTotal:0, prixMin:Infinity, prixMax:0};
+    parFournisseur[fourn].qte += l.qte;
+    parFournisseur[fourn].montantTotal += l.montantAchat;
+    parFournisseur[fourn].prixMin = Math.min(parFournisseur[fourn].prixMin, l.prixAchat);
+    parFournisseur[fourn].prixMax = Math.max(parFournisseur[fourn].prixMax, l.prixAchat);
+  });
+  var listeFournisseurs = Object.keys(parFournisseur).map(function(k){
+    var f = parFournisseur[k];
+    f.prixMoyen = f.qte>0 ? Math.round(f.montantTotal/f.qte) : 0;
+    return f;
+  }).sort(function(a,b){return a.prixMoyen-b.prixMoyen;});
+
+  var html = '<div class="kgrid k3" style="margin-top:8px;margin-bottom:12px">';
+  html += kpi('Lignes trouvees', lignesTrouvees.length, '');
+  html += kpi('Quantite totale', totalQte, 'blue');
+  html += kpi('Cout total d\'achat', totalAchat.toLocaleString('fr-FR')+' FCFA', 'red');
+  html += '</div>';
+
+  html += '<div class="card" style="margin-bottom:16px"><div class="card-head">Comparaison par fournisseur pour "'+texte+'"</div>';
+  html += '<div class="tw"><table><thead><tr><th>Fournisseur</th><th style="text-align:center">Qte achetee</th><th style="text-align:right">Prix min</th><th style="text-align:right">Prix moyen</th><th style="text-align:right">Prix max</th><th style="text-align:right">Total depense</th></tr></thead><tbody>';
+  listeFournisseurs.forEach(function(f, idx){
+    html += '<tr'+(idx===0?' style="background:#EAF3DE"':'')+'>';
+    html += '<td><strong>'+f.fournisseur+'</strong>'+(idx===0?' <span class="xs" style="color:#3B6D11">&#x2714; Moins cher</span>':'')+'</td>';
+    html += '<td style="text-align:center">'+f.qte+'</td>';
+    html += '<td style="text-align:right">'+f.prixMin.toLocaleString('fr-FR')+'</td>';
+    html += '<td style="text-align:right;font-weight:700">'+f.prixMoyen.toLocaleString('fr-FR')+'</td>';
+    html += '<td style="text-align:right">'+f.prixMax.toLocaleString('fr-FR')+'</td>';
+    html += '<td style="text-align:right;font-weight:700;font-family:monospace">'+f.montantTotal.toLocaleString('fr-FR')+' FCFA</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+
+  html += '<div class="card"><div class="card-head">Detail des achats ('+lignesTrouvees.length+' ligne'+(lignesTrouvees.length>1?'s':'')+')</div>';
+  html += '<div class="tw"><table><thead><tr><th>Date</th><th>Article</th><th>Vehicule</th><th>Client</th><th>Fournisseur</th><th style="text-align:center">Qte</th><th style="text-align:right">Prix unit.</th><th style="text-align:right">Total</th></tr></thead><tbody>';
+  lignesTrouvees.sort(function(a,b){return b.date-a.date;}).forEach(function(l){
+    html += '<tr>';
+    html += '<td class="xs">'+(l.date?new Date(l.date).toLocaleDateString('fr-FR'):'—')+'</td>';
+    html += '<td class="xs">'+l.piece+'</td>';
+    html += '<td class="xs muted">'+(l.immat||'—')+'</td>';
+    html += '<td class="xs muted">'+(l.client||'—')+'</td>';
+    html += '<td class="xs">'+l.fournisseurNom+'</td>';
+    html += '<td style="text-align:center">'+l.qte+'</td>';
+    html += '<td style="text-align:right">'+l.prixAchat.toLocaleString('fr-FR')+'</td>';
+    html += '<td style="text-align:right;font-weight:700">'+l.montantAchat.toLocaleString('fr-FR')+'</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+
+  zone.innerHTML = html;
+}
+
 function pageAnalysePieces(){
   var today = new Date();
   var borneDebut = 0;
@@ -6266,7 +6410,16 @@ function pageAnalysePieces(){
   toutesLignes.forEach(function(l){nbDistinct[l.piece.toLowerCase()]=1;});
   var nbRef = Object.keys(nbDistinct).length;
 
+  // Rendue disponible pour la barre de recherche (declenchee par oninput,
+  // sans re-render complet de la page).
+  _analysePiecesToutesLignes = toutesLignes;
+
   var html = '';
+
+  html += '<div class="card" style="padding:10px 14px;margin-bottom:8px">';
+  html += '<input class="inp" id="analysePiecesRecherche" placeholder="Rechercher un article achete (ex: filtre a huile, plaquettes...)..." oninput="rechercherArticlesAnalysePieces(this.value)" autocomplete="off">';
+  html += '</div>';
+  html += '<div id="analysePiecesRechercheResultats" style="margin-bottom:16px"></div>';
 
   // Filtres
   html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">';
@@ -9094,6 +9247,15 @@ function pageArchives(){
 // restent compatibles (fournPaye absent = considere non paye).
 var dettesFournExpand = {}; // {fournisseurId: true/false}
 var dettesFournFiltre = 'toutes'; // 'toutes','retard','a_echoir','planifie'
+var dettesFournVue = 'encours'; // 'encours','historique'
+var chargesFixesVue = 'liste'; // 'liste','paiement','historique'
+var chargesFixesHistoriquePeriode = 'tous'; // 'mois','trimestre','annee','tous','custom'
+var chargesFixesHistoriqueDebut = '';
+var chargesFixesHistoriqueFin = '';
+var _chargesFixesHistoriquePeriodeFiltree = [];
+var dettesHistoriquePeriode = 'tous'; // 'mois','trimestre','annee','tous','custom'
+var dettesHistoriqueDebut = '';
+var dettesHistoriqueFin = '';
 
 function delaiEcheanceFourn(f){
   // Delai en jours avant echeance selon les conditions du fournisseur.
@@ -9103,21 +9265,61 @@ function delaiEcheanceFourn(f){
   return (typeof f.delaiCreditJours==='number') ? f.delaiCreditJours : 30;
 }
 
+// ── Systeme de paiements PARTIELS multiples pour les dettes fournisseurs ──
+// Chaque dette (auto = ligne de chiffrage en credit, ou manuelle) garde
+// un tableau paiementsFourn:[{date, montant}] — un versement partiel
+// n'efface jamais les precedents, ils restent tous visibles dans
+// l'historique. Une dette est consideree soldee quand la somme de ses
+// versements couvre son montant total.
+function montantPayeDette(item){
+  return (item.paiementsFourn||[]).reduce(function(s,p){return s+(parseFloat(p.montant)||0);},0);
+}
+function resteDuDette(item){
+  var montantTotal = (parseFloat(item.prixAchat)||0)*(parseInt(item.qte)||1);
+  return Math.max(0, montantTotal - montantPayeDette(item));
+}
+
+// Alloue un montant paye (unique ou global) sur une liste de dettes
+// triees du plus ancien au plus recent (FIFO) — chaque dette recoit ce
+// qu'il lui manque, jusqu'a epuisement du montant. Fonctionne aussi bien
+// pour UNE seule dette que pour un paiement groupe sur plusieurs.
+function allouerPaiementFournisseur(itemsTries, montantAPayer){
+  var allocations = [];
+  var restant = montantAPayer;
+  itemsTries.forEach(function(item){
+    if(restant<=0) return;
+    var du = resteDuDette(item);
+    if(du<=0) return;
+    var aAllouer = Math.min(restant, du);
+    allocations.push({item:item, montant:aAllouer});
+    restant -= aAllouer;
+  });
+  return allocations;
+}
+function appliquerAllocationsPaiementFournisseur(allocations){
+  var maintenant = Date.now();
+  allocations.forEach(function(alloc){
+    if(!alloc.item.paiementsFourn) alloc.item.paiementsFourn = [];
+    alloc.item.paiementsFourn.push({date:maintenant, montant:alloc.montant});
+  });
+}
+
 function collecterDettesFournisseurs(){
-  // Regroupe par fournisseur toutes les lignes de chiffrage en credit,
-  // non marquees fournPaye, avec le vehicule/client d'origine.
+  // Regroupe par fournisseur toutes les lignes de chiffrage en credit dont
+  // le RESTE DU (montant total - versements deja effectues) est encore
+  // positif — une dette partiellement payee reste ici avec son solde
+  // restant, pas son montant d'origine.
   var parFourn = {};
   vehicles.forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     v.chiffrage.lignes.forEach(function(cl){
       if(!(cl.piece||'').trim()) return;
       if(cl.paiement!=='credit') return; // seul le credit fournisseur cree une dette
-      if(cl.fournPaye) return; // deja regle
       if(!cl.fournisseurId) return;
+      var reste = resteDuDette(cl);
+      if(reste<=0) return; // deja soldee
       var f = FOURNISSEURS.find(function(x){return x.id===cl.fournisseurId;});
       if(!f) return;
-      var montant = (parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);
-      if(!montant) return;
       var dateAchat = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
       var delai = delaiEcheanceFourn(f);
       var dateEcheance = dateAchat ? dateAchat + delai*86400000 : 0;
@@ -9127,13 +9329,14 @@ function collecterDettesFournisseurs(){
         parFourn[f.id] = {fournisseur:f, lignes:[], total:0, delai:delai, echeanceMin:dateEcheance};
       }
       var ligneId = cl.devisId || cl.libreId || cl.id || null;
+      var montantPaye = montantPayeDette(cl);
       parFourn[f.id].lignes.push({
         vehId:v.id, immat:v.immat||'—', marque:v.marque, modele:v.modele,
-        client:v.client, piece:cl.piece, montant:montant,
-        dateAchat:dateAchat, dateEcheance:dateEcheance,
+        client:v.client, piece:cl.piece, montant:reste, montantOriginal:(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1),
+        montantPaye:montantPaye, dateAchat:dateAchat, dateEcheance:dateEcheance,
         joursRestants:joursRestants, statut:statut, ligneId:ligneId
       });
-      parFourn[f.id].total += montant;
+      parFourn[f.id].total += reste;
       if(dateEcheance && (!parFourn[f.id].echeanceMin || dateEcheance<parFourn[f.id].echeanceMin)){
         parFourn[f.id].echeanceMin = dateEcheance;
       }
@@ -9146,25 +9349,26 @@ function collecterDettesFournisseurs(){
   // modifier/supprimer depuis l'interface, contrairement aux lignes
   // issues du chiffrage vehicule.
   DETTES_MANUELLES.forEach(function(dm){
-    if(dm.paye) return;
+    var reste = resteDuDette(dm);
+    if(reste<=0) return; // deja soldee
     var f = FOURNISSEURS.find(function(x){return x.id===dm.fournisseurId;});
     if(!f) return;
-    var montant = (parseFloat(dm.prixAchat)||0)*(parseInt(dm.qte)||1);
-    if(!montant) return;
     var dateEcheance = dm.dateEcheance || 0;
     var joursRestants = dateEcheance ? Math.round((dateEcheance-Date.now())/86400000) : 0;
     var statut = joursRestants<0 ? 'retard' : (joursRestants<=7 ? 'a_echoir' : 'planifie');
     if(!parFourn[f.id]){
       parFourn[f.id] = {fournisseur:f, lignes:[], total:0, delai:delaiEcheanceFourn(f), echeanceMin:dateEcheance};
     }
+    var montantPaye = montantPayeDette(dm);
     parFourn[f.id].lignes.push({
       vehId:null, immat:'—', marque:'', modele:'',
-      client:'', piece:dm.piece, montant:montant, qte:dm.qte,
+      client:'', piece:dm.piece, montant:reste, montantOriginal:(parseFloat(dm.prixAchat)||0)*(parseInt(dm.qte)||1),
+      montantPaye:montantPaye, qte:dm.qte,
       dateAchat:dm.dateAchat, dateEcheance:dateEcheance,
       joursRestants:joursRestants, statut:statut, ligneId:null,
       manuel:true, detteId:dm.id
     });
-    parFourn[f.id].total += montant;
+    parFourn[f.id].total += reste;
     if(dateEcheance && (!parFourn[f.id].echeanceMin || dateEcheance<parFourn[f.id].echeanceMin)){
       parFourn[f.id].echeanceMin = dateEcheance;
     }
@@ -9486,7 +9690,114 @@ function pageFinancesDashboard(){
   return html;
 }
 
+// Historique des dettes fournisseurs DEJA PAYEES — sans cette page, une
+// fois marquee payee, une dette disparaissait completement de l'app, sans
+// aucun moyen de retrouver le montant regle ni de corriger une erreur de
+// saisie. Chaque ligne peut etre annulee (si erreur) ou, pour les dettes
+// manuelles, modifiee directement.
+function pageDettesFournisseursHistorique(){
+  var historiqueComplet = collecterHistoriquePaiementsFournisseurs();
+
+  // Filtre par periode
+  var today = new Date();
+  var borneDebut = 0, borneFin = null;
+  if(dettesHistoriquePeriode==='mois') borneDebut = new Date(today.getFullYear(), today.getMonth(), 1).getTime();
+  else if(dettesHistoriquePeriode==='trimestre'){ var q=Math.floor(today.getMonth()/3)*3; borneDebut=new Date(today.getFullYear(),q,1).getTime(); }
+  else if(dettesHistoriquePeriode==='annee') borneDebut = new Date(today.getFullYear(), 0, 1).getTime();
+  else if(dettesHistoriquePeriode==='custom' && dettesHistoriqueDebut){
+    borneDebut = new Date(dettesHistoriqueDebut).setHours(0,0,0,0);
+    if(dettesHistoriqueFin) borneFin = new Date(dettesHistoriqueFin).setHours(23,59,59,999);
+  }
+  var historique = historiqueComplet.filter(function(h){
+    if(borneDebut>0 && h.datePaiement<borneDebut) return false;
+    if(borneFin && h.datePaiement>borneFin) return false;
+    return true;
+  });
+
+  // Rendue disponible pour la recherche live (declenchee par oninput,
+  // sans re-render complet) — deja filtree par la periode selectionnee.
+  _dettesHistoriquePeriodeFiltree = historique;
+
+  var totalPaye = historique.reduce(function(s,h){return s+h.montant;},0);
+
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+  html += '<h2 style="font-size:16px;font-weight:700;margin:0">Historique des paiements — Dettes fournisseurs</h2>';
+  html += '<button class="btn btn-sm" onclick="dettesFournVue=\'encours\';renderPage()">&#x2190; Retour aux dettes en cours</button>';
+  html += '</div>';
+
+  html += '<div class="card" style="padding:10px 14px;margin-bottom:12px">';
+  html += '<input class="inp" id="dettesHistoriqueRecherche" placeholder="Rechercher un fournisseur ou un article..." oninput="rechercherDettesHistorique(this.value)" autocomplete="off">';
+  html += '</div>';
+
+  html += '<div class="flex gap6" style="margin-bottom:16px;flex-wrap:wrap">';
+  ['mois','trimestre','annee','tous','custom'].forEach(function(p){
+    var lbl = {mois:'Ce mois', trimestre:'Ce trimestre', annee:'Cette annee', tous:'Tout', custom:'Personnalise'}[p];
+    html += '<button class="btn btn-sm'+(dettesHistoriquePeriode===p?' btn-primary':'')+'" data-dhp="'+p+'" onclick="setDettesHistoriquePeriodeByEl(this)">'+lbl+'</button>';
+  });
+  if(dettesHistoriquePeriode==='custom'){
+    html += '<input type="date" class="inp" style="width:auto" value="'+dettesHistoriqueDebut+'" onchange="dettesHistoriqueDebut=this.value;renderPage()">';
+    html += '<span class="xs muted">&rarr;</span>';
+    html += '<input type="date" class="inp" style="width:auto" value="'+dettesHistoriqueFin+'" onchange="dettesHistoriqueFin=this.value;renderPage()">';
+  }
+  html += '</div>';
+
+  html += '<div class="kgrid k2" style="margin-bottom:16px">';
+  html += kpi('Paiements enregistres', historique.length, '');
+  html += kpi('Total paye (periode)', totalPaye?totalPaye.toLocaleString('fr-FR')+' FCFA':'—', 'green');
+  html += '</div>';
+
+  html += '<div id="dettesHistoriqueTableWrap">';
+  html += htmlTableauDettesHistorique(historique);
+  html += '</div>';
+  return html;
+}
+
+// Construit le tableau seul (reutilise par le rendu initial ET la
+// recherche live, qui remplace uniquement ce bloc sans re-render complet).
+function htmlTableauDettesHistorique(historique){
+  if(!historique.length){
+    return '<div class="card"><div class="empty">Aucun paiement ne correspond a ces criteres.</div></div>';
+  }
+  var html = '<div class="card"><div class="tw"><table><thead><tr><th>Date de paiement</th><th>Fournisseur</th><th>Piece / Article</th><th style="text-align:right">Montant</th><th>Origine</th><th></th></tr></thead><tbody>';
+  historique.forEach(function(h){
+    html += '<tr>';
+    html += '<td class="xs">'+(h.datePaiement?new Date(h.datePaiement).toLocaleDateString('fr-FR'):'—')+'</td>';
+    html += '<td><strong>'+h.fournisseur+'</strong></td>';
+    html += '<td class="xs">'+h.piece+(h.immat?' <span class="muted">('+h.immat+')</span>':'')+'</td>';
+    html += '<td style="text-align:right;font-weight:700;font-family:monospace">'+h.montant.toLocaleString('fr-FR')+' FCFA</td>';
+    html += '<td><span class="badge '+(h.type==='manuel'?'b-purple':'b-blue')+'">'+(h.type==='manuel'?'Saisie manuelle':'Vehicule')+'</span></td>';
+    html += '<td><div class="flex gap6">';
+    if(h.type==='manuel'){
+      html += '<button class="btn btn-sm" data-dette-id="'+h.detteId+'" onclick="ouvrirModifDetteManuelleByEl(this)" title="Modifier cette dette">&#x270F;</button>';
+      html += '<button class="btn btn-sm" data-dette-id="'+h.detteId+'" data-paiement-idx="'+h.paiementIndex+'" onclick="annulerPaiementDetteManuelleByEl(this)" style="color:#A32D2D;border-color:#E0A0A0" title="Annuler ce versement">&#x21BA; Annuler</button>';
+    } else {
+      html += '<button class="btn btn-sm" data-vid="'+h.vehId+'" data-lid="'+(h.ligneId||'')+'" data-paiement-idx="'+h.paiementIndex+'" onclick="annulerPaiementLigneFournByEl(this)" style="color:#A32D2D;border-color:#E0A0A0" title="Annuler ce versement">&#x21BA; Annuler</button>';
+    }
+    html += '</div></td></tr>';
+  });
+  html += '</tbody></table></div></div>';
+  return html;
+}
+
+var _dettesHistoriquePeriodeFiltree = [];
+function rechercherDettesHistorique(texte){
+  var wrap = document.getElementById('dettesHistoriqueTableWrap');
+  if(!wrap) return;
+  var q = texte.trim().toLowerCase();
+  var resultats = q.length<2 ? _dettesHistoriquePeriodeFiltree : _dettesHistoriquePeriodeFiltree.filter(function(h){
+    return h.fournisseur.toLowerCase().indexOf(q)>=0 || h.piece.toLowerCase().indexOf(q)>=0;
+  });
+  wrap.innerHTML = htmlTableauDettesHistorique(resultats);
+}
+
+function setDettesHistoriquePeriodeByEl(el){
+  dettesHistoriquePeriode = el.getAttribute('data-dhp');
+  renderPage();
+}
+
 function pageDettesFournisseurs(){
+  if(dettesFournVue==='historique') return pageDettesFournisseursHistorique();
+
   var groupes = collecterDettesFournisseurs();
 
   // Statut global par fournisseur = le plus urgent parmi ses lignes
@@ -9517,7 +9828,7 @@ function pageDettesFournisseurs(){
 
   var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Dettes fournisseurs</h2>';
-  html += '<button class="btn btn-primary btn-sm" onclick="ouvrirAjoutDetteManuelle()">+ Ajouter une dette</button>';
+  html += '<div class="flex gap6"><button class="btn btn-sm" onclick="dettesFournVue=\'historique\';renderPage()">&#x1F4C3; Historique des paiements</button><button class="btn btn-primary btn-sm" onclick="ouvrirAjoutDetteManuelle()">+ Ajouter une dette</button></div>';
   html += '</div>';
 
   html += '<div class="card" style="margin-bottom:16px;border:2px solid #A32D2D;padding:12px 16px">';
@@ -9578,15 +9889,12 @@ function pageDettesFournisseurs(){
         html += '<td style="font-family:monospace;color:#A32D2D">'+l.montant.toLocaleString('fr-FR')+'</td>';
         html += '<td><span class="badge '+badgeCls+'">'+badgeLabel+'</span></td>';
         if(l.manuel){
-          html += '<td><button class="btn btn-sm" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();marquerDetteManuelleByEl(this)">Payer</button> <button class="btn btn-sm" style="color:#A32D2D" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();supprimerDetteManuelleByEl(this)">&#x1F5D1;</button></td>';
+          html += '<td><button class="btn btn-success btn-sm" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();marquerDetteManuelleByEl(this)">Payer</button> <button class="btn btn-sm" style="color:#A32D2D" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();supprimerDetteManuelleByEl(this)">&#x1F5D1;</button></td>';
         } else {
-          html += '<td><button class="btn btn-sm" data-vid="'+l.vehId+'" data-lid="'+(l.ligneId||'')+'" onclick="event.stopPropagation();marquerLigneFournPayeeByEl(this)">Payer cette ligne</button></td>';
+          html += '<td><button class="btn btn-success btn-sm" data-vid="'+l.vehId+'" data-lid="'+(l.ligneId||'')+'" onclick="event.stopPropagation();marquerLigneFournPayeeByEl(this)">Payer cette ligne</button></td>';
         }
         html += '</tr>';
       });
-      html += '<tr><td colspan="5" style="padding:8px 8px 12px 28px">';
-      html += '<button class="btn btn-sm btn-primary" data-fid="'+g.fournisseur.id+'" onclick="event.stopPropagation();marquerFournisseurPayeByEl(this)">&#x1F4B3; Enregistrer un paiement (tout le fournisseur)</button>';
-      html += '</td></tr>';
     }
   });
 
@@ -9596,8 +9904,9 @@ function pageDettesFournisseurs(){
   // prestation vehicule) — cachee par defaut.
   html += '<div class="overlay" id="modalAjoutDetteManuelle" style="display:none" onclick="if(event.target===this)document.getElementById(\'modalAjoutDetteManuelle\').style.display=\'none\'">';
   html += '<div class="modal" style="max-width:420px">';
-  html += '<div class="mhead"><h2>+ Ajouter une dette fournisseur</h2><button class="btn btn-sm" onclick="document.getElementById(\'modalAjoutDetteManuelle\').style.display=\'none\'">X</button></div>';
+  html += '<div class="mhead"><h2 id="modalAjoutDetteManuelleTitre">+ Ajouter une dette fournisseur</h2><button class="btn btn-sm" onclick="document.getElementById(\'modalAjoutDetteManuelle\').style.display=\'none\'">X</button></div>';
   html += '<div class="mbody">';
+  html += '<input type="hidden" id="dm_edit_id" value="">';
   html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Fournisseur <span style="color:red">*</span></label>';
   html += '<select class="inp" id="dm_fournisseur"><option value="">-- Choisir --</option>';
   FOURNISSEURS.filter(function(f){return f.actif;}).forEach(function(f){ html += '<option value="'+f.id+'">'+f.nom+'</option>'; });
@@ -9612,6 +9921,21 @@ function pageDettesFournisseurs(){
   html += '<div class="mfoot"><button class="btn" onclick="document.getElementById(\'modalAjoutDetteManuelle\').style.display=\'none\'">Annuler</button><button class="btn btn-primary" onclick="confirmerAjoutDetteManuelle()">Enregistrer</button></div>';
   html += '</div></div>';
 
+  // Modale de paiement (unique ou groupe) — prerempli avec le reste du,
+  // permet un reglement PARTIEL en modifiant le montant. Chaque versement
+  // est enregistre individuellement (visible ensuite dans l'historique).
+  html += '<div class="overlay" id="modalPaiementFournisseur" style="display:none" onclick="if(event.target===this)fermerModalPaiementFournisseur()">';
+  html += '<div class="modal" style="max-width:400px">';
+  html += '<div class="mhead"><h2 id="pfModalTitre">Paiement</h2><button class="btn btn-sm" onclick="fermerModalPaiementFournisseur()">X</button></div>';
+  html += '<div class="mbody">';
+  html += '<input type="hidden" id="pfModalMode"><input type="hidden" id="pfModalVid"><input type="hidden" id="pfModalLid"><input type="hidden" id="pfModalFid"><input type="hidden" id="pfModalDetteId">';
+  html += '<div class="xs muted" style="margin-bottom:10px">Reste du : <strong id="pfModalResteDu" style="color:#A32D2D"></strong></div>';
+  html += '<div class="fr"><label class="fl">Montant a regler (FCFA) <span style="color:red">*</span></label><input class="inp" type="number" min="1" id="pfModalMontant"></div>';
+  html += '<div class="xs muted" style="margin-top:6px">Un montant inferieur au reste du enregistre un paiement PARTIEL — la dette reste active pour le solde restant, et ce versement figurera dans l\'historique.</div>';
+  html += '</div>';
+  html += '<div class="mfoot"><button class="btn" onclick="fermerModalPaiementFournisseur()">Annuler</button><button class="btn btn-primary" onclick="confirmerPaiementFournisseur()">Enregistrer le paiement</button></div>';
+  html += '</div></div>';
+
   return html;
 }
 
@@ -9624,59 +9948,156 @@ function toggleDettesFournExpandByEl(el){
 }
 
 // Marque une ligne de chiffrage precise comme reglee au fournisseur.
+// Ouvre la modale de paiement pour UNE dette precise (vehicule) —
+// prerempli avec le RESTE DU (tient compte des versements deja
+// effectues), modifiable pour un reglement partiel supplementaire.
 function marquerLigneFournPayeeByEl(el){
   var vid = el.getAttribute('data-vid');
   var v = vehicles.find(function(x){return x.id===vid;});
   if(!v || !v.chiffrage || !v.chiffrage.lignes) return;
   var lid = el.getAttribute('data-lid');
   var cl = lid ? v.chiffrage.lignes.find(function(x){return (x.devisId||x.libreId||x.id)===lid;}) : null;
-  if(!cl){
-    // fallback : si pas d'id de ligne exploitable, on ne marque rien pour eviter une erreur silencieuse
-    return;
-  }
-  cl.fournPaye = true;
-  cl.fournPayeLe = Date.now();
-  saveV();
-  renderPage();
+  if(!cl) return;
+  var reste = resteDuDette(cl);
+  ouvrirModalPaiementFournisseur({
+    titre: 'Paiement — '+cl.piece,
+    resteDu: reste,
+    mode: 'ligne', vid: vid, lid: lid
+  });
 }
 
-// Marque toutes les lignes en credit non payees d'un fournisseur comme reglees.
+// Ouvre la modale de paiement GROUPE pour toutes les dettes en cours d'un
+// fournisseur — prerempli avec le total restant du (toutes ses dettes,
+// vehicule + manuelles confondues). Un paiement partiel eponge les plus
+// anciennes dettes en premier (FIFO).
 function marquerFournisseurPayeByEl(el){
   var fid = el.getAttribute('data-fid');
+  var f = FOURNISSEURS.find(function(x){return x.id===fid;});
+  if(!f) return;
+  var totalDu = 0;
   vehicles.forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     v.chiffrage.lignes.forEach(function(cl){
-      if(cl.fournisseurId===fid && cl.paiement==='credit' && !cl.fournPaye){
-        cl.fournPaye = true;
-        cl.fournPayeLe = Date.now();
-      }
+      if(cl.fournisseurId===fid && cl.paiement==='credit') totalDu += resteDuDette(cl);
     });
   });
-  // Inclut aussi les dettes manuelles de ce fournisseur, pour que le
-  // paiement global couvre bien TOUTES ses dettes, pas seulement celles
-  // issues du chiffrage vehicule.
   DETTES_MANUELLES.forEach(function(dm){
-    if(dm.fournisseurId===fid && !dm.paye){
-      dm.paye = true;
-      dm.payeLe = Date.now();
-    }
+    if(dm.fournisseurId===fid) totalDu += resteDuDette(dm);
   });
-  saveDettesManuelles();
-  saveV();
+  ouvrirModalPaiementFournisseur({
+    titre: 'Paiement groupe — '+f.nom,
+    resteDu: totalDu,
+    mode: 'fournisseur', fid: fid
+  });
+}
+
+function ouvrirModalPaiementFournisseur(opts){
+  document.getElementById('pfModalTitre').textContent = opts.titre;
+  document.getElementById('pfModalMode').value = opts.mode;
+  document.getElementById('pfModalVid').value = opts.vid||'';
+  document.getElementById('pfModalLid').value = opts.lid||'';
+  document.getElementById('pfModalFid').value = opts.fid||'';
+  document.getElementById('pfModalDetteId').value = opts.detteId||'';
+  document.getElementById('pfModalResteDu').textContent = opts.resteDu.toLocaleString('fr-FR')+' FCFA';
+  document.getElementById('pfModalMontant').value = opts.resteDu;
+  document.getElementById('pfModalMontant').max = opts.resteDu;
+  document.getElementById('modalPaiementFournisseur').style.display = 'flex';
+}
+function fermerModalPaiementFournisseur(){
+  document.getElementById('modalPaiementFournisseur').style.display = 'none';
+}
+
+// Confirme le paiement saisi (partiel ou total) — resout TOUJOURS les
+// objets reels au moment de la confirmation (pas de reference figee),
+// alloue le montant via allouerPaiementFournisseur (FIFO si plusieurs
+// dettes concernees) et enregistre chaque versement individuellement.
+function confirmerPaiementFournisseur(){
+  var mode = document.getElementById('pfModalMode').value;
+  var montantSaisi = parseFloat(document.getElementById('pfModalMontant').value);
+  if(!montantSaisi || montantSaisi<=0){ alert('Indiquez un montant valide.'); return; }
+
+  if(mode==='ligne'){
+    var vid = document.getElementById('pfModalVid').value;
+    var lid = document.getElementById('pfModalLid').value;
+    var v = vehicles.find(function(x){return x.id===vid;});
+    var cl = v && v.chiffrage && v.chiffrage.lignes ? v.chiffrage.lignes.find(function(x){return (x.devisId||x.libreId||x.id)===lid;}) : null;
+    if(!cl){ alert('Dette introuvable.'); return; }
+    var reste = resteDuDette(cl);
+    if(montantSaisi>reste){ alert('Le montant saisi depasse le reste du ('+reste.toLocaleString('fr-FR')+' FCFA).'); return; }
+    appliquerAllocationsPaiementFournisseur(allouerPaiementFournisseur([cl], montantSaisi));
+    saveV();
+  } else if(mode==='detteManuelle'){
+    var detteId = document.getElementById('pfModalDetteId').value;
+    var dm = DETTES_MANUELLES.find(function(x){return x.id===detteId;});
+    if(!dm){ alert('Dette introuvable.'); return; }
+    var resteM = resteDuDette(dm);
+    if(montantSaisi>resteM){ alert('Le montant saisi depasse le reste du ('+resteM.toLocaleString('fr-FR')+' FCFA).'); return; }
+    appliquerAllocationsPaiementFournisseur(allouerPaiementFournisseur([dm], montantSaisi));
+    saveDettesManuelles();
+  } else if(mode==='fournisseur'){
+    var fid = document.getElementById('pfModalFid').value;
+    // Recolte FRAICHE de toutes les dettes non soldees de ce fournisseur,
+    // triees du plus ancien au plus recent (FIFO).
+    var items = [];
+    vehicles.forEach(function(v){
+      if(!v.chiffrage || !v.chiffrage.lignes) return;
+      v.chiffrage.lignes.forEach(function(cl){
+        if(cl.fournisseurId===fid && cl.paiement==='credit' && resteDuDette(cl)>0){
+          items.push({ref:cl, dateAchat: v.chiffrage.valideDirLe||v.chiffrage.soumisLe||v.entree||0, prixAchat:cl.prixAchat, qte:cl.qte, paiementsFourn:cl.paiementsFourn});
+        }
+      });
+    });
+    DETTES_MANUELLES.forEach(function(dm){
+      if(dm.fournisseurId===fid && resteDuDette(dm)>0){
+        items.push({ref:dm, dateAchat: dm.dateAchat||0, prixAchat:dm.prixAchat, qte:dm.qte, paiementsFourn:dm.paiementsFourn});
+      }
+    });
+    items.sort(function(a,b){return a.dateAchat-b.dateAchat;});
+    var totalDu = items.reduce(function(s,it){return s+resteDuDette(it.ref);},0);
+    if(montantSaisi>totalDu){ alert('Le montant saisi depasse le total du ('+totalDu.toLocaleString('fr-FR')+' FCFA).'); return; }
+    // allouerPaiementFournisseur lit resteDuDette(item) — on lui passe
+    // directement les objets REELS (it.ref), pas les wrappers.
+    var itemsReels = items.map(function(it){return it.ref;});
+    appliquerAllocationsPaiementFournisseur(allouerPaiementFournisseur(itemsReels, montantSaisi));
+    saveV();
+    saveDettesManuelles();
+  }
+
+  fermerModalPaiementFournisseur();
   renderPage();
 }
 
 // ── Dettes fournisseurs manuelles : ajout, paiement, suppression ────────
 function ouvrirAjoutDetteManuelle(){
+  document.getElementById('dm_edit_id').value = '';
   document.getElementById('dm_fournisseur').value = '';
   document.getElementById('dm_piece').value = '';
   document.getElementById('dm_qte').value = 1;
   document.getElementById('dm_prixAchat').value = '';
   document.getElementById('dm_dateEcheance').value = '';
+  document.getElementById('modalAjoutDetteManuelleTitre').textContent = '+ Ajouter une dette fournisseur';
+  document.getElementById('modalAjoutDetteManuelle').style.display = 'flex';
+}
+
+// Reouvre la MEME modale, prerempli, pour corriger une dette manuelle
+// deja saisie — y compris si elle est deja marquee payee (erreur de
+// saisie sur le montant, la quantite, le fournisseur...).
+function ouvrirModifDetteManuelleByEl(btn){
+  var id = btn.getAttribute('data-dette-id');
+  var dm = DETTES_MANUELLES.find(function(x){return x.id===id;});
+  if(!dm) return;
+  document.getElementById('dm_edit_id').value = dm.id;
+  document.getElementById('dm_fournisseur').value = dm.fournisseurId||'';
+  document.getElementById('dm_piece').value = dm.piece||'';
+  document.getElementById('dm_qte').value = dm.qte||1;
+  document.getElementById('dm_prixAchat').value = dm.prixAchat||'';
+  document.getElementById('dm_dateEcheance').value = dm.dateEcheance ? new Date(dm.dateEcheance).toISOString().slice(0,10) : '';
+  document.getElementById('modalAjoutDetteManuelleTitre').textContent = '&#x270F; Modifier la dette'+(dm.paye?' (deja payee)':'');
   document.getElementById('modalAjoutDetteManuelle').style.display = 'flex';
 }
 
 function confirmerAjoutDetteManuelle(){
+  var editId = document.getElementById('dm_edit_id').value;
   var fournisseurId = document.getElementById('dm_fournisseur').value;
   var piece = document.getElementById('dm_piece').value.trim();
   var qte = parseInt(document.getElementById('dm_qte').value,10) || 1;
@@ -9688,26 +10109,107 @@ function confirmerAjoutDetteManuelle(){
   if(!prixAchat || prixAchat<=0){ alert('Indiquez un prix d\'achat valide.'); return; }
   if(!dateEcheanceStr){ alert('Indiquez une date d\'echeance.'); return; }
 
-  var auteur = currentUser ? (currentUser.login||currentUser.nom) : currentRole;
-  DETTES_MANUELLES.push({
-    id: 'dm_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),
-    fournisseurId: fournisseurId, piece: piece, qte: qte, prixAchat: prixAchat,
-    dateAchat: Date.now(), dateEcheance: new Date(dateEcheanceStr).getTime(),
-    paye: false, payeLe: null, auteur: auteur
-  });
+  if(editId){
+    // Modification d'une dette existante (payee ou non) — corrige une
+    // erreur de saisie sans perdre son statut de paiement.
+    var dm = DETTES_MANUELLES.find(function(x){return x.id===editId;});
+    if(!dm){ alert('Dette introuvable.'); return; }
+    dm.fournisseurId = fournisseurId; dm.piece = piece; dm.qte = qte;
+    dm.prixAchat = prixAchat; dm.dateEcheance = new Date(dateEcheanceStr).getTime();
+  } else {
+    var auteur = currentUser ? (currentUser.login||currentUser.nom) : currentRole;
+    DETTES_MANUELLES.push({
+      id: 'dm_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),
+      fournisseurId: fournisseurId, piece: piece, qte: qte, prixAchat: prixAchat,
+      dateAchat: Date.now(), dateEcheance: new Date(dateEcheanceStr).getTime(),
+      paye: false, payeLe: null, auteur: auteur
+    });
+  }
   saveDettesManuelles();
   document.getElementById('modalAjoutDetteManuelle').style.display = 'none';
   renderPage();
+}
+
+// Annule un paiement enregistre par erreur — remet la dette (manuelle ou
+// automatique) en attente, pour pouvoir la re-marquer correctement.
+function annulerPaiementDetteManuelleByEl(btn){
+  var id = btn.getAttribute('data-dette-id');
+  var idx = parseInt(btn.getAttribute('data-paiement-idx'),10);
+  var dm = DETTES_MANUELLES.find(function(x){return x.id===id;});
+  if(!dm || !dm.paiementsFourn || !dm.paiementsFourn[idx]) return;
+  var montantVerse = dm.paiementsFourn[idx].montant;
+  if(!confirm('Annuler ce versement de '+montantVerse.toLocaleString('fr-FR')+' FCFA sur "'+dm.piece+'" ? Le solde restant du sera recalcule.')) return;
+  dm.paiementsFourn.splice(idx,1);
+  saveDettesManuelles();
+  renderPage();
+}
+
+function annulerPaiementLigneFournByEl(btn){
+  var vid = btn.getAttribute('data-vid');
+  var lid = btn.getAttribute('data-lid');
+  var idx = parseInt(btn.getAttribute('data-paiement-idx'),10);
+  var v = vehicles.find(function(x){return x.id===vid;});
+  if(!v || !v.chiffrage || !v.chiffrage.lignes) return;
+  var cl = v.chiffrage.lignes.find(function(x){return (x.devisId||x.libreId||x.id)===lid;});
+  if(!cl || !cl.paiementsFourn || !cl.paiementsFourn[idx]) return;
+  var montantVerse = cl.paiementsFourn[idx].montant;
+  if(!confirm('Annuler ce versement de '+montantVerse.toLocaleString('fr-FR')+' FCFA sur "'+cl.piece+'" ? Le solde restant du sera recalcule.')) return;
+  cl.paiementsFourn.splice(idx,1);
+  saveV();
+  renderPage();
+}
+
+// Collecte l'HISTORIQUE des dettes fournisseurs DEJA PAYEES (auto +
+// manuelles) — sans cette liste, une fois payee, une dette disparaissait
+// completement, sans aucun moyen de la revoir ou de corriger une erreur
+// de saisie.
+function collecterHistoriquePaiementsFournisseurs(){
+  var historique = [];
+  vehicles.forEach(function(v){
+    if(!v.chiffrage || !v.chiffrage.lignes) return;
+    v.chiffrage.lignes.forEach(function(cl){
+      if(!(cl.piece||'').trim()) return;
+      if(cl.paiement!=='credit') return;
+      if(!cl.fournisseurId) return;
+      if(!cl.paiementsFourn || !cl.paiementsFourn.length) return;
+      var f = FOURNISSEURS.find(function(x){return x.id===cl.fournisseurId;});
+      if(!f) return;
+      // Une ligne par VERSEMENT individuel — un paiement effectue en 3
+      // fois produit bien 3 lignes distinctes dans l'historique.
+      cl.paiementsFourn.forEach(function(p, idx){
+        historique.push({
+          type:'auto', fournisseur:f.nom,
+          piece:cl.piece, montant:p.montant, datePaiement:p.date||0,
+          vehId:v.id, ligneId: cl.devisId||cl.libreId||cl.id||null, immat:v.immat,
+          paiementIndex: idx
+        });
+      });
+    });
+  });
+  DETTES_MANUELLES.forEach(function(dm){
+    if(!dm.paiementsFourn || !dm.paiementsFourn.length) return;
+    var f = FOURNISSEURS.find(function(x){return x.id===dm.fournisseurId;});
+    dm.paiementsFourn.forEach(function(p, idx){
+      historique.push({
+        type:'manuel', fournisseur: f?f.nom:'—',
+        piece:dm.piece, montant:p.montant, datePaiement:p.date||0,
+        detteId:dm.id, paiementIndex: idx
+      });
+    });
+  });
+  historique.sort(function(a,b){return b.datePaiement-a.datePaiement;});
+  return historique;
 }
 
 function marquerDetteManuelleByEl(btn){
   var id = btn.getAttribute('data-dette-id');
   var dm = DETTES_MANUELLES.find(function(x){return x.id===id;});
   if(!dm) return;
-  dm.paye = true;
-  dm.payeLe = Date.now();
-  saveDettesManuelles();
-  renderPage();
+  ouvrirModalPaiementFournisseur({
+    titre: 'Paiement — '+dm.piece,
+    resteDu: resteDuDette(dm),
+    mode: 'detteManuelle', detteId: id
+  });
 }
 
 function supprimerDetteManuelleByEl(btn){
@@ -10273,10 +10775,244 @@ function prochainEcheanceCharge(c){
   return candidat.getTime();
 }
 
+// Marque UN MOIS PRECIS d'une charge fixe comme paye — contrairement aux
+// engagements bancaires (qui marquent toujours la plus ancienne echeance
+// automatiquement), ici chaque mois affiche est cliquable individuellement,
+// pour laisser le choix de regler un mois precis parmi plusieurs dus.
+function marquerChargeFixeEcheanceByEl(btn){
+  var id = btn.getAttribute('data-cfid');
+  var dateEcheance = parseInt(btn.getAttribute('data-echeance'),10);
+  var c = CHARGES_FIXES.find(function(x){return x.id===id;});
+  if(!c) return;
+  var reste = resteDuEcheance(c, dateEcheance);
+  document.getElementById('pcfModalTitre').textContent = 'Paiement — '+c.nom+' ('+new Date(dateEcheance).toLocaleDateString('fr-FR',{month:'long',year:'numeric'})+')';
+  document.getElementById('pcfModalChargeId').value = id;
+  document.getElementById('pcfModalDateEcheance').value = dateEcheance;
+  document.getElementById('pcfModalResteDu').textContent = reste.toLocaleString('fr-FR')+' FCFA';
+  document.getElementById('pcfModalMontant').value = reste;
+  document.getElementById('pcfModalMontant').max = reste;
+  document.getElementById('modalPaiementChargeFixe').style.display = 'flex';
+}
+function fermerModalPaiementChargeFixe(){
+  document.getElementById('modalPaiementChargeFixe').style.display = 'none';
+}
+function confirmerPaiementChargeFixe(){
+  var id = document.getElementById('pcfModalChargeId').value;
+  var dateEcheance = parseInt(document.getElementById('pcfModalDateEcheance').value,10);
+  var montantSaisi = parseFloat(document.getElementById('pcfModalMontant').value);
+  var c = CHARGES_FIXES.find(function(x){return x.id===id;});
+  if(!c){ alert('Charge introuvable.'); return; }
+  if(!montantSaisi || montantSaisi<=0){ alert('Indiquez un montant valide.'); return; }
+  var reste = resteDuEcheance(c, dateEcheance);
+  if(montantSaisi>reste){ alert('Le montant saisi depasse le reste du ('+reste.toLocaleString('fr-FR')+' FCFA).'); return; }
+  enregistrerPaiementEcheance(c, dateEcheance, montantSaisi);
+  saveChargesFixes();
+  fermerModalPaiementChargeFixe();
+  renderPage();
+}
+
+// Page de paiement des charges fixes : pour chaque charge active, liste
+// TOUS les mois dus (y compris les mois precedents non regles, ex: mars
+// non paye alors qu'on est en avril), chacun avec sa propre option
+// "Payer", plus un cumul du montant total du pour cette charge.
+function pageChargesFixesPaiement(){
+  var maintenant = Date.now();
+  var moisLabels = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
+
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+  html += '<h2 style="font-size:16px;font-weight:700;margin:0">Paiement des charges fixes</h2>';
+  html += '<button class="btn btn-sm" onclick="chargesFixesVue=\'liste\';renderPage()">&#x2190; Retour a la liste</button>';
+  html += '</div>';
+
+  var actives = CHARGES_FIXES.filter(function(c){return c.actif;});
+  var lignesCharges = actives.map(function(c){
+    var impayees = echeancesImpayees(c).sort(function(a,b){return a-b;});
+    var totalCumule = impayees.reduce(function(s,d){return s+resteDuEcheance(c,d);},0);
+    return {charge:c, moisDus: impayees, totalCumule: totalCumule};
+  });
+
+  var totalGeneralDu = lignesCharges.reduce(function(s,l){return s+l.totalCumule;},0);
+  var nbChargesEnRetard = lignesCharges.filter(function(l){return l.moisDus.length>0;}).length;
+
+  html += '<div class="kgrid k2" style="margin-bottom:16px">';
+  html += kpi('Charges avec mois impayes', nbChargesEnRetard, nbChargesEnRetard>0?'red':'green');
+  html += kpi('Total du (toutes charges)', totalGeneralDu?totalGeneralDu.toLocaleString('fr-FR')+' FCFA':'—', totalGeneralDu>0?'red':'green');
+  html += '</div>';
+
+  if(!lignesCharges.length){
+    html += '<div class="card"><div class="empty">Aucune charge fixe active.</div></div>';
+    return html;
+  }
+
+  html += '<div class="card"><div class="tw"><table><thead><tr><th>Charge</th><th>Mois dus</th><th style="text-align:right">Cumul du</th></tr></thead><tbody>';
+  lignesCharges.forEach(function(l){
+    var c = l.charge;
+    html += '<tr>';
+    html += '<td style="vertical-align:top;padding-top:10px"><strong>'+c.nom+'</strong><div class="xs muted">'+(parseFloat(c.montant)||0).toLocaleString('fr-FR')+' FCFA / mois</div></td>';
+    html += '<td>';
+    if(!l.moisDus.length){
+      html += '<span class="badge b-green">&#x2714; A jour</span>';
+    } else {
+      l.moisDus.forEach(function(d){
+        var dt = new Date(d);
+        var enRetard = d<maintenant;
+        var resteMois = resteDuEcheance(c, d);
+        var estPartiel = resteMois < (parseFloat(c.montant)||0);
+        html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;'+(enRetard?'':'')+'">';
+        html += '<span class="xs" style="'+(enRetard?'color:#A32D2D;font-weight:700':'')+'">'+moisLabels[dt.getMonth()]+' '+dt.getFullYear()+(enRetard?' &#x26A0;':'')+'</span>';
+        if(estPartiel){
+          html += '<span class="xs muted">(reste '+resteMois.toLocaleString('fr-FR')+' FCFA sur '+(parseFloat(c.montant)||0).toLocaleString('fr-FR')+')</span>';
+        }
+        html += '<button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 8px" data-cfid="'+c.id+'" data-echeance="'+d+'" onclick="marquerChargeFixeEcheanceByEl(this)">Payer</button>';
+        html += '</div>';
+      });
+    }
+    html += '</td>';
+    html += '<td style="text-align:right;vertical-align:top;padding-top:10px;font-weight:700;font-family:monospace;color:'+(l.totalCumule>0?'#A32D2D':'#3B6D11')+'">'+(l.totalCumule?l.totalCumule.toLocaleString('fr-FR')+' FCFA':'—')+'</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+  return html;
+}
+
+// Collecte CHAQUE versement individuel de charges fixes (pas un resume
+// par charge) — un loyer paye en 3 fois distinctes affiche bien 3 lignes.
+function collecterHistoriquePaiementsChargesFixes(){
+  var historique = [];
+  CHARGES_FIXES.forEach(function(c){
+    if(!c.echeancesPayees || !c.echeancesPayees.length) return;
+    c.echeancesPayees.forEach(function(entry, idx){
+      // Ancien format (timestamp brut = paiement complet implicite) ou
+      // nouveau format (objet {dateEcheance, datePaiement, montant},
+      // permettant un versement partiel).
+      var estAncienFormat = typeof entry==='number';
+      var dateEcheance = estAncienFormat ? entry : entry.dateEcheance;
+      var datePaiement = estAncienFormat ? entry : (entry.datePaiement||entry.dateEcheance);
+      var montant = estAncienFormat ? (parseFloat(c.montant)||0) : (parseFloat(entry.montant)||0);
+      historique.push({
+        chargeId: c.id, nom: c.nom, montant: montant,
+        dateEcheance: dateEcheance, datePaiement: datePaiement, paiementIndex: idx
+      });
+    });
+  });
+  historique.sort(function(a,b){return b.datePaiement-a.datePaiement;});
+  return historique;
+}
+
+// Annule un versement precis (par index) — corrige une erreur de saisie
+// sans affecter les autres versements de la meme charge (y compris un
+// versement partiel parmi plusieurs sur le meme mois).
+function annulerPaiementChargeFixeByEl(btn){
+  var id = btn.getAttribute('data-cfid');
+  var idx = parseInt(btn.getAttribute('data-paiement-idx'),10);
+  var c = CHARGES_FIXES.find(function(x){return x.id===id;});
+  if(!c || !c.echeancesPayees || c.echeancesPayees[idx]===undefined) return;
+  var entry = c.echeancesPayees[idx];
+  var estAncienFormat = typeof entry==='number';
+  var dateEcheance = estAncienFormat ? entry : entry.dateEcheance;
+  var montant = estAncienFormat ? (parseFloat(c.montant)||0) : (parseFloat(entry.montant)||0);
+  if(!confirm('Annuler ce versement de '+montant.toLocaleString('fr-FR')+' FCFA sur "'+c.nom+'" ('+new Date(dateEcheance).toLocaleDateString('fr-FR',{month:'long',year:'numeric'})+') ? Le solde restant du sera recalcule.')) return;
+  c.echeancesPayees.splice(idx,1);
+  saveChargesFixes();
+  renderPage();
+}
+
+function pageChargesFixesHistorique(){
+  var historiqueComplet = collecterHistoriquePaiementsChargesFixes();
+
+  var today = new Date();
+  var borneDebut = 0, borneFin = null;
+  if(chargesFixesHistoriquePeriode==='mois') borneDebut = new Date(today.getFullYear(), today.getMonth(), 1).getTime();
+  else if(chargesFixesHistoriquePeriode==='trimestre'){ var q=Math.floor(today.getMonth()/3)*3; borneDebut=new Date(today.getFullYear(),q,1).getTime(); }
+  else if(chargesFixesHistoriquePeriode==='annee') borneDebut = new Date(today.getFullYear(), 0, 1).getTime();
+  else if(chargesFixesHistoriquePeriode==='custom' && chargesFixesHistoriqueDebut){
+    borneDebut = new Date(chargesFixesHistoriqueDebut).setHours(0,0,0,0);
+    if(chargesFixesHistoriqueFin) borneFin = new Date(chargesFixesHistoriqueFin).setHours(23,59,59,999);
+  }
+  var historique = historiqueComplet.filter(function(h){
+    if(borneDebut>0 && h.datePaiement<borneDebut) return false;
+    if(borneFin && h.datePaiement>borneFin) return false;
+    return true;
+  });
+  _chargesFixesHistoriquePeriodeFiltree = historique;
+
+  var totalPaye = historique.reduce(function(s,h){return s+h.montant;},0);
+
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+  html += '<h2 style="font-size:16px;font-weight:700;margin:0">Historique des paiements — Charges fixes</h2>';
+  html += '<button class="btn btn-sm" onclick="chargesFixesVue=\'liste\';renderPage()">&#x2190; Retour aux charges fixes</button>';
+  html += '</div>';
+
+  html += '<div class="card" style="padding:10px 14px;margin-bottom:12px">';
+  html += '<input class="inp" id="chargesFixesHistoriqueRecherche" placeholder="Rechercher une charge (ex: loyer, salaires...)..." oninput="rechercherChargesFixesHistorique(this.value)" autocomplete="off">';
+  html += '</div>';
+
+  html += '<div class="flex gap6" style="margin-bottom:16px;flex-wrap:wrap">';
+  ['mois','trimestre','annee','tous','custom'].forEach(function(p){
+    var lbl = {mois:'Ce mois', trimestre:'Ce trimestre', annee:'Cette annee', tous:'Tout', custom:'Personnalise'}[p];
+    html += '<button class="btn btn-sm'+(chargesFixesHistoriquePeriode===p?' btn-primary':'')+'" data-cfhp="'+p+'" onclick="setChargesFixesHistoriquePeriodeByEl(this)">'+lbl+'</button>';
+  });
+  if(chargesFixesHistoriquePeriode==='custom'){
+    html += '<input type="date" class="inp" style="width:auto" value="'+chargesFixesHistoriqueDebut+'" onchange="chargesFixesHistoriqueDebut=this.value;renderPage()">';
+    html += '<span class="xs muted">&rarr;</span>';
+    html += '<input type="date" class="inp" style="width:auto" value="'+chargesFixesHistoriqueFin+'" onchange="chargesFixesHistoriqueFin=this.value;renderPage()">';
+  }
+  html += '</div>';
+
+  html += '<div class="kgrid k2" style="margin-bottom:16px">';
+  html += kpi('Paiements enregistres', historique.length, '');
+  html += kpi('Total paye (periode)', totalPaye?totalPaye.toLocaleString('fr-FR')+' FCFA':'—', 'green');
+  html += '</div>';
+
+  html += '<div id="chargesFixesHistoriqueTableWrap">';
+  html += htmlTableauChargesFixesHistorique(historique);
+  html += '</div>';
+  return html;
+}
+
+function htmlTableauChargesFixesHistorique(historique){
+  if(!historique.length){
+    return '<div class="card"><div class="empty">Aucun paiement ne correspond a ces criteres.</div></div>';
+  }
+  var moisLabels = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
+  var html = '<div class="card"><div class="tw"><table><thead><tr><th>Date de paiement</th><th>Charge</th><th>Mois regle</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
+  historique.forEach(function(h){
+    var dtPaiement = new Date(h.datePaiement);
+    var dtEcheance = new Date(h.dateEcheance);
+    html += '<tr>';
+    html += '<td class="xs">'+dtPaiement.toLocaleDateString('fr-FR')+'</td>';
+    html += '<td><strong>'+h.nom+'</strong></td>';
+    html += '<td class="xs">'+moisLabels[dtEcheance.getMonth()]+' '+dtEcheance.getFullYear()+'</td>';
+    html += '<td style="text-align:right;font-weight:700;font-family:monospace">'+h.montant.toLocaleString('fr-FR')+' FCFA</td>';
+    html += '<td><button class="btn btn-sm" data-cfid="'+h.chargeId+'" data-paiement-idx="'+h.paiementIndex+'" onclick="annulerPaiementChargeFixeByEl(this)" style="color:#A32D2D;border-color:#E0A0A0" title="Annuler ce versement">&#x21BA; Annuler</button></td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+  return html;
+}
+
+function rechercherChargesFixesHistorique(texte){
+  var wrap = document.getElementById('chargesFixesHistoriqueTableWrap');
+  if(!wrap) return;
+  var q = texte.trim().toLowerCase();
+  var resultats = q.length<2 ? _chargesFixesHistoriquePeriodeFiltree : _chargesFixesHistoriquePeriodeFiltree.filter(function(h){
+    return h.nom.toLowerCase().indexOf(q)>=0;
+  });
+  wrap.innerHTML = htmlTableauChargesFixesHistorique(resultats);
+}
+
+function setChargesFixesHistoriquePeriodeByEl(el){
+  chargesFixesHistoriquePeriode = el.getAttribute('data-cfhp');
+  renderPage();
+}
+
 function pageChargesFixes(){
+  if(chargesFixesVue==='paiement') return pageChargesFixesPaiement();
+  if(chargesFixesVue==='historique') return pageChargesFixesHistorique();
+
   var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Charges fixes</h2>';
-  html += '<button class="btn btn-primary btn-sm" onclick="openChargeFixeForm(null)">+ Ajouter une charge</button>';
+  html += '<div class="flex gap6"><button class="btn btn-sm" onclick="chargesFixesVue=\'historique\';renderPage()">&#x1F4C3; Historique des paiements</button><button class="btn btn-sm" onclick="chargesFixesVue=\'paiement\';renderPage()">&#x1F4B3; Paiement des charges</button><button class="btn btn-primary btn-sm" onclick="openChargeFixeForm(null)">+ Ajouter une charge</button></div>';
   html += '</div>';
 
   var actives = CHARGES_FIXES.filter(function(c){return c.actif;});
@@ -10337,6 +11073,9 @@ function openChargeFixeForm(id){
   document.getElementById('chargeFixePeriodicite').value = c ? c.periodicite : 'mensuel';
   document.getElementById('chargeFixeJour').value = c ? (c.jourEcheance||5) : 5;
   document.getElementById('chargeFixeMois').value = c ? (c.moisEcheance||(new Date().getMonth()+1)) : (new Date().getMonth()+1);
+  var debutParDefaut = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  document.getElementById('chargeFixeDateDebut').value = c && c.dateDebut ? new Date(c.dateDebut).toISOString().slice(0,10) : debutParDefaut.toISOString().slice(0,10);
+  document.getElementById('chargeFixeDateFin').value = c && c.dateFin ? new Date(c.dateFin).toISOString().slice(0,10) : '';
   onChangePeriodiciteChargeFixe();
   document.getElementById('modalChargeFixe').style.display = 'flex';
 }
@@ -10349,11 +11088,17 @@ function submitChargeFixeForm(){
   var jourEcheance = parseInt(document.getElementById('chargeFixeJour').value,10)||1;
   if(jourEcheance<1) jourEcheance=1; if(jourEcheance>31) jourEcheance=31;
   var moisEcheance = parseInt(document.getElementById('chargeFixeMois').value,10)||1;
+  var dateDebutStr = document.getElementById('chargeFixeDateDebut').value;
+  var dateFinStr = document.getElementById('chargeFixeDateFin').value;
+  if(!dateDebutStr){ alert('La date de debut est obligatoire.'); return; }
+  var dateDebut = new Date(dateDebutStr).getTime();
+  var dateFin = dateFinStr ? new Date(dateFinStr).getTime() : null;
+  if(dateFin && dateFin<dateDebut){ alert('La date de fin doit etre posterieure a la date de debut.'); return; }
   if(chargeFixeEditId){
     var c = CHARGES_FIXES.find(function(x){return x.id===chargeFixeEditId;});
-    if(c){ c.nom=nom; c.montant=montant; c.periodicite=periodicite; c.jourEcheance=jourEcheance; c.moisEcheance=moisEcheance; }
+    if(c){ c.nom=nom; c.montant=montant; c.periodicite=periodicite; c.jourEcheance=jourEcheance; c.moisEcheance=moisEcheance; c.dateDebut=dateDebut; c.dateFin=dateFin; }
   } else {
-    CHARGES_FIXES.push({id:'cf'+Date.now(), nom:nom, montant:montant, periodicite:periodicite, jourEcheance:jourEcheance, moisEcheance:moisEcheance, actif:true});
+    CHARGES_FIXES.push({id:'cf'+Date.now(), nom:nom, montant:montant, periodicite:periodicite, jourEcheance:jourEcheance, moisEcheance:moisEcheance, actif:true, dateDebut:dateDebut, dateFin:dateFin, echeancesPayees:[]});
   }
   saveChargesFixes(); closeChargeFixeForm(); renderPage();
 }
@@ -10449,17 +11194,42 @@ function genererEcheancesEngagement(e){
   return echeances;
 }
 
+// Chaque entree de echeancesPayees peut etre soit un ANCIEN format
+// (simple timestamp = paiement complet implicite, retro-compatible avec
+// les Engagements bancaires deja en production), soit un NOUVEL objet
+// {dateEcheance, datePaiement, montant} permettant un paiement PARTIEL
+// sur une echeance precise (utilise notamment par les Charges fixes).
+function montantPayePourEcheance(e, dateEcheance){
+  var total = 0;
+  (e.echeancesPayees||[]).forEach(function(entry){
+    if(typeof entry==='number'){
+      if(entry===dateEcheance) total += parseFloat(e.montant)||0;
+    } else if(entry && entry.dateEcheance===dateEcheance){
+      total += parseFloat(entry.montant)||0;
+    }
+  });
+  return total;
+}
+function resteDuEcheance(e, dateEcheance){
+  return Math.max(0, (parseFloat(e.montant)||0) - montantPayePourEcheance(e, dateEcheance));
+}
 function estEcheancePayee(e, dateEcheance){
-  return (e.echeancesPayees||[]).indexOf(dateEcheance)>=0;
+  return resteDuEcheance(e, dateEcheance)<=0;
 }
 function echeancesImpayees(e){
   return genererEcheancesEngagement(e).filter(function(d){ return !estEcheancePayee(e,d); });
 }
 function montantEnRetard(e, maintenant){
-  return echeancesImpayees(e).filter(function(d){return d<maintenant;}).length * (parseFloat(e.montant)||0);
+  return echeancesImpayees(e).filter(function(d){return d<maintenant;})
+    .reduce(function(s,d){return s+resteDuEcheance(e,d);},0);
 }
 function montantRestantDu(e){
-  return echeancesImpayees(e).length * (parseFloat(e.montant)||0);
+  return echeancesImpayees(e).reduce(function(s,d){return s+resteDuEcheance(e,d);},0);
+}
+// Enregistre un versement (partiel ou total) sur une echeance precise.
+function enregistrerPaiementEcheance(e, dateEcheance, montantVerse){
+  if(!e.echeancesPayees) e.echeancesPayees = [];
+  e.echeancesPayees.push({dateEcheance:dateEcheance, datePaiement:Date.now(), montant:montantVerse});
 }
 
 // Marque l'echeance impayee la PLUS ANCIENNE comme payee (comme le reste
@@ -21421,12 +22191,12 @@ function importData(input){
     }
     localStorage.setItem('gos_init10','1');
 
-    // Structures reellement synchronisees avec Firebase (chemin identique
-    // a la cle localStorage) — BANQUES, le catalogue de pieces et la
-    // liste d'exclusion de comptes restent volontairement locaux
-    // uniquement, ils sont donc exclus de cette liste.
+    // Structures synchronisees avec Firebase (chemin identique a la cle
+    // localStorage) — le catalogue de pieces et la liste d'exclusion de
+    // comptes restent volontairement locaux uniquement, ils sont donc
+    // exclus de cette liste.
     var CLES_SYNC_FIREBASE = [
-      'gos_personnel', 'gos_fournisseurs', 'gos_forfait_factures', 'gos_forfaits_clients',
+      'gos_personnel', 'gos_fournisseurs', 'gos_banques', 'gos_forfait_factures', 'gos_forfaits_clients',
       'gos_charges_fixes', 'gos_engagements_bancaires', 'gos_caisse_journees',
       'gos_caisse_mouvements', 'gos_dettes_manuelles', 'gos_employes_presence',
       'gos_presences', 'gos_descripteurs_faciaux', 'gos_client_delais_paiement',
@@ -21436,22 +22206,26 @@ function importData(input){
     if(fbDb && fbConnected){
       var tsImp=Date.now(); lastLocalTs=tsImp;
       var vehiculesActuels = JSON.parse(localStorage.getItem('gos_v10')||'[]');
-      // IMPORTANT : sans pousser TOUTES les structures importees vers
-      // Firebase (pas seulement les vehicules), la synchronisation
-      // automatique qui se declenche juste apres le rechargement de la
-      // page recupererait l'ANCIENNE version cloud de chacune d'elles et
-      // ecraserait immediatement ce qui vient d'etre importe localement —
-      // c'est exactement ce qui faisait disparaitre la Caisse (et
-      // potentiellement d'autres donnees) apres un import.
-      CLES_SYNC_FIREBASE.forEach(function(cle){
+      // IMPORTANT : le rechargement de la page doit attendre que TOUTES
+      // les poussees Firebase soient reellement terminees (Promise.all),
+      // pas seulement celle des vehicules — sinon la synchronisation
+      // automatique qui se declenche juste apres le rechargement peut
+      // recuperer l'ANCIENNE version cloud d'une structure dont la
+      // poussee n'avait pas encore eu le temps d'aboutir, et l'ecraser
+      // aussitot. C'est exactement ce qui a fait "disparaitre" les
+      // banques (et pourrait affecter d'autres structures) apres un
+      // import, meme apres avoir corrige la poussee elle-meme.
+      var toutesLesPoussees = CLES_SYNC_FIREBASE.map(function(cle){
         var valeurLocale = localStorage.getItem(cle);
-        if(valeurLocale!==null){
-          fbDb.ref(cle).set(valeurLocale).catch(function(err){
-            console.error('Import: echec de synchro Firebase pour '+cle, err);
-          });
-        }
+        if(valeurLocale===null) return Promise.resolve();
+        return fbDb.ref(cle).set(valeurLocale).catch(function(err){
+          console.error('Import: echec de synchro Firebase pour '+cle, err);
+        });
       });
-      fbDb.ref('gos_data').set({vehicles:JSON.stringify(vehiculesActuels),ts:tsImp,deviceId:deviceId,updatedBy:'import'}).then(function(){
+      toutesLesPoussees.push(
+        fbDb.ref('gos_data').set({vehicles:JSON.stringify(vehiculesActuels),ts:tsImp,deviceId:deviceId,updatedBy:'import'})
+      );
+      Promise.all(toutesLesPoussees).then(function(){
         alert(nbVehicules+' vehicule(s) importe(s) avec succes. Rechargement...'); location.reload();
       }).catch(function(){
         alert(nbVehicules+' vehicule(s) importes (local). Rechargement...'); location.reload();
@@ -23272,18 +24046,21 @@ var caisseAnalysePeriode = 'mois';
 var caisseAnalyseDebut = '';
 var caisseAnalyseFin = '';
 
-// ── Recherche contextuelle dans les mouvements de Caisse (Analyse) ──────
+// Recherche contextuelle dans les mouvements de Caisse (Analyse) ──────
 // Permet de retrouver tous les mouvements dont le libelle (motif) ou la
 // categorie contient le texte saisi, avec le detail (date, libelle,
 // montant) et le total correspondant — utile pour analyser finement les
-// depenses liees a un mot-cle precis (ex: un nom de personne).
+// depenses liees a un mot-cle precis (ex: un nom de personne). Cherche
+// UNIQUEMENT dans les mouvements de la PERIODE actuellement selectionnee
+// (mois/trimestre/annee/personnalise), pas dans tout l'historique.
+var _caisseAnalyseMvtsPeriode = [];
 function rechercherMouvementsCaisse(texte){
   var zone = document.getElementById('caisseRechercheResultats');
   if(!zone) return;
   var q = texte.trim().toLowerCase();
   if(q.length<2){ zone.innerHTML=''; return; }
 
-  var resultats = CAISSE_MOUVEMENTS.filter(function(m){
+  var resultats = _caisseAnalyseMvtsPeriode.filter(function(m){
     return (m.motif||'').toLowerCase().indexOf(q)>=0 || (m.categorie||'').toLowerCase().indexOf(q)>=0;
   }).sort(function(a,b){return b.date-a.date;});
 
@@ -23330,6 +24107,11 @@ function pageCaisseAnalyse(){
     if(borneFin && m.date>borneFin) return false;
     return true;
   });
+
+  // Rendue disponible pour la barre de recherche (declenchee par oninput,
+  // sans re-render complet de la page) — deja filtree par la periode
+  // actuellement selectionnee.
+  _caisseAnalyseMvtsPeriode = mvts;
 
   var html = '<div class="card" style="padding:10px 14px;margin-bottom:8px">';
   html += '<input class="inp" id="caisseRecherche" placeholder="Rechercher un libelle ou une categorie (ex: un nom, un motif...)..." oninput="rechercherMouvementsCaisse(this.value)" autocomplete="off">';
@@ -24372,7 +25154,13 @@ function tryInitFirebase(){
     // Sync personnel et comptes depuis Firebase après connexion
     setTimeout(function(){
       syncStockFromFirebase();
-      syncChargesFixesFromFirebase();
+      syncBanquesFromFirebase(function(){
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      });
+      syncChargesFixesFromFirebase(function(){
+        migrerDateDebutChargesFixes();
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      });
       syncEngagementsBancairesFromFirebase();
       syncForfaitFacturesFromFirebase(function(){
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
@@ -24664,6 +25452,7 @@ window.onload=function(){
 
   initData();vehicles=loadV();
   migrerFactureDeposeeLe(); // migration retroactive (voir commentaire de la fonction)
+  migrerDateDebutChargesFixes(); // idem, pour le suivi de paiement des charges fixes
   // Firebase sera initialisé via onFirebaseDatabaseLoaded()
   // Vérifier s'il y a une session active (persiste après actualisation)
   var session = null;
