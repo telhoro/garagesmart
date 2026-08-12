@@ -1536,7 +1536,29 @@ var SAMPLE_BANQUES = [
   {id:'b2', nom:'SGBCI', solde:0, actif:true},
   {id:'b3', nom:'Ecobank', solde:0, actif:true}
 ];
-function saveBanques(){ localStorage.setItem('gos_banques', JSON.stringify(BANQUES)); }
+function saveBanques(){
+  localStorage.setItem('gos_banques', JSON.stringify(BANQUES));
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_banques').set(JSON.stringify(BANQUES)).catch(function(e){
+      console.error('Firebase banques save error:', e);
+    });
+  }
+}
+function syncBanquesFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_banques').once('value').then(function(snap){
+    var val = snap.val();
+    if(val){
+      try{ BANQUES = JSON.parse(val)||[]; localStorage.setItem('gos_banques', val); }catch(e){}
+    } else if(BANQUES.length && fbConnected){
+      // Aucune donnee cote cloud : ce compte n'a encore jamais synchronise
+      // ses banques (ex: tout premier appareil connecte) — on pousse les
+      // donnees locales existantes pour amorcer la synchronisation.
+      fbDb.ref('gos_banques').set(JSON.stringify(BANQUES));
+    }
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
+}
 function initBanques(){
   if(!localStorage.getItem('gos_banques_init')){
     BANQUES = SAMPLE_BANQUES.map(function(b){return Object.assign({},b);});
@@ -22167,7 +22189,7 @@ function importData(input){
     // liste d'exclusion de comptes restent volontairement locaux
     // uniquement, ils sont donc exclus de cette liste.
     var CLES_SYNC_FIREBASE = [
-      'gos_personnel', 'gos_fournisseurs', 'gos_forfait_factures', 'gos_forfaits_clients',
+      'gos_personnel', 'gos_fournisseurs', 'gos_banques', 'gos_forfait_factures', 'gos_forfaits_clients',
       'gos_charges_fixes', 'gos_engagements_bancaires', 'gos_caisse_journees',
       'gos_caisse_mouvements', 'gos_dettes_manuelles', 'gos_employes_presence',
       'gos_presences', 'gos_descripteurs_faciaux', 'gos_client_delais_paiement',
@@ -25121,6 +25143,9 @@ function tryInitFirebase(){
     // Sync personnel et comptes depuis Firebase après connexion
     setTimeout(function(){
       syncStockFromFirebase();
+      syncBanquesFromFirebase(function(){
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      });
       syncChargesFixesFromFirebase(function(){
         migrerDateDebutChargesFixes();
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
