@@ -9193,21 +9193,61 @@ function delaiEcheanceFourn(f){
   return (typeof f.delaiCreditJours==='number') ? f.delaiCreditJours : 30;
 }
 
+// ── Systeme de paiements PARTIELS multiples pour les dettes fournisseurs ──
+// Chaque dette (auto = ligne de chiffrage en credit, ou manuelle) garde
+// un tableau paiementsFourn:[{date, montant}] — un versement partiel
+// n'efface jamais les precedents, ils restent tous visibles dans
+// l'historique. Une dette est consideree soldee quand la somme de ses
+// versements couvre son montant total.
+function montantPayeDette(item){
+  return (item.paiementsFourn||[]).reduce(function(s,p){return s+(parseFloat(p.montant)||0);},0);
+}
+function resteDuDette(item){
+  var montantTotal = (parseFloat(item.prixAchat)||0)*(parseInt(item.qte)||1);
+  return Math.max(0, montantTotal - montantPayeDette(item));
+}
+
+// Alloue un montant paye (unique ou global) sur une liste de dettes
+// triees du plus ancien au plus recent (FIFO) — chaque dette recoit ce
+// qu'il lui manque, jusqu'a epuisement du montant. Fonctionne aussi bien
+// pour UNE seule dette que pour un paiement groupe sur plusieurs.
+function allouerPaiementFournisseur(itemsTries, montantAPayer){
+  var allocations = [];
+  var restant = montantAPayer;
+  itemsTries.forEach(function(item){
+    if(restant<=0) return;
+    var du = resteDuDette(item);
+    if(du<=0) return;
+    var aAllouer = Math.min(restant, du);
+    allocations.push({item:item, montant:aAllouer});
+    restant -= aAllouer;
+  });
+  return allocations;
+}
+function appliquerAllocationsPaiementFournisseur(allocations){
+  var maintenant = Date.now();
+  allocations.forEach(function(alloc){
+    if(!alloc.item.paiementsFourn) alloc.item.paiementsFourn = [];
+    alloc.item.paiementsFourn.push({date:maintenant, montant:alloc.montant});
+  });
+}
+
 function collecterDettesFournisseurs(){
-  // Regroupe par fournisseur toutes les lignes de chiffrage en credit,
-  // non marquees fournPaye, avec le vehicule/client d'origine.
+  // Regroupe par fournisseur toutes les lignes de chiffrage en credit dont
+  // le RESTE DU (montant total - versements deja effectues) est encore
+  // positif — une dette partiellement payee reste ici avec son solde
+  // restant, pas son montant d'origine.
   var parFourn = {};
   vehicles.forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     v.chiffrage.lignes.forEach(function(cl){
       if(!(cl.piece||'').trim()) return;
       if(cl.paiement!=='credit') return; // seul le credit fournisseur cree une dette
-      if(cl.fournPaye) return; // deja regle
       if(!cl.fournisseurId) return;
+      var reste = resteDuDette(cl);
+      if(reste<=0) return; // deja soldee
       var f = FOURNISSEURS.find(function(x){return x.id===cl.fournisseurId;});
       if(!f) return;
-      var montant = (parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);
-      if(!montant) return;
       var dateAchat = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
       var delai = delaiEcheanceFourn(f);
       var dateEcheance = dateAchat ? dateAchat + delai*86400000 : 0;
@@ -9217,13 +9257,14 @@ function collecterDettesFournisseurs(){
         parFourn[f.id] = {fournisseur:f, lignes:[], total:0, delai:delai, echeanceMin:dateEcheance};
       }
       var ligneId = cl.devisId || cl.libreId || cl.id || null;
+      var montantPaye = montantPayeDette(cl);
       parFourn[f.id].lignes.push({
         vehId:v.id, immat:v.immat||'—', marque:v.marque, modele:v.modele,
-        client:v.client, piece:cl.piece, montant:montant,
-        dateAchat:dateAchat, dateEcheance:dateEcheance,
+        client:v.client, piece:cl.piece, montant:reste, montantOriginal:(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1),
+        montantPaye:montantPaye, dateAchat:dateAchat, dateEcheance:dateEcheance,
         joursRestants:joursRestants, statut:statut, ligneId:ligneId
       });
-      parFourn[f.id].total += montant;
+      parFourn[f.id].total += reste;
       if(dateEcheance && (!parFourn[f.id].echeanceMin || dateEcheance<parFourn[f.id].echeanceMin)){
         parFourn[f.id].echeanceMin = dateEcheance;
       }
@@ -9236,25 +9277,26 @@ function collecterDettesFournisseurs(){
   // modifier/supprimer depuis l'interface, contrairement aux lignes
   // issues du chiffrage vehicule.
   DETTES_MANUELLES.forEach(function(dm){
-    if(dm.paye) return;
+    var reste = resteDuDette(dm);
+    if(reste<=0) return; // deja soldee
     var f = FOURNISSEURS.find(function(x){return x.id===dm.fournisseurId;});
     if(!f) return;
-    var montant = (parseFloat(dm.prixAchat)||0)*(parseInt(dm.qte)||1);
-    if(!montant) return;
     var dateEcheance = dm.dateEcheance || 0;
     var joursRestants = dateEcheance ? Math.round((dateEcheance-Date.now())/86400000) : 0;
     var statut = joursRestants<0 ? 'retard' : (joursRestants<=7 ? 'a_echoir' : 'planifie');
     if(!parFourn[f.id]){
       parFourn[f.id] = {fournisseur:f, lignes:[], total:0, delai:delaiEcheanceFourn(f), echeanceMin:dateEcheance};
     }
+    var montantPaye = montantPayeDette(dm);
     parFourn[f.id].lignes.push({
       vehId:null, immat:'—', marque:'', modele:'',
-      client:'', piece:dm.piece, montant:montant, qte:dm.qte,
+      client:'', piece:dm.piece, montant:reste, montantOriginal:(parseFloat(dm.prixAchat)||0)*(parseInt(dm.qte)||1),
+      montantPaye:montantPaye, qte:dm.qte,
       dateAchat:dm.dateAchat, dateEcheance:dateEcheance,
       joursRestants:joursRestants, statut:statut, ligneId:null,
       manuel:true, detteId:dm.id
     });
-    parFourn[f.id].total += montant;
+    parFourn[f.id].total += reste;
     if(dateEcheance && (!parFourn[f.id].echeanceMin || dateEcheance<parFourn[f.id].echeanceMin)){
       parFourn[f.id].echeanceMin = dateEcheance;
     }
@@ -9655,9 +9697,9 @@ function htmlTableauDettesHistorique(historique){
     html += '<td><div class="flex gap6">';
     if(h.type==='manuel'){
       html += '<button class="btn btn-sm" data-dette-id="'+h.detteId+'" onclick="ouvrirModifDetteManuelleByEl(this)" title="Modifier cette dette">&#x270F;</button>';
-      html += '<button class="btn btn-sm" data-dette-id="'+h.detteId+'" onclick="annulerPaiementDetteManuelleByEl(this)" style="color:#A32D2D;border-color:#E0A0A0" title="Annuler ce paiement">&#x21BA; Annuler</button>';
+      html += '<button class="btn btn-sm" data-dette-id="'+h.detteId+'" data-paiement-idx="'+h.paiementIndex+'" onclick="annulerPaiementDetteManuelleByEl(this)" style="color:#A32D2D;border-color:#E0A0A0" title="Annuler ce versement">&#x21BA; Annuler</button>';
     } else {
-      html += '<button class="btn btn-sm" data-vid="'+h.vehId+'" data-lid="'+(h.ligneId||'')+'" onclick="annulerPaiementLigneFournByEl(this)" style="color:#A32D2D;border-color:#E0A0A0" title="Annuler ce paiement">&#x21BA; Annuler</button>';
+      html += '<button class="btn btn-sm" data-vid="'+h.vehId+'" data-lid="'+(h.ligneId||'')+'" data-paiement-idx="'+h.paiementIndex+'" onclick="annulerPaiementLigneFournByEl(this)" style="color:#A32D2D;border-color:#E0A0A0" title="Annuler ce versement">&#x21BA; Annuler</button>';
     }
     html += '</div></td></tr>';
   });
@@ -9810,6 +9852,21 @@ function pageDettesFournisseurs(){
   html += '<div class="mfoot"><button class="btn" onclick="document.getElementById(\'modalAjoutDetteManuelle\').style.display=\'none\'">Annuler</button><button class="btn btn-primary" onclick="confirmerAjoutDetteManuelle()">Enregistrer</button></div>';
   html += '</div></div>';
 
+  // Modale de paiement (unique ou groupe) — prerempli avec le reste du,
+  // permet un reglement PARTIEL en modifiant le montant. Chaque versement
+  // est enregistre individuellement (visible ensuite dans l'historique).
+  html += '<div class="overlay" id="modalPaiementFournisseur" style="display:none" onclick="if(event.target===this)fermerModalPaiementFournisseur()">';
+  html += '<div class="modal" style="max-width:400px">';
+  html += '<div class="mhead"><h2 id="pfModalTitre">Paiement</h2><button class="btn btn-sm" onclick="fermerModalPaiementFournisseur()">X</button></div>';
+  html += '<div class="mbody">';
+  html += '<input type="hidden" id="pfModalMode"><input type="hidden" id="pfModalVid"><input type="hidden" id="pfModalLid"><input type="hidden" id="pfModalFid"><input type="hidden" id="pfModalDetteId">';
+  html += '<div class="xs muted" style="margin-bottom:10px">Reste du : <strong id="pfModalResteDu" style="color:#A32D2D"></strong></div>';
+  html += '<div class="fr"><label class="fl">Montant a regler (FCFA) <span style="color:red">*</span></label><input class="inp" type="number" min="1" id="pfModalMontant"></div>';
+  html += '<div class="xs muted" style="margin-top:6px">Un montant inferieur au reste du enregistre un paiement PARTIEL — la dette reste active pour le solde restant, et ce versement figurera dans l\'historique.</div>';
+  html += '</div>';
+  html += '<div class="mfoot"><button class="btn" onclick="fermerModalPaiementFournisseur()">Annuler</button><button class="btn btn-primary" onclick="confirmerPaiementFournisseur()">Enregistrer le paiement</button></div>';
+  html += '</div></div>';
+
   return html;
 }
 
@@ -9822,45 +9879,122 @@ function toggleDettesFournExpandByEl(el){
 }
 
 // Marque une ligne de chiffrage precise comme reglee au fournisseur.
+// Ouvre la modale de paiement pour UNE dette precise (vehicule) —
+// prerempli avec le RESTE DU (tient compte des versements deja
+// effectues), modifiable pour un reglement partiel supplementaire.
 function marquerLigneFournPayeeByEl(el){
   var vid = el.getAttribute('data-vid');
   var v = vehicles.find(function(x){return x.id===vid;});
   if(!v || !v.chiffrage || !v.chiffrage.lignes) return;
   var lid = el.getAttribute('data-lid');
   var cl = lid ? v.chiffrage.lignes.find(function(x){return (x.devisId||x.libreId||x.id)===lid;}) : null;
-  if(!cl){
-    // fallback : si pas d'id de ligne exploitable, on ne marque rien pour eviter une erreur silencieuse
-    return;
-  }
-  cl.fournPaye = true;
-  cl.fournPayeLe = Date.now();
-  saveV();
-  renderPage();
+  if(!cl) return;
+  var reste = resteDuDette(cl);
+  ouvrirModalPaiementFournisseur({
+    titre: 'Paiement — '+cl.piece,
+    resteDu: reste,
+    mode: 'ligne', vid: vid, lid: lid
+  });
 }
 
-// Marque toutes les lignes en credit non payees d'un fournisseur comme reglees.
+// Ouvre la modale de paiement GROUPE pour toutes les dettes en cours d'un
+// fournisseur — prerempli avec le total restant du (toutes ses dettes,
+// vehicule + manuelles confondues). Un paiement partiel eponge les plus
+// anciennes dettes en premier (FIFO).
 function marquerFournisseurPayeByEl(el){
   var fid = el.getAttribute('data-fid');
+  var f = FOURNISSEURS.find(function(x){return x.id===fid;});
+  if(!f) return;
+  var totalDu = 0;
   vehicles.forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     v.chiffrage.lignes.forEach(function(cl){
-      if(cl.fournisseurId===fid && cl.paiement==='credit' && !cl.fournPaye){
-        cl.fournPaye = true;
-        cl.fournPayeLe = Date.now();
-      }
+      if(cl.fournisseurId===fid && cl.paiement==='credit') totalDu += resteDuDette(cl);
     });
   });
-  // Inclut aussi les dettes manuelles de ce fournisseur, pour que le
-  // paiement global couvre bien TOUTES ses dettes, pas seulement celles
-  // issues du chiffrage vehicule.
   DETTES_MANUELLES.forEach(function(dm){
-    if(dm.fournisseurId===fid && !dm.paye){
-      dm.paye = true;
-      dm.payeLe = Date.now();
-    }
+    if(dm.fournisseurId===fid) totalDu += resteDuDette(dm);
   });
-  saveDettesManuelles();
-  saveV();
+  ouvrirModalPaiementFournisseur({
+    titre: 'Paiement groupe — '+f.nom,
+    resteDu: totalDu,
+    mode: 'fournisseur', fid: fid
+  });
+}
+
+function ouvrirModalPaiementFournisseur(opts){
+  document.getElementById('pfModalTitre').textContent = opts.titre;
+  document.getElementById('pfModalMode').value = opts.mode;
+  document.getElementById('pfModalVid').value = opts.vid||'';
+  document.getElementById('pfModalLid').value = opts.lid||'';
+  document.getElementById('pfModalFid').value = opts.fid||'';
+  document.getElementById('pfModalDetteId').value = opts.detteId||'';
+  document.getElementById('pfModalResteDu').textContent = opts.resteDu.toLocaleString('fr-FR')+' FCFA';
+  document.getElementById('pfModalMontant').value = opts.resteDu;
+  document.getElementById('pfModalMontant').max = opts.resteDu;
+  document.getElementById('modalPaiementFournisseur').style.display = 'flex';
+}
+function fermerModalPaiementFournisseur(){
+  document.getElementById('modalPaiementFournisseur').style.display = 'none';
+}
+
+// Confirme le paiement saisi (partiel ou total) — resout TOUJOURS les
+// objets reels au moment de la confirmation (pas de reference figee),
+// alloue le montant via allouerPaiementFournisseur (FIFO si plusieurs
+// dettes concernees) et enregistre chaque versement individuellement.
+function confirmerPaiementFournisseur(){
+  var mode = document.getElementById('pfModalMode').value;
+  var montantSaisi = parseFloat(document.getElementById('pfModalMontant').value);
+  if(!montantSaisi || montantSaisi<=0){ alert('Indiquez un montant valide.'); return; }
+
+  if(mode==='ligne'){
+    var vid = document.getElementById('pfModalVid').value;
+    var lid = document.getElementById('pfModalLid').value;
+    var v = vehicles.find(function(x){return x.id===vid;});
+    var cl = v && v.chiffrage && v.chiffrage.lignes ? v.chiffrage.lignes.find(function(x){return (x.devisId||x.libreId||x.id)===lid;}) : null;
+    if(!cl){ alert('Dette introuvable.'); return; }
+    var reste = resteDuDette(cl);
+    if(montantSaisi>reste){ alert('Le montant saisi depasse le reste du ('+reste.toLocaleString('fr-FR')+' FCFA).'); return; }
+    appliquerAllocationsPaiementFournisseur(allouerPaiementFournisseur([cl], montantSaisi));
+    saveV();
+  } else if(mode==='detteManuelle'){
+    var detteId = document.getElementById('pfModalDetteId').value;
+    var dm = DETTES_MANUELLES.find(function(x){return x.id===detteId;});
+    if(!dm){ alert('Dette introuvable.'); return; }
+    var resteM = resteDuDette(dm);
+    if(montantSaisi>resteM){ alert('Le montant saisi depasse le reste du ('+resteM.toLocaleString('fr-FR')+' FCFA).'); return; }
+    appliquerAllocationsPaiementFournisseur(allouerPaiementFournisseur([dm], montantSaisi));
+    saveDettesManuelles();
+  } else if(mode==='fournisseur'){
+    var fid = document.getElementById('pfModalFid').value;
+    // Recolte FRAICHE de toutes les dettes non soldees de ce fournisseur,
+    // triees du plus ancien au plus recent (FIFO).
+    var items = [];
+    vehicles.forEach(function(v){
+      if(!v.chiffrage || !v.chiffrage.lignes) return;
+      v.chiffrage.lignes.forEach(function(cl){
+        if(cl.fournisseurId===fid && cl.paiement==='credit' && resteDuDette(cl)>0){
+          items.push({ref:cl, dateAchat: v.chiffrage.valideDirLe||v.chiffrage.soumisLe||v.entree||0, prixAchat:cl.prixAchat, qte:cl.qte, paiementsFourn:cl.paiementsFourn});
+        }
+      });
+    });
+    DETTES_MANUELLES.forEach(function(dm){
+      if(dm.fournisseurId===fid && resteDuDette(dm)>0){
+        items.push({ref:dm, dateAchat: dm.dateAchat||0, prixAchat:dm.prixAchat, qte:dm.qte, paiementsFourn:dm.paiementsFourn});
+      }
+    });
+    items.sort(function(a,b){return a.dateAchat-b.dateAchat;});
+    var totalDu = items.reduce(function(s,it){return s+resteDuDette(it.ref);},0);
+    if(montantSaisi>totalDu){ alert('Le montant saisi depasse le total du ('+totalDu.toLocaleString('fr-FR')+' FCFA).'); return; }
+    // allouerPaiementFournisseur lit resteDuDette(item) — on lui passe
+    // directement les objets REELS (it.ref), pas les wrappers.
+    var itemsReels = items.map(function(it){return it.ref;});
+    appliquerAllocationsPaiementFournisseur(allouerPaiementFournisseur(itemsReels, montantSaisi));
+    saveV();
+    saveDettesManuelles();
+  }
+
+  fermerModalPaiementFournisseur();
   renderPage();
 }
 
@@ -9931,11 +10065,12 @@ function confirmerAjoutDetteManuelle(){
 // automatique) en attente, pour pouvoir la re-marquer correctement.
 function annulerPaiementDetteManuelleByEl(btn){
   var id = btn.getAttribute('data-dette-id');
+  var idx = parseInt(btn.getAttribute('data-paiement-idx'),10);
   var dm = DETTES_MANUELLES.find(function(x){return x.id===id;});
-  if(!dm) return;
-  if(!confirm('Annuler le paiement de cette dette ("'+dm.piece+'") ? Elle redeviendra active dans les dettes en cours.')) return;
-  dm.paye = false;
-  dm.payeLe = null;
+  if(!dm || !dm.paiementsFourn || !dm.paiementsFourn[idx]) return;
+  var montantVerse = dm.paiementsFourn[idx].montant;
+  if(!confirm('Annuler ce versement de '+montantVerse.toLocaleString('fr-FR')+' FCFA sur "'+dm.piece+'" ? Le solde restant du sera recalcule.')) return;
+  dm.paiementsFourn.splice(idx,1);
   saveDettesManuelles();
   renderPage();
 }
@@ -9943,13 +10078,14 @@ function annulerPaiementDetteManuelleByEl(btn){
 function annulerPaiementLigneFournByEl(btn){
   var vid = btn.getAttribute('data-vid');
   var lid = btn.getAttribute('data-lid');
+  var idx = parseInt(btn.getAttribute('data-paiement-idx'),10);
   var v = vehicles.find(function(x){return x.id===vid;});
   if(!v || !v.chiffrage || !v.chiffrage.lignes) return;
   var cl = v.chiffrage.lignes.find(function(x){return (x.devisId||x.libreId||x.id)===lid;});
-  if(!cl) return;
-  if(!confirm('Annuler le paiement de cette piece ("'+cl.piece+'") ? Elle redeviendra active dans les dettes en cours.')) return;
-  cl.fournPaye = false;
-  cl.fournPayeLe = null;
+  if(!cl || !cl.paiementsFourn || !cl.paiementsFourn[idx]) return;
+  var montantVerse = cl.paiementsFourn[idx].montant;
+  if(!confirm('Annuler ce versement de '+montantVerse.toLocaleString('fr-FR')+' FCFA sur "'+cl.piece+'" ? Le solde restant du sera recalcule.')) return;
+  cl.paiementsFourn.splice(idx,1);
   saveV();
   renderPage();
 }
@@ -9965,25 +10101,31 @@ function collecterHistoriquePaiementsFournisseurs(){
     v.chiffrage.lignes.forEach(function(cl){
       if(!(cl.piece||'').trim()) return;
       if(cl.paiement!=='credit') return;
-      if(!cl.fournPaye) return;
       if(!cl.fournisseurId) return;
+      if(!cl.paiementsFourn || !cl.paiementsFourn.length) return;
       var f = FOURNISSEURS.find(function(x){return x.id===cl.fournisseurId;});
       if(!f) return;
-      var montant = (parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);
-      historique.push({
-        type:'auto', fournisseur:f.nom,
-        piece:cl.piece, montant:montant, datePaiement:cl.fournPayeLe||0,
-        vehId:v.id, ligneId: cl.devisId||cl.libreId||cl.id||null, immat:v.immat
+      // Une ligne par VERSEMENT individuel — un paiement effectue en 3
+      // fois produit bien 3 lignes distinctes dans l'historique.
+      cl.paiementsFourn.forEach(function(p, idx){
+        historique.push({
+          type:'auto', fournisseur:f.nom,
+          piece:cl.piece, montant:p.montant, datePaiement:p.date||0,
+          vehId:v.id, ligneId: cl.devisId||cl.libreId||cl.id||null, immat:v.immat,
+          paiementIndex: idx
+        });
       });
     });
   });
   DETTES_MANUELLES.forEach(function(dm){
-    if(!dm.paye) return;
+    if(!dm.paiementsFourn || !dm.paiementsFourn.length) return;
     var f = FOURNISSEURS.find(function(x){return x.id===dm.fournisseurId;});
-    historique.push({
-      type:'manuel', fournisseur: f?f.nom:'—',
-      piece:dm.piece, montant:(parseFloat(dm.prixAchat)||0)*(parseInt(dm.qte)||1),
-      datePaiement:dm.payeLe||0, detteId:dm.id
+    dm.paiementsFourn.forEach(function(p, idx){
+      historique.push({
+        type:'manuel', fournisseur: f?f.nom:'—',
+        piece:dm.piece, montant:p.montant, datePaiement:p.date||0,
+        detteId:dm.id, paiementIndex: idx
+      });
     });
   });
   historique.sort(function(a,b){return b.datePaiement-a.datePaiement;});
@@ -9994,10 +10136,11 @@ function marquerDetteManuelleByEl(btn){
   var id = btn.getAttribute('data-dette-id');
   var dm = DETTES_MANUELLES.find(function(x){return x.id===id;});
   if(!dm) return;
-  dm.paye = true;
-  dm.payeLe = Date.now();
-  saveDettesManuelles();
-  renderPage();
+  ouvrirModalPaiementFournisseur({
+    titre: 'Paiement — '+dm.piece,
+    resteDu: resteDuDette(dm),
+    mode: 'detteManuelle', detteId: id
+  });
 }
 
 function supprimerDetteManuelleByEl(btn){
