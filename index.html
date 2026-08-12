@@ -232,7 +232,7 @@ tr:hover td{background:#faf9f7}
       <div class="tab" id="tab_c" onclick="showTab('c')" style="display:none">Client</div>
       <div class="tab" id="tab_p" onclick="showTab('p')">Panne / Motif</div>
       <div class="tab" id="tab_i" onclick="showTab('i')">Inventaire</div>
-      <div class="tab" id="tab_s" onclick="showTab('s')">Sinistre</div>
+      <div class="tab" id="tab_s" onclick="showTab('s')" style="display:none">Sinistre</div>
       <div class="tab" id="tab_r" onclick="showTab('r')">Recuperation</div>
     </div>
     <div id="tp_v">
@@ -249,7 +249,7 @@ tr:hover td{background:#faf9f7}
           </select></div>
         <div class="fr"><label class="fl">&nbsp;</label>
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:8px 0;font-size:13px">
-            <input type="checkbox" id="f_dossierAssurance" style="width:18px;height:18px;cursor:pointer">
+            <input type="checkbox" id="f_dossierAssurance" style="width:18px;height:18px;cursor:pointer" onchange="toggleSectionSinistre()">
             <span>&#x1F6E1; Dossier assurance (sinistre)</span>
           </label></div>
         <div class="fr" id="div_entite"><label class="fl">Statut</label>
@@ -1424,6 +1424,40 @@ function estDossierAssurance(v){
   return v.dossierAssurance === true || v.typeClient === 'assurance';
 }
 
+// Le circuit assurance suit desormais EXACTEMENT le circuit devis — seule
+// difference : c'est l'EXPERT (pas le client final) qui valide le devis,
+// donc les libelles des boutons/statuts s'adaptent en consequence.
+function libelleEnvoyerDevis(v, formeEtat){
+  if(formeEtat) return estDossierAssurance(v) ? 'Devis envoye a l\'expert' : 'Devis envoye au client';
+  return estDossierAssurance(v) ? 'Envoyer le devis a l\'expert' : 'Envoyer devis au client';
+}
+function libelleAccordClient(v, avecRecu){
+  if(estDossierAssurance(v)) return avecRecu ? 'Accord expert recu' : 'Accord expert';
+  return avecRecu ? 'Accord client recu' : 'Accord client';
+}
+
+// ── Portail de depart du circuit assurance : dans le cas d'un sinistre,
+// c'est la venue de l'expert a l'atelier qui determine le top depart —
+// l'affectation d'une equipe/technicien reste bloquee tant que ce
+// passage n'a pas ete valide par la Reception.
+function affectationBloqueeParExpert(v){
+  return estDossierAssurance(v) && !v.expertPasse;
+}
+
+// ── Sequence de fin de travaux, dossier assurance uniquement : 3 etapes
+// STRICTEMENT ordonnees (Validation expert -> Rapport expert -> Bon de
+// sortie) avant de pouvoir passer a l'etape de livraison (lavage,
+// contact client, facturation...).
+function etapeSuivanteAutorisee(v, etape){
+  if(etape==='validationExpert') return true; // toujours la premiere
+  if(etape==='rapportExpert') return !!v.expertValidationTravaux;
+  if(etape==='bonSortie') return !!v.expertRapportRecu;
+  return false;
+}
+function sequenceFinTravauxComplete(v){
+  return !!(v.expertValidationTravaux && v.expertRapportRecu && v.bonSortieAssurance);
+}
+
 function getTransitions(v, role){
   if(role === 'direction') return ALL_STATUSES_ORDERED.filter(function(s){return s!==v.status;});
   var map = TRANSITIONS[role] || {};
@@ -1431,11 +1465,13 @@ function getTransitions(v, role){
 
   // devis_termine : comportement different selon typeClient
   if(st === 'devis_termine'){
-    if(v.typeClient === 'forfait' || estDossierAssurance(v)){
-      // Forfait/assurance : pas d accord client -> direct validation direction
+    if(v.typeClient === 'forfait'){
+      // Forfait UNIQUEMENT : pas d accord client -> direct validation direction
       if(role === 'achats') return ['attente_fin'];
     } else {
-      // Devis : la reception doit envoyer le devis au client
+      // Devis (y compris assurance, qui suit desormais le meme circuit,
+      // avec juste des libelles adaptes "expert" au lieu de "client") :
+      // la reception doit envoyer le devis
       if(role === 'reception') return ['devis_envoye'];
       if(role === 'achats') return ['devis_envoye']; // achats peut aussi declencher l envoi
     }
@@ -1459,6 +1495,14 @@ function getTransitions(v, role){
     // Securite : si un ancien dossier forfait est bloque sur la facturation, on le debloque
     if(st === 'facture_emettre' || st === 'facture_emise') return ['livre'];
     if(st === 'facture_deposee')    return ['dossier_cloture'];
+  }
+
+  // Dossier assurance : avant de passer a l'etape de livraison (lavage,
+  // contact client, facturation...), la sequence de fin de travaux cote
+  // expert doit etre entierement bouclee (validation expert -> rapport
+  // expert -> bon de sortie assurance), dans cet ordre strict.
+  if(st === 'vehicule_termine' && estDossierAssurance(v) && !sequenceFinTravauxComplete(v)){
+    return [];
   }
 
   return map[st] || [];
@@ -2689,6 +2733,10 @@ function sl(s){var x=STATUSES[s];return x?x.l:s;}
 function sc(s){var x=STATUSES[s];return x?x.c:'b-gray';}
 function sbadgeV(v){
   // Badge statut uniquement — le badge DC est géré par dcBadge(v)
+  // Deux statuts ont un libelle adapte pour un dossier assurance (c'est
+  // l'expert, pas le client final, qui valide le devis).
+  if(v.status==='devis_envoye') return '<span class="badge '+sc('devis_envoye')+'">'+libelleEnvoyerDevis(v,true)+'</span>';
+  if(v.status==='accord_client') return '<span class="badge '+sc('accord_client')+'">'+libelleAccordClient(v,true)+'</span>';
   return sbadge(v.status);
 }
 function sbadge(s){return '<span class="badge '+sc(s)+'">'+sl(s)+'</span>';}
@@ -2722,8 +2770,8 @@ function renderLigneDevisCompl(v){
     badgeColor = 'background:#EAF3DE;color:#3B6D11';
   } else if(s==='chiffre' && !sc && currentRole==='reception'){
     actionRequise = true;
-    actionLabel = 'Accord client requis';
-    actionBtn = '<button class="btn btn-sm" data-vid="'+v.id+'" data-action="accord_client" onclick="ouvrirDevisComplActionByEl(this)">&#x1F4DE; Reponse client</button>';
+    actionLabel = estDossierAssurance(v) ? 'Accord expert requis' : 'Accord client requis';
+    actionBtn = '<button class="btn btn-sm" data-vid="'+v.id+'" data-action="accord_client" onclick="ouvrirDevisComplActionByEl(this)">&#x1F4DE; '+(estDossierAssurance(v)?'Reponse expert':'Reponse client')+'</button>';
     badgeColor = 'background:#EBF3FB;color:#185FA5';
   } else if(s==='chiffre' && sc==='accepte' && currentRole==='direction'){
     actionRequise = true;
@@ -4445,12 +4493,16 @@ function ouvrirModifAttribution(btn){
   document.getElementById('modif_veh_vignette').value = v.vignette || '';
   document.getElementById('modif_veh_mec').value = v.mec || '';
   // Remplir la datalist avec les clients existants (uniques par nom+tel)
+  // — le VRAI proprietaire (proprietaireVehicule) prime sur client, qui
+  // peut avoir ete remplace par le nom d'un assureur pour un dossier
+  // sinistre.
   var seen = {};
   var opts = '';
   vehicles.forEach(function(x){
-    if(x.client && x.isProspect!==true){
-      var k = x.client.toLowerCase().trim()+'|'+(x.tel||'');
-      if(!seen[k]){ seen[k]=true; opts += '<option value="'+x.client.replace(/"/g,'&quot;')+'">'+(x.tel||'')+'</option>'; }
+    var nomReel = x.proprietaireVehicule||x.client;
+    if(nomReel && x.isProspect!==true){
+      var k = nomReel.toLowerCase().trim()+'|'+(x.tel||'');
+      if(!seen[k]){ seen[k]=true; opts += '<option value="'+nomReel.replace(/"/g,'&quot;')+'">'+(x.tel||'')+'</option>'; }
     }
   });
   document.getElementById('modif_client_list').innerHTML = opts;
@@ -4469,8 +4521,8 @@ function modifClientAutoFill(){
     champEntite.disabled = false;
     return;
   }
-  // Chercher un client existant avec ce nom exact
-  var match = vehicles.find(function(x){ return x.client && x.client.toLowerCase().trim()===nom.toLowerCase() && x.isProspect!==true; });
+  // Chercher un client existant avec ce nom exact (vrai proprietaire en priorite)
+  var match = vehicles.find(function(x){ var nomReel=x.proprietaireVehicule||x.client; return nomReel && nomReel.toLowerCase().trim()===nom.toLowerCase() && x.isProspect!==true; });
   if(match){
     document.getElementById('modif_tel').value = match.tel || '';
     document.getElementById('modif_email').value = match.email || '';
@@ -12226,10 +12278,10 @@ function recTableauDevis(title, list, badgeClass){
     var acts = '';
     if(v.status==='devis_termine'){
       // Devis chiffre, pas encore envoye
-      acts += '<button class="btn btn-primary btn-sm" onclick="recEnvoyerDevis(this)" data-vid="'+v.id+'">&#x1F4E4; Envoyer devis au client</button>';
+      acts += '<button class="btn btn-primary btn-sm" onclick="recEnvoyerDevis(this)" data-vid="'+v.id+'">&#x1F4E4; '+libelleEnvoyerDevis(v)+'</button>';
     } else if(v.status==='devis_envoye'){
-      // Devis envoye, en attente reponse client
-      acts += '<button class="btn btn-success btn-sm" onclick="recAccordClient(this)" data-vid="'+v.id+'">&#x2714; Accord client</button>';
+      // Devis envoye, en attente reponse client (ou expert, pour un dossier assurance)
+      acts += '<button class="btn btn-success btn-sm" onclick="recAccordClient(this)" data-vid="'+v.id+'">&#x2714; '+libelleAccordClient(v)+'</button>';
       acts += ' <button class="btn btn-sm" style="color:#854F0B;border-color:#E8A44A" onclick="recDiffererDevis(this)" data-vid="'+v.id+'">&#x23F8; Devis differe</button>';
       acts += ' <button class="btn btn-sm" onclick="recModifierDevis(this)" data-vid="'+v.id+'">&#x270F; Modifier devis</button>';
     } else if(v.status==='modifier_devis'){
@@ -18488,9 +18540,11 @@ function verifierClientExistant(){
   if(!nomEl || !typeEl) return;
   var nom = (nomEl.value||'').trim();
   if(!nom){ if(hintEl) hintEl.textContent=''; return; }
-  // Chercher un client existant avec ce nom EXACT (insensible casse)
+  // Chercher un client existant avec ce nom EXACT (insensible casse) — le
+  // vrai proprietaire (proprietaireVehicule) prime sur client.
   var match = vehicles.find(function(x){
-    return x.client && x.client.toLowerCase().trim()===nom.toLowerCase() && x.isProspect!==true;
+    var nomReel = x.proprietaireVehicule||x.client;
+    return nomReel && nomReel.toLowerCase().trim()===nom.toLowerCase() && x.isProspect!==true;
   });
   if(!match){
     // Nouveau client : deverrouiller le type, laisser le choix
@@ -18801,15 +18855,20 @@ function remplirSuggestionsMarqueModele(){
 }
 
 function openRec(prefill){
-  // Remplir la liste des clients existants pour autocompletion
+  // Remplir la liste des clients existants pour autocompletion — le VRAI
+  // proprietaire (proprietaireVehicule) prime sur client, qui peut avoir
+  // ete remplace par le nom d'un assureur pour un dossier sinistre : sans
+  // ca, des noms d'assureurs pollueraient les suggestions de nouveaux
+  // clients.
   (function(){
     var dl = document.getElementById('f_client_list');
     if(dl){
       var seen = {}; var opts = '';
       vehicles.forEach(function(x){
-        if(x.client && x.isProspect!==true){
-          var k = x.client.toLowerCase().trim();
-          if(!seen[k]){ seen[k]=true; opts += '<option value="'+x.client.replace(/"/g,'&quot;')+'">'; }
+        var nomReel = x.proprietaireVehicule||x.client;
+        if(nomReel && x.isProspect!==true){
+          var k = nomReel.toLowerCase().trim();
+          if(!seen[k]){ seen[k]=true; opts += '<option value="'+nomReel.replace(/"/g,'&quot;')+'">'; }
         }
       });
       dl.innerHTML = opts;
@@ -18832,12 +18891,12 @@ function openRec(prefill){
   if(prefill){
     var s=function(id,val){var el=document.getElementById(id);if(el)el.value=val||'';};
     s('f_immat',prefill.immat);s('f_modele',prefill.modele);s('f_vin',prefill.vin);s('f_km',prefill.km);s('f_mec',prefill.mec);
-    s('f_client',prefill.client);s('f_tel',prefill.tel);s('f_email',prefill.email);
+    s('f_client',prefill.proprietaireVehicule||prefill.client);s('f_tel',prefill.tel);s('f_email',prefill.email);
     var mk=document.getElementById('f_marque');if(mk) mk.value=prefill.marque||'';
     var sv=function(id,val){var el=document.getElementById(id);if(el)el.value=val;};
     sv('f_energie',prefill.energie||'');sv('f_vignette',prefill.vignette||'');
   sv('f_type',prefill.typeClient);sv('f_typeClient',prefill.typeClient);
-    var daEl=document.getElementById('f_dossierAssurance');if(daEl) daEl.checked = (prefill.dossierAssurance===true || prefill.typeClient==='assurance');sv('f_entite',prefill.entite||'Particulier');sv('f_prio',prefill.priorite);
+    var daEl=document.getElementById('f_dossierAssurance');if(daEl) daEl.checked = (prefill.dossierAssurance===true || prefill.typeClient==='assurance');toggleSectionSinistre();sv('f_entite',prefill.entite||'Particulier');sv('f_prio',prefill.priorite);
     toggleEntite();document.getElementById('recTitle').textContent = prefill.immat ? ('Nouvelle entree - '+prefill.immat) : ('Nouveau vehicule - '+(prefill.client||''));setTimeout(function(){showTab('v');},50);
 
     // Préremplir assurance et contrôle technique si disponibles
@@ -18872,8 +18931,9 @@ function openEdit(id, prefill){
   var s=function(id,val){var el=document.getElementById(id);if(el)el.value=val||'';};
   s('f_immat',v.immat);s('f_modele',v.modele);s('f_vin',v.vin);s('f_km',v.km);s('f_mec',v.mec);s('f_vt',v.vt);
   if(v.livraison)s('f_livraison',new Date(v.livraison).toISOString().split('T')[0]);
-  s('f_client',v.client);s('f_tel',v.tel);s('f_email',v.email);s('f_motif',v.motif);s('f_symp',v.symptomes);
+  s('f_client',v.proprietaireVehicule||v.client);s('f_tel',v.tel);s('f_email',v.email);s('f_motif',v.motif);s('f_symp',v.symptomes);
   s('f_sin',v.sinistre);s('f_assureur',v.assureur);s('f_contact_ass',v.contactAssurance);s('f_expert',v.expert);s('f_contact_exp',v.contactExpert);s('f_date_sin',v.dateSinistre);
+  var daEl2=document.getElementById('f_dossierAssurance');if(daEl2){ daEl2.checked = (v.dossierAssurance===true || v.typeClient==='assurance'); daEl2.disabled = (currentRole!=='direction'); toggleSectionSinistre(); }
   var mk=document.getElementById('f_marque');if(mk){ if(mk.options) { for(var i=0;i<mk.options.length;i++){if(mk.options[i].text===v.marque){mk.selectedIndex=i;break;}} } else { mk.value=v.marque||''; } }
   var sv=function(id,val){var el=document.getElementById(id);if(el)el.value=val;};
   sv('f_typeClient',v.typeClient);sv('f_type',v.typeClient);sv('f_entite',v.entite||'Particulier');sv('f_prio',v.priorite);sv('f_nature',v.nature||'Nouvelle panne');sv('f_bpc',v.bpc||'En attente');
@@ -18917,6 +18977,21 @@ function confirmerFermeture(){
   _pendingClose = null;
 }
 function closeRec(){document.getElementById('modalRec').style.display='none';editingId=null;document.getElementById('recTitle').textContent='Reception d un vehicule';}
+// Affiche/masque l'onglet Sinistre selon l'etat de la case "Dossier
+// assurance" — l'onglet n'a aucune raison d'etre visible/accessible tant
+// que ce dossier n'est pas explicitement marque comme un sinistre.
+function toggleSectionSinistre(){
+  var checked = document.getElementById('f_dossierAssurance').checked;
+  var tab = document.getElementById('tab_s');
+  if(tab) tab.style.display = checked ? '' : 'none';
+  if(!checked){
+    // Si on decoche alors qu'on etait sur cet onglet, revenir sur
+    // l'onglet Vehicule pour ne pas rester bloque sur une section cachee.
+    var tpS = document.getElementById('tp_s');
+    if(tpS && tpS.style.display!=='none') showTab('v');
+  }
+}
+
 function showTab(id){
   ['v','c','p','i','s','r'].forEach(function(t){
     var tab = document.getElementById('tab_'+t);
@@ -18935,7 +19010,7 @@ function resetForm(){
   // Réinitialiser l'équipe
   var ftc=document.getElementById('f_typeClient'); if(ftc){ftc.value='devis';ftc.disabled=false;}
   var fcth=document.getElementById('f_client_type_hint');if(fcth)fcth.textContent='';
-  var fda=document.getElementById('f_dossierAssurance');if(fda)fda.checked=false;
+  var fda=document.getElementById('f_dossierAssurance');if(fda){fda.checked=false;fda.disabled=false;}
   var fen=document.getElementById('f_energie'); if(fen) fen.disabled=false;
   var fEqReset = document.getElementById('f_equipe');
   if(fEqReset) fEqReset.value = '';
@@ -19103,7 +19178,50 @@ function submitRec(){
     photos: window._recPhotosTemp || []
   };
   window._recPhotosTemp = []; // reset
-  var data={inventaire:inv,aRecuperer:!!aRecup,recuperation:recupData,immat:immat,marque:marque,modele:modele,vin:(document.getElementById('f_vin').value||'').trim(),km:parseInt(document.getElementById('f_km').value)||0,mec:document.getElementById('f_mec').value,ct_echeance:(document.getElementById('f_ct_echeance')||{value:''}).value,annee:(document.getElementById('f_mec').value?(new Date(document.getElementById('f_mec').value).getFullYear()+''):''),client:client,tel:tel,email:emailVal,typeClient:(document.getElementById('f_typeClient')||document.getElementById('f_type')||{value:'devis'}).value,dossierAssurance:(document.getElementById('f_dossierAssurance')||{checked:false}).checked,entite:document.getElementById('f_entite').value,priorite:document.getElementById('f_prio').value,nature:document.getElementById('f_nature').value,motif:motif,symptomes:(document.getElementById('f_symp').value||'').trim(),livraison:livDate?new Date(livDate).getTime():null,sinistre:(document.getElementById('f_sin').value||'').trim()||null,assureur:(document.getElementById('f_assureur').value||'').trim()||null,contactAssurance:(document.getElementById('f_contact_ass').value||'').trim()||null,expert:(document.getElementById('f_expert').value||'').trim()||null,contactExpert:(document.getElementById('f_contact_exp').value||'').trim()||null,dateSinistre:document.getElementById('f_date_sin').value||null,bpc:document.getElementById('f_bpc').value,photos:getRecPhotosData(),zonesEndommagees:(zonesEndommagees||[]).slice(),energie:(document.getElementById('f_energie')||{value:''}).value||null,vignette:(document.getElementById('f_vignette')||{value:''}).value||null};
+
+  // Dossier assurance : le "client" qui pilote tout le circuit
+  // (facturation, echeances, exposition financiere...) devient le nom de
+  // l'ASSUREUR — le vrai proprietaire du vehicule reste trace separement
+  // (proprietaireVehicule), pour ne jamais perdre son identite (recherche,
+  // reconnaissance de client existant, affichage dans les details).
+  var proprietaireVehicule = client;
+  var dossierAssuranceCoche = (document.getElementById('f_dossierAssurance')||{checked:false}).checked;
+  var nomAssureurSaisi = (document.getElementById('f_assureur').value||'').trim();
+  var clientEffectif = (dossierAssuranceCoche && nomAssureurSaisi) ? nomAssureurSaisi : client;
+
+  // Conversion devis <-> assurance (reservee a la Direction) : quand un
+  // dossier EXISTANT bascule vers assurance, on considere que les etapes
+  // deja "depassees" par sa position actuelle dans le circuit sont
+  // validees retroactivement — pas de blocage artificiel sur un dossier
+  // deja avance ou meme cloture.
+  var vEnEdition = editingId ? vehicles.find(function(x){return x.id===editingId;}) : null;
+  var conversionVersAssurance = vEnEdition && !estDossierAssurance(vEnEdition) && dossierAssuranceCoche;
+  var expertPasseFinal = vEnEdition ? vEnEdition.expertPasse : false;
+  var expertPasseLeFinal = vEnEdition ? vEnEdition.expertPasseLe : null;
+  var expertValidationTravauxFinal = vEnEdition ? vEnEdition.expertValidationTravaux : false;
+  var expertValidationTravauxLeFinal = vEnEdition ? vEnEdition.expertValidationTravauxLe : null;
+  var expertRapportRecuFinal = vEnEdition ? vEnEdition.expertRapportRecu : false;
+  var expertRapportRecuLeFinal = vEnEdition ? vEnEdition.expertRapportRecuLe : null;
+  var bonSortieAssuranceFinal = vEnEdition ? vEnEdition.bonSortieAssurance : false;
+  var bonSortieAssuranceLeFinal = vEnEdition ? vEnEdition.bonSortieAssuranceLe : null;
+  if(conversionVersAssurance){
+    var maintenantConv = Date.now();
+    // Etape 1 (passage expert avant travaux) : toujours consideree faite
+    // des lors qu'on convertit un dossier deja existant.
+    expertPasseFinal = true;
+    expertPasseLeFinal = maintenantConv;
+    // Sequence de fin (3 etapes) : consideree faite UNIQUEMENT si le
+    // dossier a deja depasse le stade "travaux termines" — sinon il est
+    // precisement a l'etape ou cette sequence doit se derouler normalement.
+    var STATUTS_APRES_FIN_TRAVAUX = ['en_lavage','client_contacte','attente_client','en_cours_livraison','facture_emettre','facture_emise','livre','facture_deposee','dossier_cloture'];
+    if(STATUTS_APRES_FIN_TRAVAUX.indexOf(vEnEdition.status)>=0){
+      expertValidationTravauxFinal = true; expertValidationTravauxLeFinal = maintenantConv;
+      expertRapportRecuFinal = true; expertRapportRecuLeFinal = maintenantConv;
+      bonSortieAssuranceFinal = true; bonSortieAssuranceLeFinal = maintenantConv;
+    }
+  }
+
+  var data={inventaire:inv,aRecuperer:!!aRecup,recuperation:recupData,immat:immat,marque:marque,modele:modele,vin:(document.getElementById('f_vin').value||'').trim(),km:parseInt(document.getElementById('f_km').value)||0,mec:document.getElementById('f_mec').value,ct_echeance:(document.getElementById('f_ct_echeance')||{value:''}).value,annee:(document.getElementById('f_mec').value?(new Date(document.getElementById('f_mec').value).getFullYear()+''):''),client:clientEffectif,proprietaireVehicule:proprietaireVehicule,tel:tel,email:emailVal,typeClient:(document.getElementById('f_typeClient')||document.getElementById('f_type')||{value:'devis'}).value,dossierAssurance:dossierAssuranceCoche,expertPasse:expertPasseFinal,expertPasseLe:expertPasseLeFinal,expertValidationTravaux:expertValidationTravauxFinal,expertValidationTravauxLe:expertValidationTravauxLeFinal,expertRapportRecu:expertRapportRecuFinal,expertRapportRecuLe:expertRapportRecuLeFinal,bonSortieAssurance:bonSortieAssuranceFinal,bonSortieAssuranceLe:bonSortieAssuranceLeFinal,entite:document.getElementById('f_entite').value,priorite:document.getElementById('f_prio').value,nature:document.getElementById('f_nature').value,motif:motif,symptomes:(document.getElementById('f_symp').value||'').trim(),livraison:livDate?new Date(livDate).getTime():null,sinistre:(document.getElementById('f_sin').value||'').trim()||null,assureur:nomAssureurSaisi||null,contactAssurance:(document.getElementById('f_contact_ass').value||'').trim()||null,expert:(document.getElementById('f_expert').value||'').trim()||null,contactExpert:(document.getElementById('f_contact_exp').value||'').trim()||null,dateSinistre:document.getElementById('f_date_sin').value||null,bpc:document.getElementById('f_bpc').value,photos:getRecPhotosData(),zonesEndommagees:(zonesEndommagees||[]).slice(),energie:(document.getElementById('f_energie')||{value:''}).value||null,vignette:(document.getElementById('f_vignette')||{value:''}).value||null};
   // Lire l'équipe sélectionnée
   var equipeChoisie = (document.getElementById('f_equipe')||{value:''}).value;
   if(editingId){
@@ -19278,6 +19396,61 @@ function reparer_lien_chiffrage(){
   openDetKeepEdit(detCurrentVid);
 }
 
+// Affiche les informations du sinistre dans le detail du dossier —
+// uniquement pour un dossier assurance, avec un bouton pour aller
+// directement modifier ces informations (ouvre le formulaire sur
+// l'onglet Sinistre).
+// Sequence de fin de travaux pour un dossier assurance : 3 etapes
+// STRICTEMENT ordonnees, affichees uniquement quand les travaux sont
+// termines (vehicule_termine) — chaque etape ne devient cliquable qu'une
+// fois la precedente validee.
+function htmlSequenceFinTravauxAssurance(v){
+  if(!estDossierAssurance(v) || v.status!=='vehicule_termine') return '';
+  var html = '<div style="margin-top:14px;padding:12px;background:#F3F0FF;border-radius:9px"><div class="sdiv" style="margin-bottom:8px">&#x1F3C1; Sequence de fin de travaux (assurance)</div>';
+  html += '<div class="xs muted" style="margin-bottom:10px">Ces trois etapes doivent etre validees dans l\'ordre avant de passer a la livraison (lavage, contact client, facturation...).</div>';
+
+  var etapes = [
+    {cle:'validationExpert', champ:'expertValidationTravaux', dateChamp:'expertValidationTravauxLe', label:'1. Validation expert', fn:'validerExpertTravauxById'},
+    {cle:'rapportExpert', champ:'expertRapportRecu', dateChamp:'expertRapportRecuLe', label:'2. Rapport expert', fn:'validerRapportExpertById'},
+    {cle:'bonSortie', champ:'bonSortieAssurance', dateChamp:'bonSortieAssuranceLe', label:'3. Bon de sortie', fn:'validerBonSortieById'}
+  ];
+
+  html += '<div class="flex gap6" style="flex-wrap:wrap">';
+  etapes.forEach(function(e){
+    var valide = !!v[e.champ];
+    var autorise = etapeSuivanteAutorisee(v, e.cle);
+    if(valide){
+      html += '<span class="badge b-green" style="padding:6px 10px">&#x2714; '+e.label+(v[e.dateChamp]?' — '+new Date(v[e.dateChamp]).toLocaleDateString('fr-FR'):'')+'</span>';
+    } else if(autorise && (currentRole==='reception'||currentRole==='direction')){
+      html += '<button class="btn btn-success btn-sm" data-vid="'+v.id+'" onclick="'+e.fn+'(this)">'+e.label+'</button>';
+    } else {
+      html += '<span class="badge b-gray" style="padding:6px 10px;opacity:0.55">'+e.label+'</span>';
+    }
+  });
+  html += '</div></div>';
+  return html;
+}
+
+function htmlSectionSinistre(v){
+  if(!estDossierAssurance(v)) return '';
+  var html = '<div style="margin-top:14px"><div class="sdiv" style="display:flex;justify-content:space-between;align-items:center">';
+  html += '<span>&#x1F6E1; Sinistre</span>';
+  if(currentRole==='reception'||currentRole==='direction'||currentRole==='achats'){
+    html += '<button class="btn btn-sm" style="color:#185FA5;border-color:#B5D4F4" data-vid="'+v.id+'" onclick="openDetEditSinistreById(this)">&#x270F; Modifier</button>';
+  }
+  html += '</div>';
+  html += '<div class="g2" style="gap:8px">';
+  html += '<div class="drow"><span class="dlbl">N sinistre</span>'+(v.sinistre||'—')+'</div>';
+  html += '<div class="drow"><span class="dlbl">Assureur</span><strong>'+(v.assureur||'—')+'</strong></div>';
+  html += '<div class="drow"><span class="dlbl">Contact assurance</span>'+(v.contactAssurance||'—')+'</div>';
+  html += '<div class="drow"><span class="dlbl">Nom expert</span>'+(v.expert||'—')+'</div>';
+  html += '<div class="drow"><span class="dlbl">Contact expert</span>'+(v.contactExpert||'—')+'</div>';
+  html += '<div class="drow"><span class="dlbl">Date sinistre</span>'+(v.dateSinistre?new Date(v.dateSinistre).toLocaleDateString('fr-FR'):'—')+'</div>';
+  html += '<div class="drow"><span class="dlbl">Bon de prise en charge</span>'+(v.bpc||'En attente')+'</div>';
+  html += '</div></div>';
+  return html;
+}
+
 function openDet(id){
   if(_detEditPreserve!==null){ detEditMode=_detEditPreserve; _detEditPreserve=null; }
   else { detEditMode = false; } // reset a chaque ouverture normale
@@ -19339,13 +19512,26 @@ function openDet(id){
     b += '</div>';
   }
   if(currentRole==='reception'||currentRole==='direction'){
-    b += '<div style="margin-bottom:12px;padding:10px 12px;background:#EBF3FB;border-radius:8px;display:flex;align-items:center;justify-content:space-between">';
+    b += '<div style="margin-bottom:12px;padding:10px 12px;background:#EBF3FB;border-radius:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">';
     b += '<span style="font-size:12px;color:#185FA5">Vous pouvez modifier les informations de ce vehicule.</span>';
+    b += '<div class="flex gap6">';
     b += '<button class="btn btn-sm" style="color:#185FA5;border-color:#B5D4F4" onclick="openDetEditById(this)" data-vid="'+v.id+'">&#x270F; Modifier la fiche vehicule</button>';
-    b += '</div>';
+    // Conversion devis <-> assurance : reservee a la Direction uniquement
+    // (change tout le circuit de facturation et les tableaux financiers) —
+    // possible meme sur un dossier deja cloture.
+    if(currentRole==='direction'){
+      if(estDossierAssurance(v)){
+        b += '<button class="btn btn-sm" style="color:#854F0B;border-color:#E8A44A" onclick="basculerDossierAssuranceById(this)" data-vid="'+v.id+'">Retirer le statut assurance</button>';
+      } else {
+        b += '<button class="btn btn-sm" style="color:#1B6E7A;border-color:#7ECBD6" onclick="basculerDossierAssuranceById(this)" data-vid="'+v.id+'">&#x1F6E1; Convertir en dossier assurance</button>';
+      }
+    }
+    b += '</div></div>';
   }
   b+='<div class="g2" style="gap:14px"><div><div class="sdiv">Vehicule</div><div class="drow"><span class="dlbl">Immat</span><strong>'+v.immat+'</strong></div><div class="drow"><span class="dlbl">Marque/Modele</span>'+v.marque+' '+v.modele+'</div><div class="drow"><span class="dlbl">VIN</span>'+(v.vin||'—')+'</div><div class="drow"><span class="dlbl">Kilometrage</span>'+(v.km?v.km.toLocaleString('fr-FR')+' km':'—')+'</div>'+(v.energie?'<div class="drow"><span class="dlbl">Energie</span>'+v.energie+'</div>':'')+(v.vignette?'<div class="drow"><span class="dlbl">Vignette</span>'+parseFloat(v.vignette).toLocaleString('fr-FR')+' F</div>':'')+'</div>';
-  b+='<div><div class="sdiv">Client</div><div class="drow"><span class="dlbl">Nom</span><strong>'+v.client+'</strong></div><div class="drow"><span class="dlbl">Tel</span>'+v.tel+'</div><div class="drow"><span class="dlbl">Email</span>'+(v.email||'—')+'</div><div class="drow"><span class="dlbl">Type</span>'+tbadge(v.typeClient)+assuranceBadge(v)+'</div><div class="drow"><span class="dlbl">Priorite</span>'+pbadge(v.priorite)+'</div></div></div>';
+  b+='<div><div class="sdiv">Client</div><div class="drow"><span class="dlbl">Nom</span><strong>'+v.client+'</strong></div>'+(v.proprietaireVehicule && v.proprietaireVehicule!==v.client ? '<div class="drow"><span class="dlbl">Proprietaire reel</span><span style="color:#3B6D11;font-weight:600">'+v.proprietaireVehicule+'</span></div>' : '')+'<div class="drow"><span class="dlbl">Tel</span>'+v.tel+'</div><div class="drow"><span class="dlbl">Email</span>'+(v.email||'—')+'</div><div class="drow"><span class="dlbl">Type</span>'+tbadge(v.typeClient)+assuranceBadge(v)+'</div><div class="drow"><span class="dlbl">Priorite</span>'+pbadge(v.priorite)+'</div></div></div>';
+  b += htmlSectionSinistre(v);
+  b += htmlSequenceFinTravauxAssurance(v);
   b+='<div style="margin-top:14px"><div class="sdiv">Panne</div><div class="g2" style="gap:8px"><div style="background:#faf9f7;padding:9px;border-radius:7px"><div class="xs muted mb8">Motif</div><div class="sm">'+v.motif+'</div></div><div style="background:#faf9f7;padding:9px;border-radius:7px"><div class="xs muted mb8">Symptomes</div><div class="sm">'+(v.symptomes||'—')+'</div></div></div></div>';
   // Pour prospect : pas d'équipe, technicien, date — juste chiffrage libre
   if(v.isProspect){
@@ -19386,7 +19572,19 @@ function openDet(id){
   }
   b += '</div>';
 
-  if(_isLocked){
+  if(affectationBloqueeParExpert(v)){
+    // ── PORTAIL DE DEPART DOSSIER ASSURANCE : la venue de l'expert a
+    // l'atelier determine le top depart du circuit — l'affectation reste
+    // bloquee tant que la Reception n'a pas valide ce passage.
+    b += '<div style="padding:10px 12px;background:#FFF3E0;border-radius:8px;margin-bottom:8px">';
+    b += '<div class="xs" style="color:#854F0B;margin-bottom:8px">&#x23F3; En attente du passage de l\'expert a l\'atelier — l\'equipe ne peut etre affectee tant que ce passage n\'est pas valide.</div>';
+    if(currentRole==='reception'||currentRole==='direction'){
+      b += '<button class="btn btn-success btn-sm" data-vid="'+v.id+'" onclick="validerPassageExpertById(this)">&#x2714; Valider le passage de l\'expert</button>';
+    } else {
+      b += '<span class="xs muted">Seule la Reception peut valider ce passage.</span>';
+    }
+    b += '</div>';
+  } else if(_isLocked){
     // ── VUE LECTURE SEULE : affectation deja validee ──────────────────────────
     var _eqNomAff = v.equipe_affectee || equipeDuTech(v.technicien);
     var _chefNomAff = chefDeEquipe(_eqNomAff);
@@ -19613,6 +19811,11 @@ function closeDet(){
   photosVisible=false; photosEditMode=false; closePhotoViewer();
 }
 function detAffecterEquipeReception(id){
+  var v0 = vehicles.find(function(x){return x.id===id;});
+  if(v0 && affectationBloqueeParExpert(v0)){
+    alert('Ce dossier assurance est en attente du passage de l\'expert. La Reception doit valider ce passage avant qu\'une equipe puisse etre affectee.');
+    return;
+  }
   var eq  = (document.getElementById('detEqSel')||{value:''}).value;
   var v = vehicles.find(function(x){return x.id===id;});
   if(!v) return;
@@ -19643,6 +19846,11 @@ function detUpdateTech(id){
 }
 
 function detAffecterEquipe(id){
+  var v0 = vehicles.find(function(x){return x.id===id;});
+  if(v0 && affectationBloqueeParExpert(v0)){
+    alert('Ce dossier assurance est en attente du passage de l\'expert. La Reception doit valider ce passage avant qu\'une equipe puisse etre affectee.');
+    return;
+  }
   var eq      = (document.getElementById('detEqSel')||{value:''}).value;
   var tech    = (document.getElementById('detTechSel')||{value:''}).value;
   var comment = (document.getElementById('detComment')||{value:''}).value;
@@ -19697,7 +19905,87 @@ function toggleVehHistory(btn){
 function openDetById(btn){var id=btn.getAttribute('data-vid');openDet(id);}
 function openDetHistoById(btn){var id=btn.getAttribute('data-vid');closeDet();openHisto(id);}
 function openDetEditById(btn){var id=btn.getAttribute('data-vid');closeDet();openEdit(id);}
+// Ouvre directement le formulaire de modification sur l'onglet Sinistre —
+// utilise depuis la section Sinistre du detail du dossier, pour eviter a
+// l'utilisateur de re-cliquer sur l'onglet apres ouverture.
+function openDetEditSinistreById(btn){
+  var id=btn.getAttribute('data-vid');
+  closeDet();
+  openEdit(id);
+  setTimeout(function(){ showTab('s'); }, 60);
+}
+// Convertit un dossier classique en dossier assurance, ou inversement.
+// Ouvre le formulaire de modification avec la case "Dossier assurance"
+// deja BASCULEE (etat inverse de l'actuel) : pour une conversion VERS
+// assurance, va directement sur l'onglet Sinistre pour saisir toutes les
+// informations requises (assureur, expert, numero de sinistre...). Pour
+// un retour vers un dossier classique, le client redevient automatiquement
+// le vrai proprietaire du vehicule (deja preremplit par openEdit via
+// proprietaireVehicule).
+function basculerDossierAssuranceById(btn){
+  if(currentRole!=='direction') return; // reserve a la Direction (defense en profondeur, en plus du bouton deja masque)
+  var id = btn.getAttribute('data-vid');
+  var v = vehicles.find(function(x){return x.id===id;});
+  if(!v) return;
+  var estActuellementAssurance = estDossierAssurance(v);
+  closeDet();
+  openEdit(id);
+  setTimeout(function(){
+    var daEl = document.getElementById('f_dossierAssurance');
+    if(!daEl) return;
+    daEl.checked = !estActuellementAssurance;
+    toggleSectionSinistre();
+    if(!estActuellementAssurance){
+      showTab('s'); // conversion VERS assurance : aller saisir les infos
+    } else {
+      showTab('v'); // retour vers classique : revenir sur l'onglet principal
+    }
+  }, 60);
+}
 function advanceDetById(btn){var id=btn.getAttribute('data-vid');advance(id);}
+// Valide le passage de l'expert a l'atelier (dossier assurance) — c'est
+// ce qui debloque l'affectation d'une equipe/technicien, et donc tout le
+// reste du circuit.
+function validerPassageExpertById(btn){
+  var id = btn.getAttribute('data-vid');
+  var v = vehicles.find(function(x){return x.id===id;});
+  if(!v) return;
+  if(!confirm('Confirmer que l\'expert est passe a l\'atelier pour ce dossier ? Une equipe pourra ensuite etre affectee.')) return;
+  v.expertPasse = true;
+  v.expertPasseLe = Date.now();
+  saveV();
+  renderPage();
+  openDetKeepEdit(id);
+}
+
+// ── Sequence de fin de travaux (dossier assurance), 3 etapes ordonnees ──
+function validerExpertTravauxById(btn){
+  var id = btn.getAttribute('data-vid');
+  var v = vehicles.find(function(x){return x.id===id;});
+  if(!v || !etapeSuivanteAutorisee(v,'validationExpert')) return;
+  if(!confirm('Confirmer que l\'expert a valide les travaux termines ?')) return;
+  v.expertValidationTravaux = true;
+  v.expertValidationTravauxLe = Date.now();
+  saveV(); renderPage(); openDetKeepEdit(id);
+}
+function validerRapportExpertById(btn){
+  var id = btn.getAttribute('data-vid');
+  var v = vehicles.find(function(x){return x.id===id;});
+  if(!v || !etapeSuivanteAutorisee(v,'rapportExpert')) return;
+  if(!confirm('Confirmer la reception du rapport de l\'expert ?')) return;
+  v.expertRapportRecu = true;
+  v.expertRapportRecuLe = Date.now();
+  saveV(); renderPage(); openDetKeepEdit(id);
+}
+function validerBonSortieById(btn){
+  var id = btn.getAttribute('data-vid');
+  var v = vehicles.find(function(x){return x.id===id;});
+  if(!v || !etapeSuivanteAutorisee(v,'bonSortie')) return;
+  if(!confirm('Confirmer la reception du bon de sortie de l\'assurance ?')) return;
+  v.bonSortieAssurance = true;
+  v.bonSortieAssuranceLe = Date.now();
+  saveV(); renderPage(); openDetKeepEdit(id);
+}
 function ouvrirRapportVeh(btn){var id=btn.getAttribute('data-vid');ouvrirRapportVehicule(id);}
 function ouvrirRapportCli(btn){var key=btn.getAttribute('data-ck');ouvrirRapportClient(key);}
 
@@ -22609,9 +22897,10 @@ function pageImportHistorique(){
   // toute dependance a l'ordre d'execution ou a un setTimeout fragile.
   var seenClients = {}; var optsClients = '';
   vehicles.forEach(function(x){
-    if(x.client && x.isProspect!==true){
-      var k = x.client.toLowerCase().trim();
-      if(!seenClients[k]){ seenClients[k]=true; optsClients += '<option value="'+x.client.replace(/"/g,'&quot;')+'">'; }
+    var nomReel = x.proprietaireVehicule||x.client;
+    if(nomReel && x.isProspect!==true){
+      var k = nomReel.toLowerCase().trim();
+      if(!seenClients[k]){ seenClients[k]=true; optsClients += '<option value="'+nomReel.replace(/"/g,'&quot;')+'">'; }
     }
   });
   CLIENTS_SANS_VEHICULE.forEach(function(c){
