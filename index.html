@@ -23358,18 +23358,21 @@ var caisseAnalysePeriode = 'mois';
 var caisseAnalyseDebut = '';
 var caisseAnalyseFin = '';
 
-// ── Recherche contextuelle dans les mouvements de Caisse (Analyse) ──────
+// Recherche contextuelle dans les mouvements de Caisse (Analyse) ──────
 // Permet de retrouver tous les mouvements dont le libelle (motif) ou la
 // categorie contient le texte saisi, avec le detail (date, libelle,
 // montant) et le total correspondant — utile pour analyser finement les
-// depenses liees a un mot-cle precis (ex: un nom de personne).
+// depenses liees a un mot-cle precis (ex: un nom de personne). Cherche
+// UNIQUEMENT dans les mouvements de la PERIODE actuellement selectionnee
+// (mois/trimestre/annee/personnalise), pas dans tout l'historique.
+var _caisseAnalyseMvtsPeriode = [];
 function rechercherMouvementsCaisse(texte){
   var zone = document.getElementById('caisseRechercheResultats');
   if(!zone) return;
   var q = texte.trim().toLowerCase();
   if(q.length<2){ zone.innerHTML=''; return; }
 
-  var resultats = CAISSE_MOUVEMENTS.filter(function(m){
+  var resultats = _caisseAnalyseMvtsPeriode.filter(function(m){
     return (m.motif||'').toLowerCase().indexOf(q)>=0 || (m.categorie||'').toLowerCase().indexOf(q)>=0;
   }).sort(function(a,b){return b.date-a.date;});
 
@@ -23416,6 +23419,11 @@ function pageCaisseAnalyse(){
     if(borneFin && m.date>borneFin) return false;
     return true;
   });
+
+  // Rendue disponible pour la barre de recherche (declenchee par oninput,
+  // sans re-render complet de la page) — deja filtree par la periode
+  // actuellement selectionnee.
+  _caisseAnalyseMvtsPeriode = mvts;
 
   var html = '<div class="card" style="padding:10px 14px;margin-bottom:8px">';
   html += '<input class="inp" id="caisseRecherche" placeholder="Rechercher un libelle ou une categorie (ex: un nom, un motif...)..." oninput="rechercherMouvementsCaisse(this.value)" autocomplete="off">';
