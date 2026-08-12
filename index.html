@@ -9180,6 +9180,10 @@ function pageArchives(){
 // restent compatibles (fournPaye absent = considere non paye).
 var dettesFournExpand = {}; // {fournisseurId: true/false}
 var dettesFournFiltre = 'toutes'; // 'toutes','retard','a_echoir','planifie'
+var dettesFournVue = 'encours'; // 'encours','historique'
+var dettesHistoriquePeriode = 'tous'; // 'mois','trimestre','annee','tous','custom'
+var dettesHistoriqueDebut = '';
+var dettesHistoriqueFin = '';
 
 function delaiEcheanceFourn(f){
   // Delai en jours avant echeance selon les conditions du fournisseur.
@@ -9572,7 +9576,114 @@ function pageFinancesDashboard(){
   return html;
 }
 
+// Historique des dettes fournisseurs DEJA PAYEES — sans cette page, une
+// fois marquee payee, une dette disparaissait completement de l'app, sans
+// aucun moyen de retrouver le montant regle ni de corriger une erreur de
+// saisie. Chaque ligne peut etre annulee (si erreur) ou, pour les dettes
+// manuelles, modifiee directement.
+function pageDettesFournisseursHistorique(){
+  var historiqueComplet = collecterHistoriquePaiementsFournisseurs();
+
+  // Filtre par periode
+  var today = new Date();
+  var borneDebut = 0, borneFin = null;
+  if(dettesHistoriquePeriode==='mois') borneDebut = new Date(today.getFullYear(), today.getMonth(), 1).getTime();
+  else if(dettesHistoriquePeriode==='trimestre'){ var q=Math.floor(today.getMonth()/3)*3; borneDebut=new Date(today.getFullYear(),q,1).getTime(); }
+  else if(dettesHistoriquePeriode==='annee') borneDebut = new Date(today.getFullYear(), 0, 1).getTime();
+  else if(dettesHistoriquePeriode==='custom' && dettesHistoriqueDebut){
+    borneDebut = new Date(dettesHistoriqueDebut).setHours(0,0,0,0);
+    if(dettesHistoriqueFin) borneFin = new Date(dettesHistoriqueFin).setHours(23,59,59,999);
+  }
+  var historique = historiqueComplet.filter(function(h){
+    if(borneDebut>0 && h.datePaiement<borneDebut) return false;
+    if(borneFin && h.datePaiement>borneFin) return false;
+    return true;
+  });
+
+  // Rendue disponible pour la recherche live (declenchee par oninput,
+  // sans re-render complet) — deja filtree par la periode selectionnee.
+  _dettesHistoriquePeriodeFiltree = historique;
+
+  var totalPaye = historique.reduce(function(s,h){return s+h.montant;},0);
+
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+  html += '<h2 style="font-size:16px;font-weight:700;margin:0">Historique des paiements — Dettes fournisseurs</h2>';
+  html += '<button class="btn btn-sm" onclick="dettesFournVue=\'encours\';renderPage()">&#x2190; Retour aux dettes en cours</button>';
+  html += '</div>';
+
+  html += '<div class="card" style="padding:10px 14px;margin-bottom:12px">';
+  html += '<input class="inp" id="dettesHistoriqueRecherche" placeholder="Rechercher un fournisseur ou un article..." oninput="rechercherDettesHistorique(this.value)" autocomplete="off">';
+  html += '</div>';
+
+  html += '<div class="flex gap6" style="margin-bottom:16px;flex-wrap:wrap">';
+  ['mois','trimestre','annee','tous','custom'].forEach(function(p){
+    var lbl = {mois:'Ce mois', trimestre:'Ce trimestre', annee:'Cette annee', tous:'Tout', custom:'Personnalise'}[p];
+    html += '<button class="btn btn-sm'+(dettesHistoriquePeriode===p?' btn-primary':'')+'" data-dhp="'+p+'" onclick="setDettesHistoriquePeriodeByEl(this)">'+lbl+'</button>';
+  });
+  if(dettesHistoriquePeriode==='custom'){
+    html += '<input type="date" class="inp" style="width:auto" value="'+dettesHistoriqueDebut+'" onchange="dettesHistoriqueDebut=this.value;renderPage()">';
+    html += '<span class="xs muted">&rarr;</span>';
+    html += '<input type="date" class="inp" style="width:auto" value="'+dettesHistoriqueFin+'" onchange="dettesHistoriqueFin=this.value;renderPage()">';
+  }
+  html += '</div>';
+
+  html += '<div class="kgrid k2" style="margin-bottom:16px">';
+  html += kpi('Paiements enregistres', historique.length, '');
+  html += kpi('Total paye (periode)', totalPaye?totalPaye.toLocaleString('fr-FR')+' FCFA':'—', 'green');
+  html += '</div>';
+
+  html += '<div id="dettesHistoriqueTableWrap">';
+  html += htmlTableauDettesHistorique(historique);
+  html += '</div>';
+  return html;
+}
+
+// Construit le tableau seul (reutilise par le rendu initial ET la
+// recherche live, qui remplace uniquement ce bloc sans re-render complet).
+function htmlTableauDettesHistorique(historique){
+  if(!historique.length){
+    return '<div class="card"><div class="empty">Aucun paiement ne correspond a ces criteres.</div></div>';
+  }
+  var html = '<div class="card"><div class="tw"><table><thead><tr><th>Date de paiement</th><th>Fournisseur</th><th>Piece / Article</th><th style="text-align:right">Montant</th><th>Origine</th><th></th></tr></thead><tbody>';
+  historique.forEach(function(h){
+    html += '<tr>';
+    html += '<td class="xs">'+(h.datePaiement?new Date(h.datePaiement).toLocaleDateString('fr-FR'):'—')+'</td>';
+    html += '<td><strong>'+h.fournisseur+'</strong></td>';
+    html += '<td class="xs">'+h.piece+(h.immat?' <span class="muted">('+h.immat+')</span>':'')+'</td>';
+    html += '<td style="text-align:right;font-weight:700;font-family:monospace">'+h.montant.toLocaleString('fr-FR')+' FCFA</td>';
+    html += '<td><span class="badge '+(h.type==='manuel'?'b-purple':'b-blue')+'">'+(h.type==='manuel'?'Saisie manuelle':'Vehicule')+'</span></td>';
+    html += '<td><div class="flex gap6">';
+    if(h.type==='manuel'){
+      html += '<button class="btn btn-sm" data-dette-id="'+h.detteId+'" onclick="ouvrirModifDetteManuelleByEl(this)" title="Modifier cette dette">&#x270F;</button>';
+      html += '<button class="btn btn-sm" data-dette-id="'+h.detteId+'" onclick="annulerPaiementDetteManuelleByEl(this)" style="color:#A32D2D;border-color:#E0A0A0" title="Annuler ce paiement">&#x21BA; Annuler</button>';
+    } else {
+      html += '<button class="btn btn-sm" data-vid="'+h.vehId+'" data-lid="'+(h.ligneId||'')+'" onclick="annulerPaiementLigneFournByEl(this)" style="color:#A32D2D;border-color:#E0A0A0" title="Annuler ce paiement">&#x21BA; Annuler</button>';
+    }
+    html += '</div></td></tr>';
+  });
+  html += '</tbody></table></div></div>';
+  return html;
+}
+
+var _dettesHistoriquePeriodeFiltree = [];
+function rechercherDettesHistorique(texte){
+  var wrap = document.getElementById('dettesHistoriqueTableWrap');
+  if(!wrap) return;
+  var q = texte.trim().toLowerCase();
+  var resultats = q.length<2 ? _dettesHistoriquePeriodeFiltree : _dettesHistoriquePeriodeFiltree.filter(function(h){
+    return h.fournisseur.toLowerCase().indexOf(q)>=0 || h.piece.toLowerCase().indexOf(q)>=0;
+  });
+  wrap.innerHTML = htmlTableauDettesHistorique(resultats);
+}
+
+function setDettesHistoriquePeriodeByEl(el){
+  dettesHistoriquePeriode = el.getAttribute('data-dhp');
+  renderPage();
+}
+
 function pageDettesFournisseurs(){
+  if(dettesFournVue==='historique') return pageDettesFournisseursHistorique();
+
   var groupes = collecterDettesFournisseurs();
 
   // Statut global par fournisseur = le plus urgent parmi ses lignes
@@ -9603,7 +9714,7 @@ function pageDettesFournisseurs(){
 
   var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Dettes fournisseurs</h2>';
-  html += '<button class="btn btn-primary btn-sm" onclick="ouvrirAjoutDetteManuelle()">+ Ajouter une dette</button>';
+  html += '<div class="flex gap6"><button class="btn btn-sm" onclick="dettesFournVue=\'historique\';renderPage()">&#x1F4C3; Historique des paiements</button><button class="btn btn-primary btn-sm" onclick="ouvrirAjoutDetteManuelle()">+ Ajouter une dette</button></div>';
   html += '</div>';
 
   html += '<div class="card" style="margin-bottom:16px;border:2px solid #A32D2D;padding:12px 16px">';
@@ -9682,8 +9793,9 @@ function pageDettesFournisseurs(){
   // prestation vehicule) — cachee par defaut.
   html += '<div class="overlay" id="modalAjoutDetteManuelle" style="display:none" onclick="if(event.target===this)document.getElementById(\'modalAjoutDetteManuelle\').style.display=\'none\'">';
   html += '<div class="modal" style="max-width:420px">';
-  html += '<div class="mhead"><h2>+ Ajouter une dette fournisseur</h2><button class="btn btn-sm" onclick="document.getElementById(\'modalAjoutDetteManuelle\').style.display=\'none\'">X</button></div>';
+  html += '<div class="mhead"><h2 id="modalAjoutDetteManuelleTitre">+ Ajouter une dette fournisseur</h2><button class="btn btn-sm" onclick="document.getElementById(\'modalAjoutDetteManuelle\').style.display=\'none\'">X</button></div>';
   html += '<div class="mbody">';
+  html += '<input type="hidden" id="dm_edit_id" value="">';
   html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Fournisseur <span style="color:red">*</span></label>';
   html += '<select class="inp" id="dm_fournisseur"><option value="">-- Choisir --</option>';
   FOURNISSEURS.filter(function(f){return f.actif;}).forEach(function(f){ html += '<option value="'+f.id+'">'+f.nom+'</option>'; });
@@ -9754,15 +9866,35 @@ function marquerFournisseurPayeByEl(el){
 
 // ── Dettes fournisseurs manuelles : ajout, paiement, suppression ────────
 function ouvrirAjoutDetteManuelle(){
+  document.getElementById('dm_edit_id').value = '';
   document.getElementById('dm_fournisseur').value = '';
   document.getElementById('dm_piece').value = '';
   document.getElementById('dm_qte').value = 1;
   document.getElementById('dm_prixAchat').value = '';
   document.getElementById('dm_dateEcheance').value = '';
+  document.getElementById('modalAjoutDetteManuelleTitre').textContent = '+ Ajouter une dette fournisseur';
+  document.getElementById('modalAjoutDetteManuelle').style.display = 'flex';
+}
+
+// Reouvre la MEME modale, prerempli, pour corriger une dette manuelle
+// deja saisie — y compris si elle est deja marquee payee (erreur de
+// saisie sur le montant, la quantite, le fournisseur...).
+function ouvrirModifDetteManuelleByEl(btn){
+  var id = btn.getAttribute('data-dette-id');
+  var dm = DETTES_MANUELLES.find(function(x){return x.id===id;});
+  if(!dm) return;
+  document.getElementById('dm_edit_id').value = dm.id;
+  document.getElementById('dm_fournisseur').value = dm.fournisseurId||'';
+  document.getElementById('dm_piece').value = dm.piece||'';
+  document.getElementById('dm_qte').value = dm.qte||1;
+  document.getElementById('dm_prixAchat').value = dm.prixAchat||'';
+  document.getElementById('dm_dateEcheance').value = dm.dateEcheance ? new Date(dm.dateEcheance).toISOString().slice(0,10) : '';
+  document.getElementById('modalAjoutDetteManuelleTitre').textContent = '&#x270F; Modifier la dette'+(dm.paye?' (deja payee)':'');
   document.getElementById('modalAjoutDetteManuelle').style.display = 'flex';
 }
 
 function confirmerAjoutDetteManuelle(){
+  var editId = document.getElementById('dm_edit_id').value;
   var fournisseurId = document.getElementById('dm_fournisseur').value;
   var piece = document.getElementById('dm_piece').value.trim();
   var qte = parseInt(document.getElementById('dm_qte').value,10) || 1;
@@ -9774,16 +9906,88 @@ function confirmerAjoutDetteManuelle(){
   if(!prixAchat || prixAchat<=0){ alert('Indiquez un prix d\'achat valide.'); return; }
   if(!dateEcheanceStr){ alert('Indiquez une date d\'echeance.'); return; }
 
-  var auteur = currentUser ? (currentUser.login||currentUser.nom) : currentRole;
-  DETTES_MANUELLES.push({
-    id: 'dm_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),
-    fournisseurId: fournisseurId, piece: piece, qte: qte, prixAchat: prixAchat,
-    dateAchat: Date.now(), dateEcheance: new Date(dateEcheanceStr).getTime(),
-    paye: false, payeLe: null, auteur: auteur
-  });
+  if(editId){
+    // Modification d'une dette existante (payee ou non) — corrige une
+    // erreur de saisie sans perdre son statut de paiement.
+    var dm = DETTES_MANUELLES.find(function(x){return x.id===editId;});
+    if(!dm){ alert('Dette introuvable.'); return; }
+    dm.fournisseurId = fournisseurId; dm.piece = piece; dm.qte = qte;
+    dm.prixAchat = prixAchat; dm.dateEcheance = new Date(dateEcheanceStr).getTime();
+  } else {
+    var auteur = currentUser ? (currentUser.login||currentUser.nom) : currentRole;
+    DETTES_MANUELLES.push({
+      id: 'dm_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),
+      fournisseurId: fournisseurId, piece: piece, qte: qte, prixAchat: prixAchat,
+      dateAchat: Date.now(), dateEcheance: new Date(dateEcheanceStr).getTime(),
+      paye: false, payeLe: null, auteur: auteur
+    });
+  }
   saveDettesManuelles();
   document.getElementById('modalAjoutDetteManuelle').style.display = 'none';
   renderPage();
+}
+
+// Annule un paiement enregistre par erreur — remet la dette (manuelle ou
+// automatique) en attente, pour pouvoir la re-marquer correctement.
+function annulerPaiementDetteManuelleByEl(btn){
+  var id = btn.getAttribute('data-dette-id');
+  var dm = DETTES_MANUELLES.find(function(x){return x.id===id;});
+  if(!dm) return;
+  if(!confirm('Annuler le paiement de cette dette ("'+dm.piece+'") ? Elle redeviendra active dans les dettes en cours.')) return;
+  dm.paye = false;
+  dm.payeLe = null;
+  saveDettesManuelles();
+  renderPage();
+}
+
+function annulerPaiementLigneFournByEl(btn){
+  var vid = btn.getAttribute('data-vid');
+  var lid = btn.getAttribute('data-lid');
+  var v = vehicles.find(function(x){return x.id===vid;});
+  if(!v || !v.chiffrage || !v.chiffrage.lignes) return;
+  var cl = v.chiffrage.lignes.find(function(x){return (x.devisId||x.libreId||x.id)===lid;});
+  if(!cl) return;
+  if(!confirm('Annuler le paiement de cette piece ("'+cl.piece+'") ? Elle redeviendra active dans les dettes en cours.')) return;
+  cl.fournPaye = false;
+  cl.fournPayeLe = null;
+  saveV();
+  renderPage();
+}
+
+// Collecte l'HISTORIQUE des dettes fournisseurs DEJA PAYEES (auto +
+// manuelles) — sans cette liste, une fois payee, une dette disparaissait
+// completement, sans aucun moyen de la revoir ou de corriger une erreur
+// de saisie.
+function collecterHistoriquePaiementsFournisseurs(){
+  var historique = [];
+  vehicles.forEach(function(v){
+    if(!v.chiffrage || !v.chiffrage.lignes) return;
+    v.chiffrage.lignes.forEach(function(cl){
+      if(!(cl.piece||'').trim()) return;
+      if(cl.paiement!=='credit') return;
+      if(!cl.fournPaye) return;
+      if(!cl.fournisseurId) return;
+      var f = FOURNISSEURS.find(function(x){return x.id===cl.fournisseurId;});
+      if(!f) return;
+      var montant = (parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);
+      historique.push({
+        type:'auto', fournisseur:f.nom,
+        piece:cl.piece, montant:montant, datePaiement:cl.fournPayeLe||0,
+        vehId:v.id, ligneId: cl.devisId||cl.libreId||cl.id||null, immat:v.immat
+      });
+    });
+  });
+  DETTES_MANUELLES.forEach(function(dm){
+    if(!dm.paye) return;
+    var f = FOURNISSEURS.find(function(x){return x.id===dm.fournisseurId;});
+    historique.push({
+      type:'manuel', fournisseur: f?f.nom:'—',
+      piece:dm.piece, montant:(parseFloat(dm.prixAchat)||0)*(parseInt(dm.qte)||1),
+      datePaiement:dm.payeLe||0, detteId:dm.id
+    });
+  });
+  historique.sort(function(a,b){return b.datePaiement-a.datePaiement;});
+  return historique;
 }
 
 function marquerDetteManuelleByEl(btn){
