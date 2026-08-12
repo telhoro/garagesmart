@@ -1562,7 +1562,14 @@ function syncBanquesFromFirebase(callback){
 function initBanques(){
   if(!localStorage.getItem('gos_banques_init')){
     BANQUES = SAMPLE_BANQUES.map(function(b){return Object.assign({},b);});
-    saveBanques(); localStorage.setItem('gos_banques_init','1');
+    // IMPORTANT : ecriture LOCALE uniquement ici, jamais de poussee vers
+    // Firebase — sur un nouvel appareil, ce seed par defaut ne doit pas
+    // ecraser prematurement les vraies donnees du compte avant meme que
+    // syncBanquesFromFirebase() ait pu verifier ce qui existe deja cote
+    // cloud. Seule syncBanquesFromFirebase() decide, en connaissance de
+    // cause, s'il faut pousser des donnees locales vers Firebase.
+    localStorage.setItem('gos_banques', JSON.stringify(BANQUES));
+    localStorage.setItem('gos_banques_init','1');
   } else {
     try{ BANQUES = JSON.parse(localStorage.getItem('gos_banques'))||[]; }catch(e){ BANQUES=[]; }
   }
