@@ -977,6 +977,10 @@ tr:hover td{background:#faf9f7}
         <option value="10">Octobre</option><option value="11">Novembre</option><option value="12">Decembre</option>
       </select>
     </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="fr"><label class="fl">Date de debut <span style="color:red">*</span></label><input type="date" class="inp" id="chargeFixeDateDebut"></div>
+      <div class="fr"><label class="fl">Date de fin (optionnel)</label><input type="date" class="inp" id="chargeFixeDateFin"></div>
+    </div>
   </div>
   <div class="mfoot">
     <button class="btn" onclick="closeChargeFixeForm()">Annuler</button>
@@ -5139,6 +5143,27 @@ function migrerFactureDeposeeLe(){
   return nbMigres;
 }
 
+// Migration retroactive : les charges fixes creees AVANT l'introduction
+// du suivi de paiement (dateDebut/echeancesPayees) n'ont pas ce champ.
+// Sans cette migration, le moteur d'echeancier remonterait par defaut 24
+// mois en arriere et ferait apparaitre a tort un enorme arriere sur des
+// charges parfaitement a jour. Fixe leur point de depart au debut du mois
+// EN COURS (pas de rappel retroactif sur des mois anterieurs a
+// l'activation de cette fonctionnalite). Execute une seule fois par
+// charge (ne touche jamais un champ deja renseigne).
+function migrerDateDebutChargesFixes(){
+  var nbMigres = 0;
+  var debutMoisCourant = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+  CHARGES_FIXES.forEach(function(c){
+    if(c.dateDebut) return;
+    c.dateDebut = debutMoisCourant;
+    if(!c.echeancesPayees) c.echeancesPayees = [];
+    nbMigres++;
+  });
+  if(nbMigres>0) saveChargesFixes();
+  return nbMigres;
+}
+
 function advance(id){
   for(var i=0;i<vehicles.length;i++){
     if(vehicles[i].id===id){
@@ -9181,6 +9206,11 @@ function pageArchives(){
 var dettesFournExpand = {}; // {fournisseurId: true/false}
 var dettesFournFiltre = 'toutes'; // 'toutes','retard','a_echoir','planifie'
 var dettesFournVue = 'encours'; // 'encours','historique'
+var chargesFixesVue = 'liste'; // 'liste','paiement','historique'
+var chargesFixesHistoriquePeriode = 'tous'; // 'mois','trimestre','annee','tous','custom'
+var chargesFixesHistoriqueDebut = '';
+var chargesFixesHistoriqueFin = '';
+var _chargesFixesHistoriquePeriodeFiltree = [];
 var dettesHistoriquePeriode = 'tous'; // 'mois','trimestre','annee','tous','custom'
 var dettesHistoriqueDebut = '';
 var dettesHistoriqueFin = '';
@@ -10703,10 +10733,208 @@ function prochainEcheanceCharge(c){
   return candidat.getTime();
 }
 
+// Marque UN MOIS PRECIS d'une charge fixe comme paye — contrairement aux
+// engagements bancaires (qui marquent toujours la plus ancienne echeance
+// automatiquement), ici chaque mois affiche est cliquable individuellement,
+// pour laisser le choix de regler un mois precis parmi plusieurs dus.
+function marquerChargeFixeEcheanceByEl(btn){
+  var id = btn.getAttribute('data-cfid');
+  var dateEcheance = parseInt(btn.getAttribute('data-echeance'),10);
+  var c = CHARGES_FIXES.find(function(x){return x.id===id;});
+  if(!c) return;
+  var montant = parseFloat(c.montant)||0;
+  if(!confirm('Marquer "'+c.nom+'" — '+new Date(dateEcheance).toLocaleDateString('fr-FR', {month:'long', year:'numeric'})+' ('+montant.toLocaleString('fr-FR')+' FCFA) comme payee ?')) return;
+  if(!c.echeancesPayees) c.echeancesPayees = [];
+  c.echeancesPayees.push(dateEcheance);
+  saveChargesFixes();
+  renderPage();
+}
+
+// Page de paiement des charges fixes : pour chaque charge active, liste
+// TOUS les mois dus (y compris les mois precedents non regles, ex: mars
+// non paye alors qu'on est en avril), chacun avec sa propre option
+// "Payer", plus un cumul du montant total du pour cette charge.
+function pageChargesFixesPaiement(){
+  var maintenant = Date.now();
+  var moisLabels = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
+
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+  html += '<h2 style="font-size:16px;font-weight:700;margin:0">Paiement des charges fixes</h2>';
+  html += '<button class="btn btn-sm" onclick="chargesFixesVue=\'liste\';renderPage()">&#x2190; Retour a la liste</button>';
+  html += '</div>';
+
+  var actives = CHARGES_FIXES.filter(function(c){return c.actif;});
+  var lignesCharges = actives.map(function(c){
+    var impayees = echeancesImpayees(c).sort(function(a,b){return a-b;});
+    var montant = parseFloat(c.montant)||0;
+    return {charge:c, moisDus: impayees, totalCumule: impayees.length*montant};
+  });
+
+  var totalGeneralDu = lignesCharges.reduce(function(s,l){return s+l.totalCumule;},0);
+  var nbChargesEnRetard = lignesCharges.filter(function(l){return l.moisDus.length>0;}).length;
+
+  html += '<div class="kgrid k2" style="margin-bottom:16px">';
+  html += kpi('Charges avec mois impayes', nbChargesEnRetard, nbChargesEnRetard>0?'red':'green');
+  html += kpi('Total du (toutes charges)', totalGeneralDu?totalGeneralDu.toLocaleString('fr-FR')+' FCFA':'—', totalGeneralDu>0?'red':'green');
+  html += '</div>';
+
+  if(!lignesCharges.length){
+    html += '<div class="card"><div class="empty">Aucune charge fixe active.</div></div>';
+    return html;
+  }
+
+  html += '<div class="card"><div class="tw"><table><thead><tr><th>Charge</th><th>Mois dus</th><th style="text-align:right">Cumul du</th></tr></thead><tbody>';
+  lignesCharges.forEach(function(l){
+    var c = l.charge;
+    html += '<tr>';
+    html += '<td style="vertical-align:top;padding-top:10px"><strong>'+c.nom+'</strong><div class="xs muted">'+(parseFloat(c.montant)||0).toLocaleString('fr-FR')+' FCFA / mois</div></td>';
+    html += '<td>';
+    if(!l.moisDus.length){
+      html += '<span class="badge b-green">&#x2714; A jour</span>';
+    } else {
+      l.moisDus.forEach(function(d){
+        var dt = new Date(d);
+        var enRetard = d<maintenant;
+        html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;'+(enRetard?'':'')+'">';
+        html += '<span class="xs" style="'+(enRetard?'color:#A32D2D;font-weight:700':'')+'">'+moisLabels[dt.getMonth()]+' '+dt.getFullYear()+(enRetard?' &#x26A0;':'')+'</span>';
+        html += '<button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 8px" data-cfid="'+c.id+'" data-echeance="'+d+'" onclick="marquerChargeFixeEcheanceByEl(this)">Payer</button>';
+        html += '</div>';
+      });
+    }
+    html += '</td>';
+    html += '<td style="text-align:right;vertical-align:top;padding-top:10px;font-weight:700;font-family:monospace;color:'+(l.totalCumule>0?'#A32D2D':'#3B6D11')+'">'+(l.totalCumule?l.totalCumule.toLocaleString('fr-FR')+' FCFA':'—')+'</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+  return html;
+}
+
+// Collecte CHAQUE versement individuel de charges fixes (pas un resume
+// par charge) — un loyer paye en 3 fois distinctes affiche bien 3 lignes.
+function collecterHistoriquePaiementsChargesFixes(){
+  var historique = [];
+  CHARGES_FIXES.forEach(function(c){
+    if(!c.echeancesPayees || !c.echeancesPayees.length) return;
+    c.echeancesPayees.forEach(function(datePaiement, idx){
+      historique.push({
+        chargeId: c.id, nom: c.nom, montant: parseFloat(c.montant)||0,
+        datePaiement: datePaiement, paiementIndex: idx
+      });
+    });
+  });
+  historique.sort(function(a,b){return b.datePaiement-a.datePaiement;});
+  return historique;
+}
+
+// Annule un versement precis (par index) — corrige une erreur de saisie
+// sans affecter les autres versements de la meme charge.
+function annulerPaiementChargeFixeByEl(btn){
+  var id = btn.getAttribute('data-cfid');
+  var idx = parseInt(btn.getAttribute('data-paiement-idx'),10);
+  var c = CHARGES_FIXES.find(function(x){return x.id===id;});
+  if(!c || !c.echeancesPayees || !c.echeancesPayees[idx]) return;
+  var dateVersement = c.echeancesPayees[idx];
+  if(!confirm('Annuler le paiement de "'+c.nom+'" pour '+new Date(dateVersement).toLocaleDateString('fr-FR',{month:'long',year:'numeric'})+' ? Ce mois redeviendra du.')) return;
+  c.echeancesPayees.splice(idx,1);
+  saveChargesFixes();
+  renderPage();
+}
+
+function pageChargesFixesHistorique(){
+  var historiqueComplet = collecterHistoriquePaiementsChargesFixes();
+
+  var today = new Date();
+  var borneDebut = 0, borneFin = null;
+  if(chargesFixesHistoriquePeriode==='mois') borneDebut = new Date(today.getFullYear(), today.getMonth(), 1).getTime();
+  else if(chargesFixesHistoriquePeriode==='trimestre'){ var q=Math.floor(today.getMonth()/3)*3; borneDebut=new Date(today.getFullYear(),q,1).getTime(); }
+  else if(chargesFixesHistoriquePeriode==='annee') borneDebut = new Date(today.getFullYear(), 0, 1).getTime();
+  else if(chargesFixesHistoriquePeriode==='custom' && chargesFixesHistoriqueDebut){
+    borneDebut = new Date(chargesFixesHistoriqueDebut).setHours(0,0,0,0);
+    if(chargesFixesHistoriqueFin) borneFin = new Date(chargesFixesHistoriqueFin).setHours(23,59,59,999);
+  }
+  var historique = historiqueComplet.filter(function(h){
+    if(borneDebut>0 && h.datePaiement<borneDebut) return false;
+    if(borneFin && h.datePaiement>borneFin) return false;
+    return true;
+  });
+  _chargesFixesHistoriquePeriodeFiltree = historique;
+
+  var totalPaye = historique.reduce(function(s,h){return s+h.montant;},0);
+
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+  html += '<h2 style="font-size:16px;font-weight:700;margin:0">Historique des paiements — Charges fixes</h2>';
+  html += '<button class="btn btn-sm" onclick="chargesFixesVue=\'liste\';renderPage()">&#x2190; Retour aux charges fixes</button>';
+  html += '</div>';
+
+  html += '<div class="card" style="padding:10px 14px;margin-bottom:12px">';
+  html += '<input class="inp" id="chargesFixesHistoriqueRecherche" placeholder="Rechercher une charge (ex: loyer, salaires...)..." oninput="rechercherChargesFixesHistorique(this.value)" autocomplete="off">';
+  html += '</div>';
+
+  html += '<div class="flex gap6" style="margin-bottom:16px;flex-wrap:wrap">';
+  ['mois','trimestre','annee','tous','custom'].forEach(function(p){
+    var lbl = {mois:'Ce mois', trimestre:'Ce trimestre', annee:'Cette annee', tous:'Tout', custom:'Personnalise'}[p];
+    html += '<button class="btn btn-sm'+(chargesFixesHistoriquePeriode===p?' btn-primary':'')+'" data-cfhp="'+p+'" onclick="setChargesFixesHistoriquePeriodeByEl(this)">'+lbl+'</button>';
+  });
+  if(chargesFixesHistoriquePeriode==='custom'){
+    html += '<input type="date" class="inp" style="width:auto" value="'+chargesFixesHistoriqueDebut+'" onchange="chargesFixesHistoriqueDebut=this.value;renderPage()">';
+    html += '<span class="xs muted">&rarr;</span>';
+    html += '<input type="date" class="inp" style="width:auto" value="'+chargesFixesHistoriqueFin+'" onchange="chargesFixesHistoriqueFin=this.value;renderPage()">';
+  }
+  html += '</div>';
+
+  html += '<div class="kgrid k2" style="margin-bottom:16px">';
+  html += kpi('Paiements enregistres', historique.length, '');
+  html += kpi('Total paye (periode)', totalPaye?totalPaye.toLocaleString('fr-FR')+' FCFA':'—', 'green');
+  html += '</div>';
+
+  html += '<div id="chargesFixesHistoriqueTableWrap">';
+  html += htmlTableauChargesFixesHistorique(historique);
+  html += '</div>';
+  return html;
+}
+
+function htmlTableauChargesFixesHistorique(historique){
+  if(!historique.length){
+    return '<div class="card"><div class="empty">Aucun paiement ne correspond a ces criteres.</div></div>';
+  }
+  var moisLabels = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
+  var html = '<div class="card"><div class="tw"><table><thead><tr><th>Date de paiement</th><th>Charge</th><th>Mois regle</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
+  historique.forEach(function(h){
+    var dt = new Date(h.datePaiement);
+    html += '<tr>';
+    html += '<td class="xs">'+dt.toLocaleDateString('fr-FR')+'</td>';
+    html += '<td><strong>'+h.nom+'</strong></td>';
+    html += '<td class="xs">'+moisLabels[dt.getMonth()]+' '+dt.getFullYear()+'</td>';
+    html += '<td style="text-align:right;font-weight:700;font-family:monospace">'+h.montant.toLocaleString('fr-FR')+' FCFA</td>';
+    html += '<td><button class="btn btn-sm" data-cfid="'+h.chargeId+'" data-paiement-idx="'+h.paiementIndex+'" onclick="annulerPaiementChargeFixeByEl(this)" style="color:#A32D2D;border-color:#E0A0A0" title="Annuler ce versement">&#x21BA; Annuler</button></td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+  return html;
+}
+
+function rechercherChargesFixesHistorique(texte){
+  var wrap = document.getElementById('chargesFixesHistoriqueTableWrap');
+  if(!wrap) return;
+  var q = texte.trim().toLowerCase();
+  var resultats = q.length<2 ? _chargesFixesHistoriquePeriodeFiltree : _chargesFixesHistoriquePeriodeFiltree.filter(function(h){
+    return h.nom.toLowerCase().indexOf(q)>=0;
+  });
+  wrap.innerHTML = htmlTableauChargesFixesHistorique(resultats);
+}
+
+function setChargesFixesHistoriquePeriodeByEl(el){
+  chargesFixesHistoriquePeriode = el.getAttribute('data-cfhp');
+  renderPage();
+}
+
 function pageChargesFixes(){
+  if(chargesFixesVue==='paiement') return pageChargesFixesPaiement();
+  if(chargesFixesVue==='historique') return pageChargesFixesHistorique();
+
   var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Charges fixes</h2>';
-  html += '<button class="btn btn-primary btn-sm" onclick="openChargeFixeForm(null)">+ Ajouter une charge</button>';
+  html += '<div class="flex gap6"><button class="btn btn-sm" onclick="chargesFixesVue=\'historique\';renderPage()">&#x1F4C3; Historique des paiements</button><button class="btn btn-sm" onclick="chargesFixesVue=\'paiement\';renderPage()">&#x1F4B3; Paiement des charges</button><button class="btn btn-primary btn-sm" onclick="openChargeFixeForm(null)">+ Ajouter une charge</button></div>';
   html += '</div>';
 
   var actives = CHARGES_FIXES.filter(function(c){return c.actif;});
@@ -10767,6 +10995,9 @@ function openChargeFixeForm(id){
   document.getElementById('chargeFixePeriodicite').value = c ? c.periodicite : 'mensuel';
   document.getElementById('chargeFixeJour').value = c ? (c.jourEcheance||5) : 5;
   document.getElementById('chargeFixeMois').value = c ? (c.moisEcheance||(new Date().getMonth()+1)) : (new Date().getMonth()+1);
+  var debutParDefaut = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  document.getElementById('chargeFixeDateDebut').value = c && c.dateDebut ? new Date(c.dateDebut).toISOString().slice(0,10) : debutParDefaut.toISOString().slice(0,10);
+  document.getElementById('chargeFixeDateFin').value = c && c.dateFin ? new Date(c.dateFin).toISOString().slice(0,10) : '';
   onChangePeriodiciteChargeFixe();
   document.getElementById('modalChargeFixe').style.display = 'flex';
 }
@@ -10779,11 +11010,17 @@ function submitChargeFixeForm(){
   var jourEcheance = parseInt(document.getElementById('chargeFixeJour').value,10)||1;
   if(jourEcheance<1) jourEcheance=1; if(jourEcheance>31) jourEcheance=31;
   var moisEcheance = parseInt(document.getElementById('chargeFixeMois').value,10)||1;
+  var dateDebutStr = document.getElementById('chargeFixeDateDebut').value;
+  var dateFinStr = document.getElementById('chargeFixeDateFin').value;
+  if(!dateDebutStr){ alert('La date de debut est obligatoire.'); return; }
+  var dateDebut = new Date(dateDebutStr).getTime();
+  var dateFin = dateFinStr ? new Date(dateFinStr).getTime() : null;
+  if(dateFin && dateFin<dateDebut){ alert('La date de fin doit etre posterieure a la date de debut.'); return; }
   if(chargeFixeEditId){
     var c = CHARGES_FIXES.find(function(x){return x.id===chargeFixeEditId;});
-    if(c){ c.nom=nom; c.montant=montant; c.periodicite=periodicite; c.jourEcheance=jourEcheance; c.moisEcheance=moisEcheance; }
+    if(c){ c.nom=nom; c.montant=montant; c.periodicite=periodicite; c.jourEcheance=jourEcheance; c.moisEcheance=moisEcheance; c.dateDebut=dateDebut; c.dateFin=dateFin; }
   } else {
-    CHARGES_FIXES.push({id:'cf'+Date.now(), nom:nom, montant:montant, periodicite:periodicite, jourEcheance:jourEcheance, moisEcheance:moisEcheance, actif:true});
+    CHARGES_FIXES.push({id:'cf'+Date.now(), nom:nom, montant:montant, periodicite:periodicite, jourEcheance:jourEcheance, moisEcheance:moisEcheance, actif:true, dateDebut:dateDebut, dateFin:dateFin, echeancesPayees:[]});
   }
   saveChargesFixes(); closeChargeFixeForm(); renderPage();
 }
@@ -24810,7 +25047,10 @@ function tryInitFirebase(){
     // Sync personnel et comptes depuis Firebase après connexion
     setTimeout(function(){
       syncStockFromFirebase();
-      syncChargesFixesFromFirebase();
+      syncChargesFixesFromFirebase(function(){
+        migrerDateDebutChargesFixes();
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      });
       syncEngagementsBancairesFromFirebase();
       syncForfaitFacturesFromFirebase(function(){
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
@@ -25102,6 +25342,7 @@ window.onload=function(){
 
   initData();vehicles=loadV();
   migrerFactureDeposeeLe(); // migration retroactive (voir commentaire de la fonction)
+  migrerDateDebutChargesFixes(); // idem, pour le suivi de paiement des charges fixes
   // Firebase sera initialisé via onFirebaseDatabaseLoaded()
   // Vérifier s'il y a une session active (persiste après actualisation)
   var session = null;
