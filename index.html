@@ -6221,6 +6221,83 @@ function rentaForfaitClients(dossiers){
 var analysePiecesFiltre = 'tous';
 var analysePiecesVue = 'pieces'; // 'pieces','fournisseurs','vehicules'
 
+// Recherche contextuelle d'articles dans Analyse pieces : retrouve toutes
+// les lignes d'achat dont le nom de piece contient le texte saisi, avec
+// comparaison du prix par fournisseur, quantite totale et cout total
+// d'achat de la selection — pour analyser finement un article precis.
+var _analysePiecesToutesLignes = [];
+function rechercherArticlesAnalysePieces(texte){
+  var zone = document.getElementById('analysePiecesRechercheResultats');
+  if(!zone) return;
+  var q = texte.trim().toLowerCase();
+  if(q.length<2){ zone.innerHTML=''; return; }
+
+  var lignesTrouvees = _analysePiecesToutesLignes.filter(function(l){
+    return l.piece.toLowerCase().indexOf(q)>=0;
+  });
+
+  if(!lignesTrouvees.length){
+    zone.innerHTML = '<div class="card xs muted" style="padding:10px 14px;margin-top:8px">Aucun article trouve pour "'+texte+'".</div>';
+    return;
+  }
+
+  var totalQte = lignesTrouvees.reduce(function(s,l){return s+l.qte;},0);
+  var totalAchat = lignesTrouvees.reduce(function(s,l){return s+l.montantAchat;},0);
+
+  var parFournisseur = {};
+  lignesTrouvees.forEach(function(l){
+    var fourn = l.fournisseurNom || '—';
+    if(!parFournisseur[fourn]) parFournisseur[fourn] = {fournisseur:fourn, qte:0, montantTotal:0, prixMin:Infinity, prixMax:0};
+    parFournisseur[fourn].qte += l.qte;
+    parFournisseur[fourn].montantTotal += l.montantAchat;
+    parFournisseur[fourn].prixMin = Math.min(parFournisseur[fourn].prixMin, l.prixAchat);
+    parFournisseur[fourn].prixMax = Math.max(parFournisseur[fourn].prixMax, l.prixAchat);
+  });
+  var listeFournisseurs = Object.keys(parFournisseur).map(function(k){
+    var f = parFournisseur[k];
+    f.prixMoyen = f.qte>0 ? Math.round(f.montantTotal/f.qte) : 0;
+    return f;
+  }).sort(function(a,b){return a.prixMoyen-b.prixMoyen;});
+
+  var html = '<div class="kgrid k3" style="margin-top:8px;margin-bottom:12px">';
+  html += kpi('Lignes trouvees', lignesTrouvees.length, '');
+  html += kpi('Quantite totale', totalQte, 'blue');
+  html += kpi('Cout total d\'achat', totalAchat.toLocaleString('fr-FR')+' FCFA', 'red');
+  html += '</div>';
+
+  html += '<div class="card" style="margin-bottom:16px"><div class="card-head">Comparaison par fournisseur pour "'+texte+'"</div>';
+  html += '<div class="tw"><table><thead><tr><th>Fournisseur</th><th style="text-align:center">Qte achetee</th><th style="text-align:right">Prix min</th><th style="text-align:right">Prix moyen</th><th style="text-align:right">Prix max</th><th style="text-align:right">Total depense</th></tr></thead><tbody>';
+  listeFournisseurs.forEach(function(f, idx){
+    html += '<tr'+(idx===0?' style="background:#EAF3DE"':'')+'>';
+    html += '<td><strong>'+f.fournisseur+'</strong>'+(idx===0?' <span class="xs" style="color:#3B6D11">&#x2714; Moins cher</span>':'')+'</td>';
+    html += '<td style="text-align:center">'+f.qte+'</td>';
+    html += '<td style="text-align:right">'+f.prixMin.toLocaleString('fr-FR')+'</td>';
+    html += '<td style="text-align:right;font-weight:700">'+f.prixMoyen.toLocaleString('fr-FR')+'</td>';
+    html += '<td style="text-align:right">'+f.prixMax.toLocaleString('fr-FR')+'</td>';
+    html += '<td style="text-align:right;font-weight:700;font-family:monospace">'+f.montantTotal.toLocaleString('fr-FR')+' FCFA</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+
+  html += '<div class="card"><div class="card-head">Detail des achats ('+lignesTrouvees.length+' ligne'+(lignesTrouvees.length>1?'s':'')+')</div>';
+  html += '<div class="tw"><table><thead><tr><th>Date</th><th>Article</th><th>Vehicule</th><th>Client</th><th>Fournisseur</th><th style="text-align:center">Qte</th><th style="text-align:right">Prix unit.</th><th style="text-align:right">Total</th></tr></thead><tbody>';
+  lignesTrouvees.sort(function(a,b){return b.date-a.date;}).forEach(function(l){
+    html += '<tr>';
+    html += '<td class="xs">'+(l.date?new Date(l.date).toLocaleDateString('fr-FR'):'—')+'</td>';
+    html += '<td class="xs">'+l.piece+'</td>';
+    html += '<td class="xs muted">'+(l.immat||'—')+'</td>';
+    html += '<td class="xs muted">'+(l.client||'—')+'</td>';
+    html += '<td class="xs">'+l.fournisseurNom+'</td>';
+    html += '<td style="text-align:center">'+l.qte+'</td>';
+    html += '<td style="text-align:right">'+l.prixAchat.toLocaleString('fr-FR')+'</td>';
+    html += '<td style="text-align:right;font-weight:700">'+l.montantAchat.toLocaleString('fr-FR')+'</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+
+  zone.innerHTML = html;
+}
+
 function pageAnalysePieces(){
   var today = new Date();
   var borneDebut = 0;
@@ -6266,7 +6343,16 @@ function pageAnalysePieces(){
   toutesLignes.forEach(function(l){nbDistinct[l.piece.toLowerCase()]=1;});
   var nbRef = Object.keys(nbDistinct).length;
 
+  // Rendue disponible pour la barre de recherche (declenchee par oninput,
+  // sans re-render complet de la page).
+  _analysePiecesToutesLignes = toutesLignes;
+
   var html = '';
+
+  html += '<div class="card" style="padding:10px 14px;margin-bottom:8px">';
+  html += '<input class="inp" id="analysePiecesRecherche" placeholder="Rechercher un article achete (ex: filtre a huile, plaquettes...)..." oninput="rechercherArticlesAnalysePieces(this.value)" autocomplete="off">';
+  html += '</div>';
+  html += '<div id="analysePiecesRechercheResultats" style="margin-bottom:16px"></div>';
 
   // Filtres
   html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">';
