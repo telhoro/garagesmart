@@ -989,6 +989,19 @@ tr:hover td{background:#faf9f7}
 </div>
 </div>
 
+<div class="overlay" id="modalPaiementChargeFixe" style="display:none" onclick="if(event.target===this)fermerModalPaiementChargeFixe()">
+<div class="modal" style="max-width:400px">
+  <div class="mhead"><h2 id="pcfModalTitre">Paiement</h2><button class="btn btn-sm" onclick="fermerModalPaiementChargeFixe()">X</button></div>
+  <div class="mbody">
+    <input type="hidden" id="pcfModalChargeId"><input type="hidden" id="pcfModalDateEcheance">
+    <div class="xs muted" style="margin-bottom:10px">Reste du pour ce mois : <strong id="pcfModalResteDu" style="color:#A32D2D"></strong></div>
+    <div class="fr"><label class="fl">Montant a regler (FCFA) <span style="color:red">*</span></label><input class="inp" type="number" min="1" id="pcfModalMontant"></div>
+    <div class="xs muted" style="margin-top:6px">Un montant inferieur au reste du enregistre un paiement PARTIEL — le mois reste actif pour le solde restant, et ce versement figurera dans l'historique.</div>
+  </div>
+  <div class="mfoot"><button class="btn" onclick="fermerModalPaiementChargeFixe()">Annuler</button><button class="btn btn-primary" onclick="confirmerPaiementChargeFixe()">Enregistrer le paiement</button></div>
+</div>
+</div>
+
 <div class="overlay" id="modalEngagement" style="display:none" onclick="if(event.target===this)closeEngagementForm()">
 <div class="modal" style="max-width:420px">
   <div class="mhead"><h2>Engagement bancaire</h2><button class="btn btn-sm" onclick="closeEngagementForm()">X</button></div>
@@ -10742,11 +10755,30 @@ function marquerChargeFixeEcheanceByEl(btn){
   var dateEcheance = parseInt(btn.getAttribute('data-echeance'),10);
   var c = CHARGES_FIXES.find(function(x){return x.id===id;});
   if(!c) return;
-  var montant = parseFloat(c.montant)||0;
-  if(!confirm('Marquer "'+c.nom+'" — '+new Date(dateEcheance).toLocaleDateString('fr-FR', {month:'long', year:'numeric'})+' ('+montant.toLocaleString('fr-FR')+' FCFA) comme payee ?')) return;
-  if(!c.echeancesPayees) c.echeancesPayees = [];
-  c.echeancesPayees.push(dateEcheance);
+  var reste = resteDuEcheance(c, dateEcheance);
+  document.getElementById('pcfModalTitre').textContent = 'Paiement — '+c.nom+' ('+new Date(dateEcheance).toLocaleDateString('fr-FR',{month:'long',year:'numeric'})+')';
+  document.getElementById('pcfModalChargeId').value = id;
+  document.getElementById('pcfModalDateEcheance').value = dateEcheance;
+  document.getElementById('pcfModalResteDu').textContent = reste.toLocaleString('fr-FR')+' FCFA';
+  document.getElementById('pcfModalMontant').value = reste;
+  document.getElementById('pcfModalMontant').max = reste;
+  document.getElementById('modalPaiementChargeFixe').style.display = 'flex';
+}
+function fermerModalPaiementChargeFixe(){
+  document.getElementById('modalPaiementChargeFixe').style.display = 'none';
+}
+function confirmerPaiementChargeFixe(){
+  var id = document.getElementById('pcfModalChargeId').value;
+  var dateEcheance = parseInt(document.getElementById('pcfModalDateEcheance').value,10);
+  var montantSaisi = parseFloat(document.getElementById('pcfModalMontant').value);
+  var c = CHARGES_FIXES.find(function(x){return x.id===id;});
+  if(!c){ alert('Charge introuvable.'); return; }
+  if(!montantSaisi || montantSaisi<=0){ alert('Indiquez un montant valide.'); return; }
+  var reste = resteDuEcheance(c, dateEcheance);
+  if(montantSaisi>reste){ alert('Le montant saisi depasse le reste du ('+reste.toLocaleString('fr-FR')+' FCFA).'); return; }
+  enregistrerPaiementEcheance(c, dateEcheance, montantSaisi);
   saveChargesFixes();
+  fermerModalPaiementChargeFixe();
   renderPage();
 }
 
@@ -10766,8 +10798,8 @@ function pageChargesFixesPaiement(){
   var actives = CHARGES_FIXES.filter(function(c){return c.actif;});
   var lignesCharges = actives.map(function(c){
     var impayees = echeancesImpayees(c).sort(function(a,b){return a-b;});
-    var montant = parseFloat(c.montant)||0;
-    return {charge:c, moisDus: impayees, totalCumule: impayees.length*montant};
+    var totalCumule = impayees.reduce(function(s,d){return s+resteDuEcheance(c,d);},0);
+    return {charge:c, moisDus: impayees, totalCumule: totalCumule};
   });
 
   var totalGeneralDu = lignesCharges.reduce(function(s,l){return s+l.totalCumule;},0);
@@ -10795,8 +10827,13 @@ function pageChargesFixesPaiement(){
       l.moisDus.forEach(function(d){
         var dt = new Date(d);
         var enRetard = d<maintenant;
+        var resteMois = resteDuEcheance(c, d);
+        var estPartiel = resteMois < (parseFloat(c.montant)||0);
         html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;'+(enRetard?'':'')+'">';
         html += '<span class="xs" style="'+(enRetard?'color:#A32D2D;font-weight:700':'')+'">'+moisLabels[dt.getMonth()]+' '+dt.getFullYear()+(enRetard?' &#x26A0;':'')+'</span>';
+        if(estPartiel){
+          html += '<span class="xs muted">(reste '+resteMois.toLocaleString('fr-FR')+' FCFA sur '+(parseFloat(c.montant)||0).toLocaleString('fr-FR')+')</span>';
+        }
         html += '<button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 8px" data-cfid="'+c.id+'" data-echeance="'+d+'" onclick="marquerChargeFixeEcheanceByEl(this)">Payer</button>';
         html += '</div>';
       });
@@ -10815,10 +10852,17 @@ function collecterHistoriquePaiementsChargesFixes(){
   var historique = [];
   CHARGES_FIXES.forEach(function(c){
     if(!c.echeancesPayees || !c.echeancesPayees.length) return;
-    c.echeancesPayees.forEach(function(datePaiement, idx){
+    c.echeancesPayees.forEach(function(entry, idx){
+      // Ancien format (timestamp brut = paiement complet implicite) ou
+      // nouveau format (objet {dateEcheance, datePaiement, montant},
+      // permettant un versement partiel).
+      var estAncienFormat = typeof entry==='number';
+      var dateEcheance = estAncienFormat ? entry : entry.dateEcheance;
+      var datePaiement = estAncienFormat ? entry : (entry.datePaiement||entry.dateEcheance);
+      var montant = estAncienFormat ? (parseFloat(c.montant)||0) : (parseFloat(entry.montant)||0);
       historique.push({
-        chargeId: c.id, nom: c.nom, montant: parseFloat(c.montant)||0,
-        datePaiement: datePaiement, paiementIndex: idx
+        chargeId: c.id, nom: c.nom, montant: montant,
+        dateEcheance: dateEcheance, datePaiement: datePaiement, paiementIndex: idx
       });
     });
   });
@@ -10827,14 +10871,18 @@ function collecterHistoriquePaiementsChargesFixes(){
 }
 
 // Annule un versement precis (par index) — corrige une erreur de saisie
-// sans affecter les autres versements de la meme charge.
+// sans affecter les autres versements de la meme charge (y compris un
+// versement partiel parmi plusieurs sur le meme mois).
 function annulerPaiementChargeFixeByEl(btn){
   var id = btn.getAttribute('data-cfid');
   var idx = parseInt(btn.getAttribute('data-paiement-idx'),10);
   var c = CHARGES_FIXES.find(function(x){return x.id===id;});
-  if(!c || !c.echeancesPayees || !c.echeancesPayees[idx]) return;
-  var dateVersement = c.echeancesPayees[idx];
-  if(!confirm('Annuler le paiement de "'+c.nom+'" pour '+new Date(dateVersement).toLocaleDateString('fr-FR',{month:'long',year:'numeric'})+' ? Ce mois redeviendra du.')) return;
+  if(!c || !c.echeancesPayees || c.echeancesPayees[idx]===undefined) return;
+  var entry = c.echeancesPayees[idx];
+  var estAncienFormat = typeof entry==='number';
+  var dateEcheance = estAncienFormat ? entry : entry.dateEcheance;
+  var montant = estAncienFormat ? (parseFloat(c.montant)||0) : (parseFloat(entry.montant)||0);
+  if(!confirm('Annuler ce versement de '+montant.toLocaleString('fr-FR')+' FCFA sur "'+c.nom+'" ('+new Date(dateEcheance).toLocaleDateString('fr-FR',{month:'long',year:'numeric'})+') ? Le solde restant du sera recalcule.')) return;
   c.echeancesPayees.splice(idx,1);
   saveChargesFixes();
   renderPage();
@@ -10900,11 +10948,12 @@ function htmlTableauChargesFixesHistorique(historique){
   var moisLabels = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
   var html = '<div class="card"><div class="tw"><table><thead><tr><th>Date de paiement</th><th>Charge</th><th>Mois regle</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
   historique.forEach(function(h){
-    var dt = new Date(h.datePaiement);
+    var dtPaiement = new Date(h.datePaiement);
+    var dtEcheance = new Date(h.dateEcheance);
     html += '<tr>';
-    html += '<td class="xs">'+dt.toLocaleDateString('fr-FR')+'</td>';
+    html += '<td class="xs">'+dtPaiement.toLocaleDateString('fr-FR')+'</td>';
     html += '<td><strong>'+h.nom+'</strong></td>';
-    html += '<td class="xs">'+moisLabels[dt.getMonth()]+' '+dt.getFullYear()+'</td>';
+    html += '<td class="xs">'+moisLabels[dtEcheance.getMonth()]+' '+dtEcheance.getFullYear()+'</td>';
     html += '<td style="text-align:right;font-weight:700;font-family:monospace">'+h.montant.toLocaleString('fr-FR')+' FCFA</td>';
     html += '<td><button class="btn btn-sm" data-cfid="'+h.chargeId+'" data-paiement-idx="'+h.paiementIndex+'" onclick="annulerPaiementChargeFixeByEl(this)" style="color:#A32D2D;border-color:#E0A0A0" title="Annuler ce versement">&#x21BA; Annuler</button></td>';
     html += '</tr>';
@@ -11116,17 +11165,42 @@ function genererEcheancesEngagement(e){
   return echeances;
 }
 
+// Chaque entree de echeancesPayees peut etre soit un ANCIEN format
+// (simple timestamp = paiement complet implicite, retro-compatible avec
+// les Engagements bancaires deja en production), soit un NOUVEL objet
+// {dateEcheance, datePaiement, montant} permettant un paiement PARTIEL
+// sur une echeance precise (utilise notamment par les Charges fixes).
+function montantPayePourEcheance(e, dateEcheance){
+  var total = 0;
+  (e.echeancesPayees||[]).forEach(function(entry){
+    if(typeof entry==='number'){
+      if(entry===dateEcheance) total += parseFloat(e.montant)||0;
+    } else if(entry && entry.dateEcheance===dateEcheance){
+      total += parseFloat(entry.montant)||0;
+    }
+  });
+  return total;
+}
+function resteDuEcheance(e, dateEcheance){
+  return Math.max(0, (parseFloat(e.montant)||0) - montantPayePourEcheance(e, dateEcheance));
+}
 function estEcheancePayee(e, dateEcheance){
-  return (e.echeancesPayees||[]).indexOf(dateEcheance)>=0;
+  return resteDuEcheance(e, dateEcheance)<=0;
 }
 function echeancesImpayees(e){
   return genererEcheancesEngagement(e).filter(function(d){ return !estEcheancePayee(e,d); });
 }
 function montantEnRetard(e, maintenant){
-  return echeancesImpayees(e).filter(function(d){return d<maintenant;}).length * (parseFloat(e.montant)||0);
+  return echeancesImpayees(e).filter(function(d){return d<maintenant;})
+    .reduce(function(s,d){return s+resteDuEcheance(e,d);},0);
 }
 function montantRestantDu(e){
-  return echeancesImpayees(e).length * (parseFloat(e.montant)||0);
+  return echeancesImpayees(e).reduce(function(s,d){return s+resteDuEcheance(e,d);},0);
+}
+// Enregistre un versement (partiel ou total) sur une echeance precise.
+function enregistrerPaiementEcheance(e, dateEcheance, montantVerse){
+  if(!e.echeancesPayees) e.echeancesPayees = [];
+  e.echeancesPayees.push({dateEcheance:dateEcheance, datePaiement:Date.now(), montant:montantVerse});
 }
 
 // Marque l'echeance impayee la PLUS ANCIENNE comme payee (comme le reste
