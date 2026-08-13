@@ -1084,6 +1084,11 @@ tr:hover td{background:#faf9f7}
       <input type="number" class="inp" id="numFactureDelai" min="0" max="365">
       <div class="xs muted" style="margin-top:3px" id="numFactureDelaiHint">Propose automatiquement selon le type de client (modifiable).</div>
     </div>
+    <div class="fr" style="margin-top:10px">
+      <label class="fl">Date de depot</label>
+      <input type="date" class="inp" id="numFactureDateDepot">
+      <div class="xs muted" style="margin-top:3px">A corriger uniquement en cas d'erreur de saisie — cette date determine l'echeance de paiement calculee.</div>
+    </div>
   </div>
   <div class="mfoot">
     <button class="btn" onclick="closeNumerosFacture()">Annuler</button>
@@ -1164,7 +1169,7 @@ tr:hover td{background:#faf9f7}
       </div>
       <div class="fr">
         <label class="fl">N&deg; secondaire (optionnel)</label>
-        <input class="inp" id="fmNumSecondaire" placeholder="Ex: N° sinistre, bon de commande...">
+        <input class="inp" id="fmNumSecondaire" placeholder="Ex: N° sinistre, bon de commande..." oninput="this.dataset.autoFilled='0'">
       </div>
     </div>
     <div class="xs muted" style="margin-top:3px" id="fmDelaiHint">Propose automatiquement selon le type de client (modifiable).</div>
@@ -1185,8 +1190,8 @@ tr:hover td{background:#faf9f7}
     <div id="fmSectionSinistre" style="display:none;background:#F3F0FF;border-radius:8px;padding:10px 12px;margin-bottom:8px">
       <div class="info-box" style="margin-bottom:8px">Le nom de l'assureur devient le client qui pilote la facturation — le vrai proprietaire du vehicule reste trace separement.</div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
-        <div class="fr"><label class="fl">N sinistre</label><input class="inp" id="fmSinistre" placeholder="SIN-2026-001"></div>
-        <div class="fr"><label class="fl">Assureur</label><input class="inp" id="fmAssureur" placeholder="Allianz CI"></div>
+        <div class="fr"><label class="fl">N sinistre</label><input class="inp" id="fmSinistre" placeholder="SIN-2026-001" oninput="syncFmNumSecondaireDepuisSinistre()"></div>
+        <div class="fr"><label class="fl">Assureur</label><input class="inp" id="fmAssureur" placeholder="Allianz CI" list="fmAssureurList" onblur="preremplirCoordonneesAssureur()"><datalist id="fmAssureurList"></datalist></div>
         <div class="fr"><label class="fl">Contact assurance</label><input class="inp" id="fmContactAssurance"></div>
         <div class="fr"><label class="fl">Nom expert</label><input class="inp" id="fmExpert"></div>
         <div class="fr"><label class="fl">Contact expert</label><input class="inp" id="fmContactExpert"></div>
@@ -7155,6 +7160,7 @@ function ouvrirNumerosFactureByEl(btn){
   document.getElementById('numFactureDelaiHint').textContent = typeof v.delaiPaiementPersonnalise==='number'
     ? 'Delai personnalise actuellement applique.'
     : 'Propose automatiquement ('+(estEntreprise?'devis entreprise = 30 jours':'devis particulier = paiement au depot')+'). Modifiable.';
+  document.getElementById('numFactureDateDepot').value = v.factureDeposeeLe ? new Date(v.factureDeposeeLe).toISOString().slice(0,10) : '';
   document.getElementById('modalNumerosFacture').style.display = 'flex';
 }
 function ouvrirNumerosFactureForfaitByEl(btn){
@@ -7177,6 +7183,7 @@ function ouvrirNumerosFactureForfaitByEl(btn){
   document.getElementById('numFactureDelaiHint').textContent = typeof f.delaiPaiementPersonnalise==='number'
     ? 'Delai personnalise actuel : '+f.delaiPaiementPersonnalise+' jours apres depot'
     : 'Par defaut : echeance = fin du mois de la periode facturee. Laissez vide pour garder cette regle.';
+  document.getElementById('numFactureDateDepot').value = f.deposeeDate ? new Date(f.deposeeDate).toISOString().slice(0,10) : '';
   document.getElementById('modalNumerosFacture').style.display = 'flex';
 }
 function closeNumerosFacture(){ document.getElementById('modalNumerosFacture').style.display='none'; }
@@ -7221,6 +7228,7 @@ function validerNumerosFacture(){
   var cible = document.getElementById('numFactureCible').value;
   var numExterne = document.getElementById('numFactureExterne').value.trim();
   var numSecondaire = document.getElementById('numFactureSecondaire').value.trim();
+  var dateDepotStr = document.getElementById('numFactureDateDepot').value;
 
   if(cible==='forfait'){
     var pk = document.getElementById('numFactureVid').value;
@@ -7235,6 +7243,7 @@ function validerNumerosFacture(){
     if(conflit){ alert('Impossible d\'enregistrer : '+conflit+'.\nChaque numero doit etre unique et appartenir a un seul client.'); return; }
     f.numeroFactureExterne = numExterne;
     f.numeroSecondaire = numSecondaire;
+    if(dateDepotStr && f.deposeeDate) f.deposeeDate = new Date(dateDepotStr).getTime();
     var delaiSaisiForfait = parseInt(document.getElementById('numFactureDelai').value,10);
     if(!isNaN(delaiSaisiForfait) && delaiSaisiForfait>=0){
       f.delaiPaiementPersonnalise = delaiSaisiForfait;
@@ -7256,6 +7265,10 @@ function validerNumerosFacture(){
     if(conflit2){ alert('Impossible d\'enregistrer : '+conflit2+'.\nChaque numero doit etre unique et appartenir a un seul client.'); return; }
     v.numeroFactureExterne = numExterne;
     v.numeroSecondaire = numSecondaire;
+    // Correction manuelle de la date de depot — uniquement si la facture
+    // etait deja marquee deposee (une date de depot n'a pas de sens sur
+    // une facture pas encore deposee) et qu'une valeur a ete saisie.
+    if(dateDepotStr && v.factureDeposeeLe) v.factureDeposeeLe = new Date(dateDepotStr).getTime();
     var delaiSaisi = parseInt(document.getElementById('numFactureDelai').value,10);
     if(!isNaN(delaiSaisi) && delaiSaisi>=0){
       v.delaiPaiementPersonnalise = delaiSaisi;
@@ -7301,6 +7314,17 @@ function openFactureManuelleForm(){
   });
   selClient.innerHTML = htmlClient;
 
+  // Peupler la liste des assureurs deja connus (noms uniques), pour
+  // l'autocompletion ET le prerempissage de leurs coordonnees.
+  var selAssureur = document.getElementById('fmAssureurList');
+  var assureursUniques = {};
+  vehicles.forEach(function(v){ if(v.assureur) assureursUniques[v.assureur]=true; });
+  var htmlAssureur = '';
+  Object.keys(assureursUniques).sort().forEach(function(a){
+    htmlAssureur += '<option value="'+a.replace(/"/g,'&quot;')+'">';
+  });
+  selAssureur.innerHTML = htmlAssureur;
+
   document.getElementById('fmImmat').value = '';
   document.getElementById('fmMarque').value = '';
   document.getElementById('fmModele').value = '';
@@ -7310,6 +7334,7 @@ function openFactureManuelleForm(){
   document.getElementById('fmDateDepot').value = new Date().toISOString().slice(0,10);
   document.getElementById('fmNumFacture').value = '';
   document.getElementById('fmNumSecondaire').value = '';
+  document.getElementById('fmNumSecondaire').dataset.autoFilled = '1';
   document.getElementById('fmFactureDeposee').checked = true;
   document.getElementById('fmDossierAssurance').checked = false;
   document.getElementById('fmSinistre').value = '';
@@ -7332,6 +7357,41 @@ function toggleFmSectionSinistre(){
   var checked = document.getElementById('fmDossierAssurance').checked;
   var sec = document.getElementById('fmSectionSinistre');
   if(sec) sec.style.display = checked ? '' : 'none';
+}
+
+// Le "N° secondaire" (colonne "Ref. interne" dans les tableaux de
+// facturation) reprend automatiquement le N° sinistre saisi — evite
+// d'avoir a le retaper deux fois, et evite qu'il "disparaisse" des
+// tableaux faute d'avoir ete recopie manuellement. Si l'utilisateur tape
+// lui-meme une valeur differente dans le champ N° secondaire, la
+// synchronisation automatique s'arrete (son choix explicite prime).
+function syncFmNumSecondaireDepuisSinistre(){
+  var numSecEl = document.getElementById('fmNumSecondaire');
+  if(!numSecEl) return;
+  if(numSecEl.dataset.autoFilled!=='0'){
+    numSecEl.value = document.getElementById('fmSinistre').value;
+    numSecEl.dataset.autoFilled = '1';
+  }
+}
+
+// Si cet assureur a deja ete utilise sur un dossier precedent, reprend
+// automatiquement ses coordonnees (contact assurance, expert, contact
+// expert) deja connues — evite de tout ressaisir a chaque fois pour un
+// meme assureur. Ne remplace jamais une valeur deja saisie manuellement.
+function preremplirCoordonneesAssureur(){
+  var nomAssureur = (document.getElementById('fmAssureur').value||'').trim().toLowerCase();
+  if(!nomAssureur) return;
+  var candidats = vehicles.filter(function(v){
+    return v.assureur && v.assureur.trim().toLowerCase()===nomAssureur;
+  }).sort(function(a,b){return (b.entree||0)-(a.entree||0);});
+  if(!candidats.length) return;
+  var plusRecent = candidats[0];
+  var champContact = document.getElementById('fmContactAssurance');
+  var champExpert = document.getElementById('fmExpert');
+  var champContactExpert = document.getElementById('fmContactExpert');
+  if(champContact && !champContact.value.trim()) champContact.value = plusRecent.contactAssurance||'';
+  if(champExpert && !champExpert.value.trim()) champExpert.value = plusRecent.expert||'';
+  if(champContactExpert && !champContactExpert.value.trim()) champContactExpert.value = plusRecent.contactExpert||'';
 }
 
 // Propose le delai deja retenu pour CE client (CLIENT_DELAIS_PAIEMENT) en
@@ -7457,6 +7517,15 @@ function validerFactureManuelle(){
   var nomAssureurSaisi = (document.getElementById('fmAssureur').value||'').trim();
   var proprietaireVehicule = client;
   var clientEffectif = (dossierAssuranceCoche && nomAssureurSaisi) ? nomAssureurSaisi : client;
+  var sinistreSaisi = (document.getElementById('fmSinistre').value||'').trim();
+  // Filet de secours : si le sinistre est renseigne mais que le numero
+  // secondaire est reste vide (ex: synchro live non declenchee), on
+  // reprend quand meme le sinistre — sans cette info, le dossier
+  // "disparaissait" des colonnes de reference dans les tableaux de
+  // facturation.
+  if(dossierAssuranceCoche && sinistreSaisi && !numSecondaire){
+    numSecondaire = sinistreSaisi;
+  }
 
   // Collecter les lignes saisies (article non vide et prix de vente > 0).
   // Le prix d'achat est optionnel : une facture reste valide sans lui,
