@@ -1169,7 +1169,7 @@ tr:hover td{background:#faf9f7}
       </div>
       <div class="fr">
         <label class="fl">N&deg; secondaire (optionnel)</label>
-        <input class="inp" id="fmNumSecondaire" placeholder="Ex: N° sinistre, bon de commande..." oninput="this.dataset.autoFilled='0'">
+        <input class="inp" id="fmNumSecondaire" placeholder="Ex: N° sinistre, bon de commande...">
       </div>
     </div>
     <div class="xs muted" style="margin-top:3px" id="fmDelaiHint">Propose automatiquement selon le type de client (modifiable).</div>
@@ -7334,7 +7334,6 @@ function openFactureManuelleForm(){
   document.getElementById('fmDateDepot').value = new Date().toISOString().slice(0,10);
   document.getElementById('fmNumFacture').value = '';
   document.getElementById('fmNumSecondaire').value = '';
-  document.getElementById('fmNumSecondaire').dataset.autoFilled = '1';
   document.getElementById('fmFactureDeposee').checked = true;
   document.getElementById('fmDossierAssurance').checked = false;
   document.getElementById('fmSinistre').value = '';
@@ -7357,20 +7356,25 @@ function toggleFmSectionSinistre(){
   var checked = document.getElementById('fmDossierAssurance').checked;
   var sec = document.getElementById('fmSectionSinistre');
   if(sec) sec.style.display = checked ? '' : 'none';
+  // Dossier assurance : le N° secondaire (colonne "Ref. interne" dans les
+  // tableaux de facturation) est ENTIEREMENT pilote par le N° sinistre —
+  // le champ se verrouille pour eviter toute divergence entre les deux.
+  var numSecEl = document.getElementById('fmNumSecondaire');
+  if(numSecEl){
+    numSecEl.disabled = checked;
+    if(checked) numSecEl.value = document.getElementById('fmSinistre').value;
+  }
 }
 
-// Le "N° secondaire" (colonne "Ref. interne" dans les tableaux de
-// facturation) reprend automatiquement le N° sinistre saisi — evite
-// d'avoir a le retaper deux fois, et evite qu'il "disparaisse" des
-// tableaux faute d'avoir ete recopie manuellement. Si l'utilisateur tape
-// lui-meme une valeur differente dans le champ N° secondaire, la
-// synchronisation automatique s'arrete (son choix explicite prime).
+// Tant que "Dossier assurance" est coche, le N° secondaire reste
+// TOUJOURS identique au N° sinistre (champ verrouille, aucune saisie
+// manuelle possible) — evite toute divergence entre les deux et evite
+// que le sinistre "disparaisse" des tableaux de facturation.
 function syncFmNumSecondaireDepuisSinistre(){
   var numSecEl = document.getElementById('fmNumSecondaire');
   if(!numSecEl) return;
-  if(numSecEl.dataset.autoFilled!=='0'){
+  if(document.getElementById('fmDossierAssurance').checked){
     numSecEl.value = document.getElementById('fmSinistre').value;
-    numSecEl.dataset.autoFilled = '1';
   }
 }
 
@@ -7518,12 +7522,12 @@ function validerFactureManuelle(){
   var proprietaireVehicule = client;
   var clientEffectif = (dossierAssuranceCoche && nomAssureurSaisi) ? nomAssureurSaisi : client;
   var sinistreSaisi = (document.getElementById('fmSinistre').value||'').trim();
-  // Filet de secours : si le sinistre est renseigne mais que le numero
-  // secondaire est reste vide (ex: synchro live non declenchee), on
-  // reprend quand meme le sinistre — sans cette info, le dossier
-  // "disparaissait" des colonnes de reference dans les tableaux de
-  // facturation.
-  if(dossierAssuranceCoche && sinistreSaisi && !numSecondaire){
+  // Dossier assurance : le champ N° secondaire est verrouille et pilote
+  // par le N° sinistre (voir toggleFmSectionSinistre/syncFmNumSecondaireDepuisSinistre) —
+  // ici, on impose le sinistre comme SEULE source prise en compte, sans
+  // condition, pour ne jamais dependre d'un etat de champ potentiellement
+  // desynchronise.
+  if(dossierAssuranceCoche){
     numSecondaire = sinistreSaisi;
   }
 
