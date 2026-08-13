@@ -7243,7 +7243,13 @@ function validerNumerosFacture(){
     if(conflit){ alert('Impossible d\'enregistrer : '+conflit+'.\nChaque numero doit etre unique et appartenir a un seul client.'); return; }
     f.numeroFactureExterne = numExterne;
     f.numeroSecondaire = numSecondaire;
-    if(dateDepotStr && f.deposeeDate) f.deposeeDate = new Date(dateDepotStr).getTime();
+    // Correction manuelle de la date de depot — permet aussi bien de
+    // CORRIGER une date deja existante que de DEFINIR la date pour la
+    // premiere fois (marque alors la facture forfait comme deposee).
+    if(dateDepotStr){
+      f.deposeeDate = new Date(dateDepotStr).getTime();
+      if(f.statut==='emise') f.statut = 'deposee';
+    }
     var delaiSaisiForfait = parseInt(document.getElementById('numFactureDelai').value,10);
     if(!isNaN(delaiSaisiForfait) && delaiSaisiForfait>=0){
       f.delaiPaiementPersonnalise = delaiSaisiForfait;
@@ -7265,10 +7271,14 @@ function validerNumerosFacture(){
     if(conflit2){ alert('Impossible d\'enregistrer : '+conflit2+'.\nChaque numero doit etre unique et appartenir a un seul client.'); return; }
     v.numeroFactureExterne = numExterne;
     v.numeroSecondaire = numSecondaire;
-    // Correction manuelle de la date de depot — uniquement si la facture
-    // etait deja marquee deposee (une date de depot n'a pas de sens sur
-    // une facture pas encore deposee) et qu'une valeur a ete saisie.
-    if(dateDepotStr && v.factureDeposeeLe) v.factureDeposeeLe = new Date(dateDepotStr).getTime();
+    // Correction manuelle de la date de depot — permet aussi bien de
+    // CORRIGER une date deja existante que de DEFINIR la date pour la
+    // premiere fois (ex: une facture creee sans cocher "deja deposee",
+    // qu'on veut desormais marquer comme deposee retroactivement).
+    if(dateDepotStr){
+      v.factureDeposeeLe = new Date(dateDepotStr).getTime();
+      if(v.status!=='facture_deposee') v.status = 'facture_deposee';
+    }
     var delaiSaisi = parseInt(document.getElementById('numFactureDelai').value,10);
     if(!isNaN(delaiSaisi) && delaiSaisi>=0){
       v.delaiPaiementPersonnalise = delaiSaisi;
