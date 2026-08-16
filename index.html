@@ -143,6 +143,7 @@ tr:hover td{background:#faf9f7}
 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </head>
 <body>
@@ -1569,6 +1570,8 @@ var EQUIPES = ['Equipe A','Equipe B','Equipe C'];
 
 var FOURNISSEURS = [];
 var BANQUES = [];
+// Note : EXPOSITION_SNAPSHOTS (releves quotidiens pour le suivi Finances)
+// est declaree plus bas, juste a cote de ses fonctions save/sync dediees.
 // Factures forfait generees (statut a_emettre/emise/deposee/payee par mois).
 // Synchronisee via Firebase, comme FORFAITS_CLIENTS/CHARGES_FIXES : sans
 // cela, un appareil qui n'a jamais vu une facture emise depuis un autre
@@ -2219,6 +2222,48 @@ function syncDettesManuellesFromFirebase(callback){
     else if(DETTES_MANUELLES.length && fbConnected){ fbDb.ref('gos_dettes_manuelles').set(JSON.stringify(DETTES_MANUELLES)); }
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
+}
+
+// ── Releves quotidiens de l'exposition financiere ────────────────────────
+// L'exposition financiere est un chiffre "instantane" (calcule en direct
+// a partir des dettes non couvertes actuelles), sans historique. Pour
+// pouvoir en calculer une MOYENNE sur un mois passe (necessaire pour
+// comparer les periodes dans le tableau de bord Finances), on enregistre
+// un releve quotidien — un seul par jour, jamais ecrase. L'historique
+// n'existe qu'a partir du jour de mise en place de ce mecanisme.
+var EXPOSITION_SNAPSHOTS = [];
+function saveExpositionSnapshots(){
+  localStorage.setItem('gos_exposition_snapshots', JSON.stringify(EXPOSITION_SNAPSHOTS));
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_exposition_snapshots').set(JSON.stringify(EXPOSITION_SNAPSHOTS)).catch(function(e){
+      console.error('Firebase exposition snapshots save error:', e);
+    });
+  }
+}
+function loadExpositionSnapshots(){
+  var raw = localStorage.getItem('gos_exposition_snapshots');
+  if(raw){ try{ EXPOSITION_SNAPSHOTS = JSON.parse(raw)||[]; }catch(e){ EXPOSITION_SNAPSHOTS=[]; } }
+}
+function syncExpositionSnapshotsFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_exposition_snapshots').once('value').then(function(snap){
+    var val = snap.val();
+    if(val){ try{ EXPOSITION_SNAPSHOTS = JSON.parse(val)||[]; localStorage.setItem('gos_exposition_snapshots', val); }catch(e){} }
+    else if(EXPOSITION_SNAPSHOTS.length && fbConnected){ fbDb.ref('gos_exposition_snapshots').set(JSON.stringify(EXPOSITION_SNAPSHOTS)); }
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
+}
+// Enregistre le releve du jour, une seule fois par jour (pas a chaque
+// rechargement de page).
+function capturerSnapshotExpositionDuJour(){
+  var aujourdhui = new Date().toISOString().slice(0,10);
+  var dejaFait = EXPOSITION_SNAPSHOTS.some(function(s){ return new Date(s.date).toISOString().slice(0,10)===aujourdhui; });
+  if(dejaFait) return;
+  var collecte = collecterExpositionFinanciere();
+  var total = 0;
+  Object.keys(collecte.buckets).forEach(function(k){ total += collecte.buckets[k].totalExpose; });
+  EXPOSITION_SNAPSHOTS.push({date: Date.now(), montant: total});
+  saveExpositionSnapshots();
 }
 
 // ── Employes pour le module Presences (pointage/enrolement) ─────────────
@@ -5281,6 +5326,31 @@ function migrerDateDebutChargesFixes(){
   return nbMigres;
 }
 
+// Migration retroactive : les factures manuelles et les imports
+// d'historique ne passent JAMAIS par le circuit normal de validation
+// d'achat (Direction) — leurs lignes n'ont donc jamais eu cl.valideDir a
+// true. Depuis que l'Exposition financiere et la Rentabilite filtrent
+// strictement sur cl.valideDir===true (pour ne compter que les pieces
+// reellement validees), ces dossiers se sont retrouves a tort exclus de
+// tous les calculs, faisant "disparaitre" leurs chiffres. Corrige une
+// seule fois, sans toucher aux dossiers normaux (dont la validation reste
+// une vraie etape metier a respecter).
+function migrerValideDirFacturesManuelles(){
+  var nbCorrige = 0;
+  vehicles.forEach(function(v){
+    if(!v.isFactureManuelle && !v.isImportHistorique) return;
+    if(!v.chiffrage || !v.chiffrage.lignes) return;
+    v.chiffrage.lignes.forEach(function(cl){
+      if(cl.valideDir!==true){
+        cl.valideDir = true;
+        nbCorrige++;
+      }
+    });
+  });
+  if(nbCorrige>0) saveV();
+  return nbCorrige;
+}
+
 function advance(id){
   for(var i=0;i<vehicles.length;i++){
     if(vehicles[i].id===id){
@@ -5746,7 +5816,12 @@ var banqueEditId = null;
 // ============================================================
 // PAGE RENTABILITE CLIENTS DEVIS
 // ============================================================
-var rentaVue = 'dossiers'; // 'dossiers' ou 'clients'
+var rentaVue = 'clients'; // 'dossiers', 'clients', 'periode', 'evolution'
+var rentaEvolutionType = 'mois'; // 'mois','trimestre','semestre','annee'
+var rentaEvolutionPeriodeA = '';
+var rentaEvolutionPeriodeB = '';
+var rentaEvolutionTri = 'ca_desc'; // 'ca_desc','variation_desc','variation_asc'
+var rentaEvolutionClientGraphique = null; // client selectionne pour le graphique individuel
 var rentaFiltre = 'tous';  // 'tous','mois','trimestre','annee','custom'
 var rentaSort = 'marge';   // 'marge','taux','ca','date'
 var rentaDebut = null;
@@ -5763,9 +5838,16 @@ function pageRentabilite(){
   else if(rentaFiltre==='custom' && rentaDebut){ borneDebut=new Date(rentaDebut).setHours(0,0,0,0); if(rentaFin) borneFin=new Date(rentaFin).setHours(23,59,59,999); }
 
   var dossiers = vehicles.filter(function(v){
-    return v.typeClient==='devis' && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;
+    // Meme pattern qu'ailleurs dans l'app (Facturation, Exposition
+    // financiere) : tout SAUF le forfait — pas seulement typeClient
+    // exactement "devis". Un dossier assurance a l'ancien format
+    // (typeClient==='assurance', avant l'introduction du champ
+    // dossierAssurance) etait sinon exclu a tort de cette page.
+    return v.typeClient!=='forfait' && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;
   }).map(function(v){
-    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    // Seules les pieces dont l'ACHAT A ETE VALIDE par Direction comptent
+    // reellement — coherent avec l'Exposition financiere.
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     var totalAchat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
     var totalVente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
     var marge = totalVente - totalAchat;
@@ -5776,7 +5858,7 @@ function pageRentabilite(){
       client:v.client, tel:v.tel,
       status:v.status, entree:v.entree||0, dateRef:dateRef,
       totalAchat:totalAchat, totalVente:totalVente,
-      marge:marge, tauxMarge:tauxMarge,
+      marge:marge, tauxMarge:tauxMarge, montantPaye:parseFloat(v.montantPaye)||0,
       nbPieces:lignes.length, lignes:lignes
     };
   }).filter(function(d){
@@ -5815,10 +5897,11 @@ function pageRentabilite(){
   html += '<input type="date" class="inp" id="rentaFin" style="width:95px;font-size:11px;padding:2px 3px" value="'+(rentaFin||'')+'">';
   html += '<button class="btn btn-sm btn-primary" style="font-size:11px;padding:3px 6px" onclick="setRentaCustom()">OK</button>';
   html += '<span style="flex:1"></span>';
-  [{v:'dossiers',l:'Dossiers'},{v:'clients',l:'Clients'},{v:'periode',l:'Vue periode'}].forEach(function(v){
+  [{v:'dossiers',l:'Dossiers'},{v:'clients',l:'Clients'},{v:'periode',l:'Vue periode'},{v:'evolution',l:'&#x1F4C8; Evolution CA'}].forEach(function(v){
     html += '<button class="btn btn-sm'+(rentaVue===v.v?' btn-primary':'')+'" data-rv="'+v.v+'" onclick="setRentaVueByEl(this)" style="font-size:11px;padding:3px 7px">'+v.l+'</button>';
   });
   html += '</div>';
+  if(rentaVue!=='evolution'){
   html += '<div class="kgrid k4" style="margin-bottom:8px">';
   html += kpi('Dossiers', dossiers.length, '');
   html += kpi('CA previsionnel total', totVente?totVente.toLocaleString('fr-FR')+' FCFA':'—', 'blue');
@@ -5830,11 +5913,14 @@ function pageRentabilite(){
   html += kpi('Dossiers rentables', nbRentables, nbRentables>0?'green':'');
   html += kpi('Dossiers en deficit', nbDeficit, nbDeficit>0?'red':'');
   html += '</div>';
+  }
 
   if(rentaVue==='dossiers'){
     html += rentaDossiers(dossiers);
   } else if(rentaVue==='periode'){
     html += rentaVuePeriode();
+  } else if(rentaVue==='evolution'){
+    html += rentaEvolution();
   } else {
     html += rentaParClient(dossiers);
   }
@@ -5892,36 +5978,655 @@ function rentaDossiers(dossiers){
 
 function setRentaSortByEl(el){ rentaSort=el.getAttribute('data-rs'); renderPage(); }
 
+// ── Utilitaires de manipulation de periodes (mois/trimestre/semestre/annee) ──
+// Format des cles : mois="YYYY-MM", trimestre="YYYY-QN", semestre="YYYY-SN", annee="YYYY"
+function moisDansPeriode(periodKey, type){
+  var mois = [];
+  if(type==='mois'){
+    mois.push(periodKey);
+  } else if(type==='trimestre'){
+    var parts = periodKey.split('-Q');
+    var annee = parseInt(parts[0],10), q = parseInt(parts[1],10);
+    for(var i=0;i<3;i++){ mois.push(annee+'-'+String((q-1)*3+i+1).padStart(2,'0')); }
+  } else if(type==='semestre'){
+    var parts2 = periodKey.split('-S');
+    var annee2 = parseInt(parts2[0],10), s = parseInt(parts2[1],10);
+    for(var i2=0;i2<6;i2++){ mois.push(annee2+'-'+String((s-1)*6+i2+1).padStart(2,'0')); }
+  } else if(type==='annee'){
+    var annee3 = parseInt(periodKey,10);
+    for(var i3=1;i3<=12;i3++){ mois.push(annee3+'-'+String(i3).padStart(2,'0')); }
+  }
+  return mois;
+}
+// Convertit une cle de periode (mois/trimestre/semestre/annee) en bornes
+// de dates {deb, fin} — gere correctement les fins de mois (28/29/30/31
+// jours, annees bissextiles).
+function bornesDePeriode(periodKey, type){
+  var mois = moisDansPeriode(periodKey, type);
+  var premierMois = mois[0], dernierMois = mois[mois.length-1];
+  var pd = premierMois.split('-'), dd = dernierMois.split('-');
+  var deb = new Date(parseInt(pd[0],10), parseInt(pd[1],10)-1, 1).getTime();
+  var finDate = new Date(parseInt(dd[0],10), parseInt(dd[1],10), 0); // jour 0 du mois suivant = dernier jour du mois
+  finDate.setHours(23,59,59,999);
+  return {deb:deb, fin:finDate.getTime()};
+}
+function periodePrecedente(periodKey, type){
+  if(type==='mois'){
+    var parts = periodKey.split('-'); var annee = parseInt(parts[0],10), m = parseInt(parts[1],10);
+    m--; if(m<1){ m=12; annee--; }
+    return annee+'-'+String(m).padStart(2,'0');
+  } else if(type==='trimestre'){
+    var parts2 = periodKey.split('-Q'); var annee2 = parseInt(parts2[0],10), q = parseInt(parts2[1],10);
+    q--; if(q<1){ q=4; annee2--; }
+    return annee2+'-Q'+q;
+  } else if(type==='semestre'){
+    var parts3 = periodKey.split('-S'); var annee3 = parseInt(parts3[0],10), s = parseInt(parts3[1],10);
+    s--; if(s<1){ s=2; annee3--; }
+    return annee3+'-S'+s;
+  } else if(type==='annee'){
+    return (parseInt(periodKey,10)-1)+'';
+  }
+}
+var MOIS_LABELS_COURT_EVO = ['Jan','Fev','Mar','Avr','Mai','Jun','Jul','Aou','Sep','Oct','Nov','Dec'];
+function formaterLabelPeriode(periodKey, type){
+  if(type==='mois'){ var p=periodKey.split('-'); return MOIS_LABELS_COURT_EVO[parseInt(p[1],10)-1]+' '+p[0]; }
+  if(type==='trimestre'){ var p2=periodKey.split('-Q'); return 'T'+p2[1]+' '+p2[0]; }
+  if(type==='semestre'){ var p3=periodKey.split('-S'); return 'S'+p3[1]+' '+p3[0]; }
+  if(type==='annee') return periodKey;
+}
+function periodeKeyDuMoment(type){
+  var d = new Date();
+  if(type==='mois') return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+  if(type==='trimestre') return d.getFullYear()+'-Q'+(Math.floor(d.getMonth()/3)+1);
+  if(type==='semestre') return d.getFullYear()+'-S'+(Math.floor(d.getMonth()/6)+1);
+  if(type==='annee') return d.getFullYear()+'';
+}
+
+function setRentaEvolutionTypeByEl(el){
+  rentaEvolutionType = el.getAttribute('data-ret');
+  rentaEvolutionPeriodeA = periodeKeyDuMoment(rentaEvolutionType);
+  rentaEvolutionPeriodeB = periodePrecedente(rentaEvolutionPeriodeA, rentaEvolutionType);
+  renderPage();
+}
+function onChangeRentaEvoMois(cible){
+  var val = document.getElementById('rentaEvo'+cible+'_mois').value; // format natif YYYY-MM
+  if(cible==='A') rentaEvolutionPeriodeA = val; else rentaEvolutionPeriodeB = val;
+  renderPage();
+}
+function onChangeRentaEvoQS(cible){
+  var lettre = rentaEvolutionType==='trimestre' ? 'Q' : 'S';
+  var num = document.getElementById('rentaEvo'+cible+'_num').value;
+  var annee = document.getElementById('rentaEvo'+cible+'_annee').value;
+  var val = annee+'-'+lettre+num;
+  if(cible==='A') rentaEvolutionPeriodeA = val; else rentaEvolutionPeriodeB = val;
+  renderPage();
+}
+function onChangeRentaEvoAnnee(cible){
+  var val = document.getElementById('rentaEvo'+cible+'_anneeSeule').value;
+  if(cible==='A') rentaEvolutionPeriodeA = val; else rentaEvolutionPeriodeB = val;
+  renderPage();
+}
+function setRentaEvolutionTriByEl(el){ rentaEvolutionTri = el.getAttribute('data-ret2'); renderPage(); }
+function selectionnerClientGraphiqueByEl(el){
+  var c = decodeURIComponent(el.getAttribute('data-cli'));
+  rentaEvolutionClientGraphique = (rentaEvolutionClientGraphique===c) ? null : c;
+  renderPage();
+}
+
+function htmlPickerPeriode(cible, type, valeurActuelle){
+  if(type==='mois'){
+    return '<input type="month" class="inp" id="rentaEvo'+cible+'_mois" value="'+valeurActuelle+'" onchange="onChangeRentaEvoMois(\''+cible+'\')" style="width:auto">';
+  }
+  if(type==='trimestre'||type==='semestre'){
+    var lettre = type==='trimestre'?'Q':'S';
+    var maxN = type==='trimestre'?4:2;
+    var parts = valeurActuelle.split('-'+lettre);
+    var annee = parts[0]||new Date().getFullYear(), num = parts[1]||'1';
+    var html = '<select class="inp" id="rentaEvo'+cible+'_num" onchange="onChangeRentaEvoQS(\''+cible+'\')" style="width:auto;display:inline-block">';
+    for(var i=1;i<=maxN;i++){ html += '<option value="'+i+'"'+(String(i)===num?' selected':'')+'>'+lettre+i+'</option>'; }
+    html += '</select> <input type="number" class="inp" id="rentaEvo'+cible+'_annee" value="'+annee+'" onchange="onChangeRentaEvoQS(\''+cible+'\')" style="width:75px;display:inline-block">';
+    return html;
+  }
+  // annee
+  return '<input type="number" class="inp" id="rentaEvo'+cible+'_anneeSeule" value="'+valeurActuelle+'" onchange="onChangeRentaEvoAnnee(\''+cible+'\')" style="width:85px">';
+}
+
+// Collecte le CA (devis+assurance) par client et par MOIS, sur TOUT
+// l'historique — independant du filtre de periode global de la page, car
+// cette vue compare elle-meme des periodes entre elles.
+function collecterCAParClientMois(){
+  var data = {};
+  vehicles.filter(function(v){
+    return v.typeClient!=='forfait' && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;
+  }).forEach(function(v){
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
+    var totalVente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    if(!totalVente) return;
+    var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
+    if(!dateRef) return;
+    var dt = new Date(dateRef);
+    var moisKey = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+    if(!data[v.client]) data[v.client] = {};
+    data[v.client][moisKey] = (data[v.client][moisKey]||0) + totalVente;
+  });
+  return data;
+}
+function calculerCAPeriode(caParClientMois, client, periodKey, type){
+  var mois = moisDansPeriode(periodKey, type);
+  var data = caParClientMois[client] || {};
+  return mois.reduce(function(s,m){ return s + (data[m]||0); }, 0);
+}
+
+// ── Evolution des indicateurs financiers (tableau de bord Finances) ─────
+// Liste des indicateurs suivis, avec leur format d'affichage et le sens
+// d'une hausse (bonne ou mauvaise nouvelle, pour la couleur affichee).
+var METRIQUES_FINANCIERES_LISTE = [
+  {cle:'ca', label:'CA de la periode (devis + forfaits)', format:'montant', hausseEstPositive:true},
+  {cle:'depenses', label:'Depenses de la periode', format:'montant', hausseEstPositive:false},
+  {cle:'margeBrute', label:'Marge brute', format:'montant', hausseEstPositive:true},
+  {cle:'tauxMarge', label:'Taux de marge', format:'pourcentage', hausseEstPositive:true},
+  {cle:'chargesVariables', label:'Charges variables (Caisse)', format:'montant', hausseEstPositive:false},
+  {cle:'dettesFournisseurs', label:'Dettes fournisseurs (manuelles)', format:'montant', hausseEstPositive:false},
+  {cle:'resultatOperationnel', label:'Resultat operationnel', format:'montant', hausseEstPositive:true},
+  {cle:'margeOperationnelle', label:'Marge operationnelle', format:'pourcentage', hausseEstPositive:true},
+  {cle:'encaissementsRealises', label:'Encaissements realises', format:'montant', hausseEstPositive:true},
+  {cle:'tauxEncaissement', label:'Taux d\'encaissement', format:'pourcentage', hausseEstPositive:true},
+  {cle:'expositionMoyenne', label:'Exposition financiere (moyenne)', format:'montant', hausseEstPositive:false},
+  {cle:'echeances', label:'Echeances de la periode', format:'montant', hausseEstPositive:false}
+];
+
+// Calcule TOUS les indicateurs financiers pour une plage de dates
+// arbitraire — reprend EXACTEMENT la meme logique de calcul que
+// pageFinancesDashboard(), pour garantir que les chiffres de la vue
+// Evolution correspondent toujours a ceux deja affiches sur le tableau
+// de bord pour une meme periode.
+function calculerMetriquesFinancieres(borneDebut, borneFin){
+  var caDevis=0, achatDevis=0, caForfait=0, achatForfait=0;
+  vehicles.forEach(function(v){
+    if(!v.chiffrage || !v.chiffrage.lignes) return;
+    var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
+    if(dateFacture<borneDebut || dateFacture>borneFin) return;
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    var vente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var achat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
+    if(v.typeClient==='forfait'){ caForfait+=vente; achatForfait+=achat; }
+    else { caDevis+=vente; achatDevis+=achat; }
+  });
+  FORFAIT_FACTURES.forEach(function(f){
+    var dateFacture = f.deposeeDate || f.emiseDate || 0;
+    if(dateFacture<borneDebut || dateFacture>borneFin) return;
+    caForfait += f.montant||0;
+  });
+  var caTotal = caDevis+caForfait;
+  var achatTotal = achatDevis+achatForfait;
+  var margeBrute = caTotal-achatTotal;
+  var tauxMarge = caTotal>0 ? (margeBrute/caTotal*100) : null;
+
+  var chargesVariablesCaisse = CAISSE_MOUVEMENTS.filter(function(m){
+    return m.type==='sortie' && m.date>=borneDebut && m.date<=borneFin;
+  }).reduce(function(s,m){return s+(parseFloat(m.montant)||0);},0);
+
+  var chargesFixesActives = CHARGES_FIXES.filter(function(c){return c.actif;});
+  var chargesFixesMensuelEquiv = chargesFixesActives.reduce(function(s,c){
+    var m = parseFloat(c.montant)||0;
+    if(c.periodicite==='trimestriel') return s+m/3;
+    if(c.periodicite==='annuel') return s+m/12;
+    return s+m;
+  },0);
+  var joursPeriode = Math.max(1, Math.round((borneFin-borneDebut)/86400000));
+  var chargesFixesPeriode = chargesFixesMensuelEquiv * (joursPeriode/30);
+
+  var dettesManuellesPeriode = DETTES_MANUELLES.filter(function(dm){
+    return dm.dateAchat>=borneDebut && dm.dateAchat<=borneFin;
+  }).reduce(function(s,dm){return s+(parseFloat(dm.prixAchat)||0)*(parseInt(dm.qte)||1);},0);
+
+  var resultatOperationnel = caTotal - achatTotal - chargesVariablesCaisse - chargesFixesPeriode - dettesManuellesPeriode;
+  var margeOperationnelle = caTotal>0 ? (resultatOperationnel/caTotal*100) : null;
+
+  var encaisseRealise = 0, factureSurPeriode = 0;
+  vehicles.forEach(function(v){
+    if(!v.chiffrage || !v.chiffrage.lignes) return;
+    var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
+    if(dateFacture<borneDebut || dateFacture>borneFin) return;
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    factureSurPeriode += lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    encaisseRealise += parseFloat(v.montantPaye)||0;
+  });
+  FORFAIT_FACTURES.forEach(function(f){
+    var dateFacture = f.deposeeDate || f.emiseDate || 0;
+    if(dateFacture<borneDebut || dateFacture>borneFin) return;
+    factureSurPeriode += f.montant||0;
+    encaisseRealise += (f.statut==='payee' ? f.montant : (f.montantPaye||0));
+  });
+  var tauxEncaissement = factureSurPeriode>0 ? Math.min(100, encaisseRealise/factureSurPeriode*100) : null;
+
+  // Exposition moyenne : basee sur les releves quotidiens capture depuis
+  // la mise en place de ce suivi — indisponible (null) pour toute periode
+  // anterieure a cette mise en place, faute d'historique.
+  var snapshotsPeriode = EXPOSITION_SNAPSHOTS.filter(function(s){return s.date>=borneDebut && s.date<=borneFin;});
+  var expositionMoyenne = snapshotsPeriode.length ? snapshotsPeriode.reduce(function(s,x){return s+x.montant;},0)/snapshotsPeriode.length : null;
+
+  var decaissementsAttendus = collecterDecaissementsAttendus();
+  var echeances = decaissementsAttendus.filter(function(d){return d.dateEcheance>=borneDebut && d.dateEcheance<=borneFin;}).reduce(function(s,d){return s+d.montant;},0);
+
+  return {
+    ca:caTotal, depenses:achatTotal, margeBrute:margeBrute, tauxMarge:tauxMarge,
+    chargesVariables:chargesVariablesCaisse, dettesFournisseurs:dettesManuellesPeriode,
+    resultatOperationnel:resultatOperationnel, margeOperationnelle:margeOperationnelle,
+    encaissementsRealises:encaisseRealise, tauxEncaissement:tauxEncaissement,
+    expositionMoyenne:expositionMoyenne, echeances:echeances
+  };
+}
+
+// CA total (devis+forfait combines) par mois — pour le graphique de
+// tendance globale sur 12 mois.
+function collecterCATotalParMois(){
+  var data = {};
+  vehicles.forEach(function(v){
+    if(!v.chiffrage || !v.chiffrage.lignes) return;
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    var vente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    if(!vente) return;
+    var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
+    if(!dateFacture) return;
+    var dt = new Date(dateFacture);
+    var moisKey = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+    data[moisKey] = (data[moisKey]||0) + vente;
+  });
+  FORFAIT_FACTURES.forEach(function(f){
+    var dateFacture = f.deposeeDate || f.emiseDate || 0;
+    if(!dateFacture) return;
+    var dt = new Date(dateFacture);
+    var moisKey = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+    data[moisKey] = (data[moisKey]||0) + (f.montant||0);
+  });
+  return data;
+}
+
+// ── Vue "Evolution" du tableau de bord Finances ──────────────────────────
+// Meme principe que l'Evolution CA de Rentabilite (periode A/B, la plus
+// recente toujours en seconde colonne, graphiques Chart.js), mais les
+// LIGNES sont les indicateurs financiers eux-memes plutot que des clients.
+// Etat garde separe (prefixe dashEvolution) pour ne jamais interferer avec
+// l'Evolution CA de Rentabilite.
+var dashEvolutionActive = false;
+var dashEvolutionType = 'mois';
+var dashEvolutionPeriodeA = '';
+var dashEvolutionPeriodeB = '';
+var dashEvolutionMetriqueGraphique = null;
+
+function setDashEvolutionTypeByEl(el){
+  dashEvolutionType = el.getAttribute('data-ret');
+  dashEvolutionPeriodeA = periodeKeyDuMoment(dashEvolutionType);
+  dashEvolutionPeriodeB = periodePrecedente(dashEvolutionPeriodeA, dashEvolutionType);
+  renderPage();
+}
+function onChangeDashEvoMois(cible){
+  var val = document.getElementById('dashEvo'+cible+'_mois').value;
+  if(cible==='A') dashEvolutionPeriodeA = val; else dashEvolutionPeriodeB = val;
+  renderPage();
+}
+function onChangeDashEvoQS(cible){
+  var lettre = dashEvolutionType==='trimestre' ? 'Q' : 'S';
+  var num = document.getElementById('dashEvo'+cible+'_num').value;
+  var annee = document.getElementById('dashEvo'+cible+'_annee').value;
+  var val = annee+'-'+lettre+num;
+  if(cible==='A') dashEvolutionPeriodeA = val; else dashEvolutionPeriodeB = val;
+  renderPage();
+}
+function onChangeDashEvoAnnee(cible){
+  var val = document.getElementById('dashEvo'+cible+'_anneeSeule').value;
+  if(cible==='A') dashEvolutionPeriodeA = val; else dashEvolutionPeriodeB = val;
+  renderPage();
+}
+function selectionnerMetriqueGraphiqueByEl(el){
+  var c = el.getAttribute('data-metrique');
+  dashEvolutionMetriqueGraphique = (dashEvolutionMetriqueGraphique===c) ? null : c;
+  renderPage();
+}
+function htmlPickerPeriodeDash(cible, type, valeurActuelle){
+  if(type==='mois'){
+    return '<input type="month" class="inp" id="dashEvo'+cible+'_mois" value="'+valeurActuelle+'" onchange="onChangeDashEvoMois(\''+cible+'\')" style="width:auto">';
+  }
+  if(type==='trimestre'||type==='semestre'){
+    var lettre = type==='trimestre'?'Q':'S';
+    var maxN = type==='trimestre'?4:2;
+    var parts = valeurActuelle.split('-'+lettre);
+    var annee = parts[0]||new Date().getFullYear(), num = parts[1]||'1';
+    var html = '<select class="inp" id="dashEvo'+cible+'_num" onchange="onChangeDashEvoQS(\''+cible+'\')" style="width:auto;display:inline-block">';
+    for(var i=1;i<=maxN;i++){ html += '<option value="'+i+'"'+(String(i)===num?' selected':'')+'>'+lettre+i+'</option>'; }
+    html += '</select> <input type="number" class="inp" id="dashEvo'+cible+'_annee" value="'+annee+'" onchange="onChangeDashEvoQS(\''+cible+'\')" style="width:75px;display:inline-block">';
+    return html;
+  }
+  return '<input type="number" class="inp" id="dashEvo'+cible+'_anneeSeule" value="'+valeurActuelle+'" onchange="onChangeDashEvoAnnee(\''+cible+'\')" style="width:85px">';
+}
+
+function pageFinancesEvolution(){
+  if(!dashEvolutionPeriodeA){
+    dashEvolutionPeriodeA = periodeKeyDuMoment(dashEvolutionType);
+    dashEvolutionPeriodeB = periodePrecedente(dashEvolutionPeriodeA, dashEvolutionType);
+  }
+  var ordre = ordonnerPeriodesParChronologie(dashEvolutionPeriodeA, dashEvolutionPeriodeB, dashEvolutionType);
+  var periodeRecente = ordre.recente, periodeAncienne = ordre.ancienne;
+  var bornesRecente = bornesDePeriode(periodeRecente, dashEvolutionType);
+  var bornesAncienne = bornesDePeriode(periodeAncienne, dashEvolutionType);
+  var metriquesRecente = calculerMetriquesFinancieres(bornesRecente.deb, bornesRecente.fin);
+  var metriquesAncienne = calculerMetriquesFinancieres(bornesAncienne.deb, bornesAncienne.fin);
+
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+  html += '<h2 style="font-size:16px;font-weight:700;margin:0">Finances — Evolution</h2>';
+  html += '<button class="btn btn-sm" onclick="dashEvolutionActive=false;renderPage()">&#x2190; Retour au tableau de bord</button>';
+  html += '</div>';
+
+  html += '<div class="card" style="padding:14px 16px;margin-bottom:16px">';
+  html += '<div class="flex gap6" style="flex-wrap:wrap;margin-bottom:12px">';
+  ['mois','trimestre','semestre','annee'].forEach(function(t){
+    var lbl = {mois:'Mensuel',trimestre:'Trimestriel',semestre:'Semestriel',annee:'Annuel'}[t];
+    html += '<button class="btn btn-sm'+(dashEvolutionType===t?' btn-primary':'')+'" data-ret="'+t+'" onclick="setDashEvolutionTypeByEl(this)">'+lbl+'</button>';
+  });
+  html += '</div>';
+  html += '<div class="flex gap6" style="align-items:center;flex-wrap:wrap">';
+  html += '<span class="xs muted">Periode A</span>'+htmlPickerPeriodeDash('A', dashEvolutionType, dashEvolutionPeriodeA);
+  html += '<span class="xs muted" style="margin-left:12px">Periode B</span>'+htmlPickerPeriodeDash('B', dashEvolutionType, dashEvolutionPeriodeB);
+  html += '</div>';
+  html += '<div class="xs muted" style="margin-top:6px">La periode B se propose automatiquement comme la periode precedente — modifiable librement pour comparer deux periodes au choix. La plus recente des deux s\'affiche toujours en seconde position.</div>';
+  html += '</div>';
+
+  html += '<div class="card" style="padding:14px 16px;margin-bottom:16px">';
+  html += '<div class="fw7" style="margin-bottom:8px">Tendance globale — CA total devis + forfaits (12 derniers mois)</div>';
+  html += '<canvas id="dashEvoChartGlobal" height="80"></canvas>';
+  html += '</div>';
+
+  html += '<div class="card"><div class="card-head">Comparaison des indicateurs — '+formaterLabelPeriode(periodeAncienne,dashEvolutionType)+' vs '+formaterLabelPeriode(periodeRecente,dashEvolutionType)+'</div>';
+  html += '<div class="tw"><table><thead><tr><th>Indicateur</th><th style="text-align:right">'+formaterLabelPeriode(periodeAncienne,dashEvolutionType)+'</th><th style="text-align:right">'+formaterLabelPeriode(periodeRecente,dashEvolutionType)+'</th><th style="text-align:right">Variation</th></tr></thead><tbody>';
+  METRIQUES_FINANCIERES_LISTE.forEach(function(m){
+    var valAncien = metriquesAncienne[m.cle];
+    var valRecent = metriquesRecente[m.cle];
+    var estSelectionne = dashEvolutionMetriqueGraphique===m.cle;
+    var variation = null, estNouveau = false;
+    if(valAncien!==null && valRecent!==null){
+      if(valAncien!==0){ variation = ((valRecent-valAncien)/Math.abs(valAncien)*100); }
+      else if(valRecent!==0){ estNouveau = true; }
+      else { variation = 0; }
+    }
+    var fmt = function(v){
+      if(v===null) return '—';
+      if(m.format==='pourcentage') return v.toFixed(1)+'%';
+      return Math.round(v).toLocaleString('fr-FR')+' FCFA';
+    };
+    var varTxt = estNouveau ? 'Nouveau' : (variation===null ? '—' : (variation>=0?'&#9650; +':'&#9660; ')+variation.toFixed(1)+'%');
+    var estBon = variation===null ? null : ((variation>=0)===m.hausseEstPositive);
+    var varColor = (variation===null && !estNouveau) ? '#888' : (estNouveau ? '#185FA5' : (estBon?'#3B6D11':'#A32D2D'));
+    html += '<tr style="cursor:pointer;'+(estSelectionne?'background:#EBF3FB':'')+'" data-metrique="'+m.cle+'" onclick="selectionnerMetriqueGraphiqueByEl(this)">';
+    html += '<td class="fw7">'+(estSelectionne?'&#9662; ':'&#9656; ')+m.label+'</td>';
+    html += '<td style="text-align:right;font-family:monospace;color:#888">'+fmt(valAncien)+'</td>';
+    html += '<td style="text-align:right;font-family:monospace">'+fmt(valRecent)+'</td>';
+    html += '<td style="text-align:right;font-weight:700;color:'+varColor+'">'+varTxt+'</td>';
+    html += '</tr>';
+    if(estSelectionne){
+      html += '<tr><td colspan="4" style="padding:10px 16px 16px 16px;background:#faf9f7">';
+      html += '<div class="xs fw7" style="margin-bottom:6px">Tendance — '+m.label+' (12 derniers mois)</div>';
+      if(m.cle==='expositionMoyenne') html += '<div class="xs muted" style="margin-bottom:6px">Les mois anterieurs a la mise en place des releves quotidiens n\'ont pas de donnee disponible.</div>';
+      html += '<canvas id="dashEvoChartMetrique" height="70"></canvas>';
+      html += '</td></tr>';
+    }
+  });
+  html += '</tbody></table></div></div>';
+
+  setTimeout(function(){ initGraphiquesDashEvolution(); }, 50);
+  return html;
+}
+
+// Initialise les graphiques Chart.js de la vue Evolution Finances —
+// appelee apres l'insertion du HTML dans le DOM.
+function initGraphiquesDashEvolution(){
+  if(typeof Chart==='undefined') return;
+  var maintenant = new Date();
+  var douzeMois = [];
+  for(var i=11;i>=0;i--){
+    var d = new Date(maintenant.getFullYear(), maintenant.getMonth()-i, 1);
+    douzeMois.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));
+  }
+  var labels = douzeMois.map(function(m){return formaterLabelPeriode(m,'mois');});
+
+  var canvasGlobal = document.getElementById('dashEvoChartGlobal');
+  if(canvasGlobal){
+    var caParMois = collecterCATotalParMois();
+    var valeurs = douzeMois.map(function(m){ return caParMois[m]||0; });
+    if(window._chartDashGlobal) window._chartDashGlobal.destroy();
+    window._chartDashGlobal = new Chart(canvasGlobal, {
+      type:'bar',
+      data:{ labels: labels, datasets:[{ label:'CA total', data: valeurs, backgroundColor:'#185FA5' }] },
+      options:{ responsive:true, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} }
+    });
+  }
+
+  var canvasMetrique = document.getElementById('dashEvoChartMetrique');
+  if(canvasMetrique && dashEvolutionMetriqueGraphique){
+    var metriqueDef = METRIQUES_FINANCIERES_LISTE.find(function(m){return m.cle===dashEvolutionMetriqueGraphique;});
+    var valeursMetrique = douzeMois.map(function(m){
+      var b = bornesDePeriode(m, 'mois');
+      var mtr = calculerMetriquesFinancieres(b.deb, b.fin);
+      return mtr[dashEvolutionMetriqueGraphique];
+    });
+    if(window._chartDashMetrique) window._chartDashMetrique.destroy();
+    window._chartDashMetrique = new Chart(canvasMetrique, {
+      type:'line',
+      data:{ labels: labels, datasets:[{ label: metriqueDef.label, data: valeursMetrique.map(function(v){return v===null?0:v;}), borderColor:'#3B6D11', backgroundColor:'rgba(59,109,17,0.1)', fill:true, tension:0.25, spanGaps:false }] },
+      options:{ responsive:true, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} }
+    });
+  }
+}
+
+
+// Determine dynamiquement laquelle des deux periodes est la plus RECENTE
+// chronologiquement — peu importe laquelle l'utilisateur a saisie comme
+// "A" ou "B" (la periode B etant librement modifiable, elle peut tres
+// bien se retrouver plus recente que A). Compare simplement leur premier
+// mois respectif (format "YYYY-MM", triable lexicographiquement).
+function ordonnerPeriodesParChronologie(periodeA, periodeB, type){
+  var premierMoisA = moisDansPeriode(periodeA, type)[0];
+  var premierMoisB = moisDansPeriode(periodeB, type)[0];
+  if(premierMoisA >= premierMoisB){
+    return { recente: periodeA, ancienne: periodeB };
+  } else {
+    return { recente: periodeB, ancienne: periodeA };
+  }
+}
+
+function rentaEvolution(){
+  if(!rentaEvolutionPeriodeA){
+    rentaEvolutionPeriodeA = periodeKeyDuMoment(rentaEvolutionType);
+    rentaEvolutionPeriodeB = periodePrecedente(rentaEvolutionPeriodeA, rentaEvolutionType);
+  }
+  var caParClientMois = collecterCAParClientMois();
+
+  // La periode la plus RECENTE s'affiche toujours en seconde colonne
+  // (celle des deux montants), peu importe si l'utilisateur l'a saisie
+  // comme "A" ou "B" — la periode B restant librement modifiable, elle
+  // peut tres bien devenir la plus recente des deux.
+  var ordre = ordonnerPeriodesParChronologie(rentaEvolutionPeriodeA, rentaEvolutionPeriodeB, rentaEvolutionType);
+  var periodeRecente = ordre.recente, periodeAncienne = ordre.ancienne;
+
+  var html = '<div class="card" style="padding:14px 16px;margin-bottom:16px">';
+  html += '<div class="flex gap6" style="flex-wrap:wrap;margin-bottom:12px">';
+  ['mois','trimestre','semestre','annee'].forEach(function(t){
+    var lbl = {mois:'Mensuel',trimestre:'Trimestriel',semestre:'Semestriel',annee:'Annuel'}[t];
+    html += '<button class="btn btn-sm'+(rentaEvolutionType===t?' btn-primary':'')+'" data-ret="'+t+'" onclick="setRentaEvolutionTypeByEl(this)">'+lbl+'</button>';
+  });
+  html += '</div>';
+  html += '<div class="flex gap6" style="align-items:center;flex-wrap:wrap">';
+  html += '<span class="xs muted">Periode A (actuelle)</span>'+htmlPickerPeriode('A', rentaEvolutionType, rentaEvolutionPeriodeA);
+  html += '<span class="xs muted" style="margin-left:12px">Periode B (comparaison)</span>'+htmlPickerPeriode('B', rentaEvolutionType, rentaEvolutionPeriodeB);
+  html += '</div>';
+  html += '<div class="xs muted" style="margin-top:6px">La periode B se propose automatiquement comme la periode precedente — modifiable librement pour comparer deux periodes au choix. La plus recente des deux s\'affiche toujours en seconde position.</div>';
+  html += '</div>';
+
+  var tousClients = Object.keys(caParClientMois);
+  var comparaison = tousClients.map(function(client){
+    var caRecent = calculerCAPeriode(caParClientMois, client, periodeRecente, rentaEvolutionType);
+    var caAncien = calculerCAPeriode(caParClientMois, client, periodeAncienne, rentaEvolutionType);
+    var variation = caAncien>0 ? ((caRecent-caAncien)/caAncien*100) : (caRecent>0 ? null : 0); // null = "nouveau" (pas de base de comparaison)
+    return {client:client, caRecent:caRecent, caAncien:caAncien, variation:variation};
+  }).filter(function(c){return c.caRecent>0 || c.caAncien>0;});
+
+  if(rentaEvolutionTri==='variation_desc') comparaison.sort(function(a,b){return (b.variation===null?-Infinity:b.variation)-(a.variation===null?-Infinity:a.variation);});
+  else if(rentaEvolutionTri==='variation_asc') comparaison.sort(function(a,b){return (a.variation===null?Infinity:a.variation)-(b.variation===null?Infinity:b.variation);});
+  else comparaison.sort(function(a,b){return b.caRecent-a.caRecent;});
+
+  var totalRecent = comparaison.reduce(function(s,c){return s+c.caRecent;},0);
+  var totalAncien = comparaison.reduce(function(s,c){return s+c.caAncien;},0);
+  var variationGlobale = totalAncien>0 ? ((totalRecent-totalAncien)/totalAncien*100) : null;
+
+  html += '<div class="kgrid k3" style="margin-bottom:16px">';
+  html += kpi('CA '+formaterLabelPeriode(periodeAncienne,rentaEvolutionType), totalAncien?totalAncien.toLocaleString('fr-FR')+' FCFA':'—', '');
+  html += kpi('CA '+formaterLabelPeriode(periodeRecente,rentaEvolutionType), totalRecent?totalRecent.toLocaleString('fr-FR')+' FCFA':'—', 'blue');
+  html += kpi('Variation globale', variationGlobale!==null?(variationGlobale>=0?'+':'')+variationGlobale.toFixed(1)+'%':'—', variationGlobale===null?'':(variationGlobale>=0?'green':'red'));
+  html += '</div>';
+
+  // ── Graphique global : tendance du CA total sur les 12 derniers mois ──
+  html += '<div class="card" style="padding:14px 16px;margin-bottom:16px">';
+  html += '<div class="fw7" style="margin-bottom:8px">Tendance globale (12 derniers mois)</div>';
+  html += '<canvas id="rentaEvoChartGlobal" height="80"></canvas>';
+  html += '</div>';
+
+  // ── Tableau de comparaison, trie ──
+  html += '<div class="card"><div class="card-head" style="display:flex;justify-content:space-between;align-items:center">';
+  html += '<span>Comparaison par client ('+comparaison.length+')</span>';
+  html += '<div class="flex gap6">';
+  html += '<button class="btn btn-sm'+(rentaEvolutionTri==='ca_desc'?' btn-primary':'')+'" data-ret2="ca_desc" onclick="setRentaEvolutionTriByEl(this)" style="font-size:11px">Trier par CA</button>';
+  html += '<button class="btn btn-sm'+(rentaEvolutionTri==='variation_desc'?' btn-primary':'')+'" data-ret2="variation_desc" onclick="setRentaEvolutionTriByEl(this)" style="font-size:11px">Plus forte hausse</button>';
+  html += '<button class="btn btn-sm'+(rentaEvolutionTri==='variation_asc'?' btn-primary':'')+'" data-ret2="variation_asc" onclick="setRentaEvolutionTriByEl(this)" style="font-size:11px">Plus forte baisse</button>';
+  html += '</div></div>';
+  if(!comparaison.length){
+    html += '<div class="empty">Aucune donnee sur ces periodes</div></div>';
+  } else {
+    html += '<div class="tw"><table><thead><tr><th>Client</th><th style="text-align:right">CA '+formaterLabelPeriode(periodeAncienne,rentaEvolutionType)+'</th><th style="text-align:right">CA '+formaterLabelPeriode(periodeRecente,rentaEvolutionType)+'</th><th style="text-align:right">Variation</th></tr></thead><tbody>';
+    comparaison.forEach(function(c){
+      var estSelectionne = rentaEvolutionClientGraphique===c.client;
+      var varTxt = c.variation===null ? 'Nouveau' : (c.variation>=0?'&#9650; +':'&#9660; ')+c.variation.toFixed(1)+'%';
+      var varColor = c.variation===null ? '#185FA5' : (c.variation>=0?'#3B6D11':'#A32D2D');
+      html += '<tr style="cursor:pointer;'+(estSelectionne?'background:#EBF3FB':'')+'" data-cli="'+encodeURIComponent(c.client)+'" onclick="selectionnerClientGraphiqueByEl(this)">';
+      html += '<td class="fw7">'+(estSelectionne?'&#9662; ':'&#9656; ')+c.client+'</td>';
+      html += '<td style="text-align:right;font-family:monospace;color:#888">'+c.caAncien.toLocaleString('fr-FR')+'</td>';
+      html += '<td style="text-align:right;font-family:monospace">'+c.caRecent.toLocaleString('fr-FR')+'</td>';
+      html += '<td style="text-align:right;font-weight:700;color:'+varColor+'">'+varTxt+'</td>';
+      html += '</tr>';
+      if(estSelectionne){
+        html += '<tr><td colspan="4" style="padding:10px 16px 16px 16px;background:#faf9f7">';
+        html += '<div class="xs fw7" style="margin-bottom:6px">Tendance — '+c.client+' (12 derniers mois)</div>';
+        html += '<canvas id="rentaEvoChartClient" height="70"></canvas>';
+        html += '</td></tr>';
+      }
+    });
+    html += '</tbody></table></div>';
+  }
+  html += '</div>';
+
+  setTimeout(function(){ initGraphiquesRentaEvolution(caParClientMois); }, 50);
+  return html;
+}
+
+// Initialise les graphiques Chart.js — appelee apres l'insertion du HTML
+// dans le DOM (les canvas doivent deja exister).
+function initGraphiquesRentaEvolution(caParClientMois){
+  if(typeof Chart==='undefined') return;
+  var maintenant = new Date();
+  var douzeMois = [];
+  for(var i=11;i>=0;i--){
+    var d = new Date(maintenant.getFullYear(), maintenant.getMonth()-i, 1);
+    douzeMois.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));
+  }
+  var labels = douzeMois.map(function(m){return formaterLabelPeriode(m,'mois');});
+
+  var canvasGlobal = document.getElementById('rentaEvoChartGlobal');
+  if(canvasGlobal){
+    var totauxParMois = douzeMois.map(function(m){
+      var total = 0;
+      Object.keys(caParClientMois).forEach(function(client){ total += caParClientMois[client][m]||0; });
+      return total;
+    });
+    if(window._chartRentaGlobal) window._chartRentaGlobal.destroy();
+    window._chartRentaGlobal = new Chart(canvasGlobal, {
+      type:'bar',
+      data:{ labels: labels, datasets:[{ label:'CA total', data: totauxParMois, backgroundColor:'#185FA5' }] },
+      options:{ responsive:true, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} }
+    });
+  }
+
+  var canvasClient = document.getElementById('rentaEvoChartClient');
+  if(canvasClient && rentaEvolutionClientGraphique){
+    var dataClient = caParClientMois[rentaEvolutionClientGraphique] || {};
+    var valeursClient = douzeMois.map(function(m){ return dataClient[m]||0; });
+    if(window._chartRentaClient) window._chartRentaClient.destroy();
+    window._chartRentaClient = new Chart(canvasClient, {
+      type:'line',
+      data:{ labels: labels, datasets:[{ label:'CA '+rentaEvolutionClientGraphique, data: valeursClient, borderColor:'#3B6D11', backgroundColor:'rgba(59,109,17,0.1)', fill:true, tension:0.25 }] },
+      options:{ responsive:true, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} }
+    });
+  }
+}
+
 function rentaParClient(dossiers){
   // Agréger par client
   var clients = {};
   dossiers.forEach(function(d){
-    if(!clients[d.client]) clients[d.client] = {client:d.client, tel:d.tel, nb:0, totalAchat:0, totalVente:0, dossiers:[]};
+    if(!clients[d.client]) clients[d.client] = {client:d.client, tel:d.tel, nb:0, totalAchat:0, totalVente:0, totalEncaisse:0, dossiers:[]};
     var c = clients[d.client];
-    c.nb++; c.totalAchat+=d.totalAchat; c.totalVente+=d.totalVente; c.dossiers.push(d);
+    c.nb++; c.totalAchat+=d.totalAchat; c.totalVente+=d.totalVente; c.totalEncaisse+=d.montantPaye; c.dossiers.push(d);
   });
   var liste = Object.keys(clients).map(function(k){
     var c = clients[k];
     c.marge = c.totalVente - c.totalAchat;
     c.tauxMarge = c.totalVente>0 ? (c.marge/c.totalVente*100).toFixed(1)+'%' : '—';
+    c.pctEncaisse = c.totalVente>0 ? (c.totalEncaisse/c.totalVente*100) : null;
     return c;
   }).sort(function(a,b){return b.marge-a.marge;});
 
   var html = '<div class="card"><div class="card-head">Analyse par client ('+liste.length+')</div>';
   if(!liste.length){ html += '<div class="empty">Aucun client devis sur cette periode</div></div>'; return html; }
   html += '<div class="tw"><table><thead><tr>';
-  html += '<th>Client</th><th>Nb dossiers</th><th>Cout achat total</th><th>CA prevu total</th><th>Marge brute</th><th>Taux marge</th>';
+  html += '<th>Client</th><th>Nb dossiers</th><th>Cout achat total</th><th>CA total realise</th><th>Marge brute</th><th>Taux marge</th><th>CA encaisse</th><th>% Encaisse</th>';
   html += '</tr></thead><tbody>';
   liste.forEach(function(c){
     var mc = c.marge>0?'#3B6D11':c.marge<0?'#A32D2D':'#888';
-    html += '<tr>';
-    html += '<td><div class="fw7">'+c.client+'</div><div class="xs muted">'+c.tel+'</div></td>';
+    var pctTxt = c.pctEncaisse!==null ? c.pctEncaisse.toFixed(1)+'%' : '—';
+    var pctColor = c.pctEncaisse===null?'#888':c.pctEncaisse>=80?'#3B6D11':c.pctEncaisse>=40?'#854F0B':'#A32D2D';
+    var estGroupe = c.dossiers.length>1;
+    var expandKey = 'rentaDevisClient::'+c.client;
+    var expanded = !!creancesClientExpand[expandKey];
+    html += '<tr'+(estGroupe?' style="cursor:pointer" data-ccexp="'+encodeURIComponent(expandKey)+'" onclick="toggleCreancesClientExpandByEl(this)"':'')+'>';
+    html += '<td><div class="fw7">'+(estGroupe?(expanded?'&#9662; ':'&#9656; '):'')+c.client+'</div><div class="xs muted">'+c.tel+'</div></td>';
     html += '<td style="text-align:center">'+c.nb+'</td>';
     html += '<td style="font-family:monospace;color:#A32D2D">'+c.totalAchat.toLocaleString('fr-FR')+'</td>';
     html += '<td style="font-family:monospace;color:#185FA5">'+c.totalVente.toLocaleString('fr-FR')+'</td>';
     html += '<td style="font-family:monospace;font-weight:700;color:'+mc+'">'+(c.marge>0?'+':'')+c.marge.toLocaleString('fr-FR')+'</td>';
     html += '<td style="font-weight:700;color:'+mc+'">'+c.tauxMarge+'</td>';
+    html += '<td style="font-family:monospace;color:#3B6D11">'+c.totalEncaisse.toLocaleString('fr-FR')+'</td>';
+    html += '<td style="font-weight:700;color:'+pctColor+'">'+pctTxt+'</td>';
     html += '</tr>';
+    if(estGroupe && expanded){
+      html += '<tr><td colspan="8" style="padding:0;background:#faf9f7"><div style="padding:6px 16px 10px 32px">';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:#888">';
+      html += '<th style="text-align:left;padding:4px 8px;font-size:11px">Dossier</th><th style="text-align:right;padding:4px 8px;font-size:11px">Cout achat</th><th style="text-align:right;padding:4px 8px;font-size:11px">CA realise</th><th style="text-align:right;padding:4px 8px;font-size:11px">Marge</th><th style="text-align:right;padding:4px 8px;font-size:11px">Taux</th><th style="text-align:right;padding:4px 8px;font-size:11px">Encaisse</th><th style="text-align:right;padding:4px 8px;font-size:11px">% Encaisse</th>';
+      html += '</tr></thead><tbody>';
+      c.dossiers.forEach(function(d){
+        var mcD = d.marge>0?'#3B6D11':d.marge<0?'#A32D2D':'#888';
+        var tauxTxtD = d.totalVente>0 ? d.tauxMarge.toFixed(1)+'%' : '—';
+        var pctD = d.totalVente>0 ? (d.montantPaye/d.totalVente*100) : null;
+        var pctTxtD = pctD!==null ? pctD.toFixed(1)+'%' : '—';
+        html += '<tr style="border-top:1px solid rgba(0,0,0,0.06)">';
+        html += '<td style="padding:4px 8px">'+d.immat+' '+(d.marque||'')+' '+(d.modele||'')+'</td>';
+        html += '<td style="padding:4px 8px;text-align:right;font-family:monospace">'+d.totalAchat.toLocaleString('fr-FR')+'</td>';
+        html += '<td style="padding:4px 8px;text-align:right;font-family:monospace">'+d.totalVente.toLocaleString('fr-FR')+'</td>';
+        html += '<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:700;color:'+mcD+'">'+(d.marge>0?'+':'')+d.marge.toLocaleString('fr-FR')+'</td>';
+        html += '<td style="padding:4px 8px;text-align:right;color:'+mcD+'">'+tauxTxtD+'</td>';
+        html += '<td style="padding:4px 8px;text-align:right;font-family:monospace;color:#3B6D11">'+d.montantPaye.toLocaleString('fr-FR')+'</td>';
+        html += '<td style="padding:4px 8px;text-align:right">'+pctTxtD+'</td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table></div></td></tr>';
+    }
   });
   html += '</tbody></table></div></div>';
   return html;
@@ -7556,7 +8261,12 @@ function validerFactureManuelle(){
     lignesChiffrage.push({
       libreId:'lib_'+Date.now()+'_'+Math.random().toString(36).substr(2,4),
       piece:piece, qte:qte, prixAchat:puAchat, prixVente:puVente,
-      fournisseurId:'', source:'facture_manuelle', paiement:'cash'
+      fournisseurId:'', source:'facture_manuelle', paiement:'cash',
+      // Une facture manuelle ne passe jamais par le circuit normal de
+      // validation d'achat (Direction) — sans ce champ, ses lignes sont
+      // exclues a tort de tous les calculs qui filtrent sur cl.valideDir
+      // (Exposition financiere, Rentabilite...).
+      valideDir: true
     });
   });
   if(!lignesChiffrage.length){ alert('Ajoutez au moins un article avec un prix de vente.'); return; }
@@ -9636,6 +10346,7 @@ function barrePeriode(filtreActif, prefixData, onClickFn, idDebut, idFin, valDeb
 }
 
 function pageFinancesDashboard(){
+  if(dashEvolutionActive) return pageFinancesEvolution();
   var maintenant = Date.now();
 
   // ═══ Ligne 1 : Activite (CA / Depenses / Marge, devis vs forfait) ═══
@@ -9764,6 +10475,7 @@ function pageFinancesDashboard(){
 
   var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Finances — vue d\'ensemble</h2>';
+  html += '<button class="btn btn-sm" onclick="dashEvolutionActive=true;renderPage()">&#x1F4C8; Evolution</button>';
   html += '</div>';
 
   function bloc(titre, valeurTotale, couleur, sousLignes){
@@ -9849,14 +10561,53 @@ function pageFinancesDashboard(){
   if(!factEnRetard.length){
     html += '<div class="xs muted">Aucune facture en retard.</div>';
   } else {
-    factEnRetard.slice(0,6).forEach(function(e){
-      var joursRetard = Math.abs(Math.round((e.dateEcheance-maintenant)/86400000));
-      html += '<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f0ede8">';
-      html += '<div><div class="fw7">'+e.nom+'</div><div class="xs" style="color:#A32D2D">'+joursRetard+' jours de retard</div></div>';
-      html += '<div style="text-align:right"><div style="font-family:monospace">'+e.montant.toLocaleString('fr-FR')+'</div></div>';
-      html += '</div>';
+    // Regroupe par client : un client a une seule facture -> affichage
+    // direct comme avant ; plusieurs factures -> ligne cumulee avec
+    // detail depliable au clic.
+    var retardParClient = {};
+    factEnRetard.forEach(function(e){
+      if(!retardParClient[e.nom]) retardParClient[e.nom] = {nom:e.nom, items:[], total:0};
+      retardParClient[e.nom].items.push(e);
+      retardParClient[e.nom].total += e.montant;
     });
-    if(factEnRetard.length>6) html += '<div class="xs muted" style="margin-top:6px">+ '+(factEnRetard.length-6)+' autre(s)</div>';
+    var groupesRetard = Object.keys(retardParClient).map(function(k){return retardParClient[k];})
+      .sort(function(a,b){
+        var aMin = Math.min.apply(null, a.items.map(function(i){return i.dateEcheance;}));
+        var bMin = Math.min.apply(null, b.items.map(function(i){return i.dateEcheance;}));
+        return aMin-bMin;
+      });
+    groupesRetard.slice(0,6).forEach(function(g){
+      if(g.items.length===1){
+        var e = g.items[0];
+        var joursRetard = Math.abs(Math.round((e.dateEcheance-maintenant)/86400000));
+        html += '<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f0ede8">';
+        html += '<div><div class="fw7">'+e.nom+'</div><div class="xs" style="color:#A32D2D">'+joursRetard+' jours de retard</div></div>';
+        html += '<div style="text-align:right"><div style="font-family:monospace">'+e.montant.toLocaleString('fr-FR')+'</div></div>';
+        html += '</div>';
+      } else {
+        var expandKey = 'dashRetard::'+g.nom;
+        var expanded = !!creancesClientExpand[expandKey];
+        var plusVieille = Math.min.apply(null, g.items.map(function(i){return i.dateEcheance;}));
+        var joursRetardMax = Math.abs(Math.round((plusVieille-maintenant)/86400000));
+        html += '<div style="padding:7px 0;border-bottom:1px solid #f0ede8;cursor:pointer" data-ccexp="'+encodeURIComponent(expandKey)+'" onclick="toggleCreancesClientExpandByEl(this)">';
+        html += '<div style="display:flex;justify-content:space-between">';
+        html += '<div><div class="fw7">'+(expanded?'&#9662; ':'&#9656; ')+g.nom+'</div><div class="xs" style="color:#A32D2D">'+g.items.length+' factures — '+joursRetardMax+' jours de retard max</div></div>';
+        html += '<div style="text-align:right"><div style="font-family:monospace;font-weight:700">'+g.total.toLocaleString('fr-FR')+'</div></div>';
+        html += '</div>';
+        if(expanded){
+          html += '<div style="margin-top:6px;padding-left:12px;border-left:2px solid #FCEBEB">';
+          g.items.sort(function(a,b){return a.dateEcheance-b.dateEcheance;}).forEach(function(e){
+            var jr = Math.abs(Math.round((e.dateEcheance-maintenant)/86400000));
+            html += '<div style="display:flex;justify-content:space-between;padding:3px 0" class="xs">';
+            html += '<span class="muted">'+jr+' j de retard</span><span style="font-family:monospace">'+e.montant.toLocaleString('fr-FR')+'</span>';
+            html += '</div>';
+          });
+          html += '</div>';
+        }
+        html += '</div>';
+      }
+    });
+    if(groupesRetard.length>6) html += '<div class="xs muted" style="margin-top:6px">+ '+(groupesRetard.length-6)+' autre(s) client(s)</div>';
   }
   html += '<div style="margin-top:10px"><a href="#" onclick="event.preventDefault();navigate(\'facturation\')" class="xs" style="color:#185FA5;text-decoration:underline">Voir toutes les creances &rarr;</a></div>';
   html += '</div>';
@@ -9866,15 +10617,69 @@ function pageFinancesDashboard(){
   if(!prochainesEcheances.length){
     html += '<div class="xs muted">Aucune echeance a venir.</div>';
   } else {
-    prochainesEcheances.forEach(function(e){
-      var joursRestants = Math.round((e.dateEcheance-maintenant)/86400000);
-      var delaiLabel = joursRestants<=0 ? 'aujourd\'hui' : 'dans '+joursRestants+' jour'+(joursRestants>1?'s':'');
-      var catLabel = e.categorie==='client'?'':(e.categorie==='charge_fixe'?' (charge fixe)':e.categorie==='engagement_bancaire'?' (engagement)':' (fournisseur)');
-      var montantColor = e.sens==='encaissement' ? '#3B6D11' : '#A32D2D';
-      html += '<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f0ede8">';
-      html += '<div><div class="fw7">'+e.nom+catLabel+'</div><div class="xs muted">'+delaiLabel+'</div></div>';
-      html += '<div style="text-align:right"><div style="font-family:monospace;color:'+montantColor+'">'+(e.sens==='encaissement'?'+':'-')+e.montant.toLocaleString('fr-FR')+'</div></div>';
-      html += '</div>';
+    // Regroupe UNIQUEMENT les echeances "client" (encaissements) par
+    // client — les decaissements (fournisseurs/charges/engagements)
+    // restent affiches individuellement, ce ne sont pas des "factures
+    // d'un client".
+    var echClients = prochainesEcheances.filter(function(e){return e.categorie==='client';});
+    var echAutres = prochainesEcheances.filter(function(e){return e.categorie!=='client';});
+    var echParClient = {};
+    echClients.forEach(function(e){
+      if(!echParClient[e.nom]) echParClient[e.nom] = {nom:e.nom, items:[], total:0};
+      echParClient[e.nom].items.push(e);
+      echParClient[e.nom].total += e.montant;
+    });
+    var lignesAffichage = Object.keys(echParClient).map(function(k){return {type:'client', groupe:echParClient[k]};})
+      .concat(echAutres.map(function(e){return {type:'autre', item:e};}));
+    lignesAffichage.sort(function(a,b){
+      var da = a.type==='client' ? Math.min.apply(null,a.groupe.items.map(function(i){return i.dateEcheance;})) : a.item.dateEcheance;
+      var db = b.type==='client' ? Math.min.apply(null,b.groupe.items.map(function(i){return i.dateEcheance;})) : b.item.dateEcheance;
+      return da-db;
+    });
+    lignesAffichage.forEach(function(l){
+      if(l.type==='autre'){
+        var e = l.item;
+        var joursRestants = Math.round((e.dateEcheance-maintenant)/86400000);
+        var delaiLabel = joursRestants<=0 ? 'aujourd\'hui' : 'dans '+joursRestants+' jour'+(joursRestants>1?'s':'');
+        var catLabel = e.categorie==='charge_fixe'?' (charge fixe)':e.categorie==='engagement_bancaire'?' (engagement)':' (fournisseur)';
+        var montantColor = e.sens==='encaissement' ? '#3B6D11' : '#A32D2D';
+        html += '<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f0ede8">';
+        html += '<div><div class="fw7">'+e.nom+catLabel+'</div><div class="xs muted">'+delaiLabel+'</div></div>';
+        html += '<div style="text-align:right"><div style="font-family:monospace;color:'+montantColor+'">'+(e.sens==='encaissement'?'+':'-')+e.montant.toLocaleString('fr-FR')+'</div></div>';
+        html += '</div>';
+      } else if(l.groupe.items.length===1){
+        var e = l.groupe.items[0];
+        var joursRestants = Math.round((e.dateEcheance-maintenant)/86400000);
+        var delaiLabel = joursRestants<=0 ? 'aujourd\'hui' : 'dans '+joursRestants+' jour'+(joursRestants>1?'s':'');
+        html += '<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f0ede8">';
+        html += '<div><div class="fw7">'+e.nom+'</div><div class="xs muted">'+delaiLabel+'</div></div>';
+        html += '<div style="text-align:right"><div style="font-family:monospace;color:#3B6D11">+'+e.montant.toLocaleString('fr-FR')+'</div></div>';
+        html += '</div>';
+      } else {
+        var g = l.groupe;
+        var expandKey = 'dashEcheance::'+g.nom;
+        var expanded = !!creancesClientExpand[expandKey];
+        var plusProche = Math.min.apply(null, g.items.map(function(i){return i.dateEcheance;}));
+        var jr = Math.round((plusProche-maintenant)/86400000);
+        var delaiLabelG = jr<=0 ? 'aujourd\'hui' : 'dans '+jr+' jour'+(jr>1?'s':'');
+        html += '<div style="padding:7px 0;border-bottom:1px solid #f0ede8;cursor:pointer" data-ccexp="'+encodeURIComponent(expandKey)+'" onclick="toggleCreancesClientExpandByEl(this)">';
+        html += '<div style="display:flex;justify-content:space-between">';
+        html += '<div><div class="fw7">'+(expanded?'&#9662; ':'&#9656; ')+g.nom+'</div><div class="xs muted">'+g.items.length+' echeances — prochaine '+delaiLabelG+'</div></div>';
+        html += '<div style="text-align:right"><div style="font-family:monospace;color:#3B6D11;font-weight:700">+'+g.total.toLocaleString('fr-FR')+'</div></div>';
+        html += '</div>';
+        if(expanded){
+          html += '<div style="margin-top:6px;padding-left:12px;border-left:2px solid #E8F0E0">';
+          g.items.sort(function(a,b){return a.dateEcheance-b.dateEcheance;}).forEach(function(e){
+            var jrE = Math.round((e.dateEcheance-maintenant)/86400000);
+            var lblE = jrE<=0 ? 'aujourd\'hui' : 'dans '+jrE+' jour'+(jrE>1?'s':'');
+            html += '<div style="display:flex;justify-content:space-between;padding:3px 0" class="xs">';
+            html += '<span class="muted">'+lblE+'</span><span style="font-family:monospace;color:#3B6D11">+'+e.montant.toLocaleString('fr-FR')+'</span>';
+            html += '</div>';
+          });
+          html += '</div>';
+        }
+        html += '</div>';
+      }
     });
   }
   html += '<div style="margin-top:10px"><a href="#" onclick="event.preventDefault();navigate(\'prevision_treso\')" class="xs" style="color:#185FA5;text-decoration:underline">Voir la prevision complete &rarr;</a></div>';
@@ -22554,6 +23359,7 @@ var GETTERS_EXPORT_COMPLET = {
   'gos_client_delais_paiement': function(){ return CLIENT_DELAIS_PAIEMENT; },
   'gos_clients_sans_vehicule': function(){ return CLIENTS_SANS_VEHICULE; },
   'gos_stock': function(){ return STOCK; },
+  'gos_exposition_snapshots': function(){ return EXPOSITION_SNAPSHOTS; },
   'gos_pieces_catalogue': function(){ return JSON.parse(localStorage.getItem('gos_pieces_catalogue')||'[]'); },
   'gos_comptes_excluded': function(){ return JSON.parse(localStorage.getItem('gos_comptes_excluded')||'[]'); }
 };
@@ -22630,7 +23436,7 @@ function importData(input){
       'gos_charges_fixes', 'gos_engagements_bancaires', 'gos_caisse_journees',
       'gos_caisse_mouvements', 'gos_dettes_manuelles', 'gos_employes_presence',
       'gos_presences', 'gos_descripteurs_faciaux', 'gos_client_delais_paiement',
-      'gos_clients_sans_vehicule', 'gos_stock'
+      'gos_clients_sans_vehicule', 'gos_stock', 'gos_exposition_snapshots'
     ];
 
     if(fbDb && fbConnected){
@@ -23297,7 +24103,10 @@ function validerImportHistorique(){
       return {
         libreId: 'lib_'+Date.now()+'_'+Math.random().toString(36).substr(2,4),
         piece: nom, qte: 1, prixAchat: 0, prixVente: 0,
-        fournisseurId: '', source: 'import_historique', paiement: 'cash'
+        fournisseurId: '', source: 'import_historique', paiement: 'cash',
+        // Meme raisonnement que pour les factures manuelles : cet import
+        // ne passe jamais par le circuit normal de validation d'achat.
+        valideDir: true
       };
     });
     var v = {
@@ -25620,6 +26429,12 @@ function tryInitFirebase(){
       syncDettesManuellesFromFirebase(function(){
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       });
+      syncExpositionSnapshotsFromFirebase(function(){
+        // Capture le releve du jour seulement APRES que toutes les
+        // donnees necessaires au calcul (vehicules, dettes, fournisseurs)
+        // soient chargees et synchronisees.
+        capturerSnapshotExpositionDuJour();
+      });
       syncClientDelaisPaiementFromFirebase(function(){
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       });
@@ -25716,6 +26531,7 @@ function initFirebase(){
         });
         vehicles = newVehicles;
         migrerFactureDeposeeLe(); // migration retroactive, aussi apres synchro Firebase
+        migrerValideDirFacturesManuelles(); // idem, pour les factures manuelles/imports
         lastLocalTs = data.ts || Date.now();
         // Sauvegarder sans photos en localStorage
         var sans = vehicles.map(function(v){
@@ -25883,6 +26699,7 @@ window.onload=function(){
 
   initData();vehicles=loadV();
   migrerFactureDeposeeLe(); // migration retroactive (voir commentaire de la fonction)
+  migrerValideDirFacturesManuelles(); // idem, pour les factures manuelles/imports
   migrerDateDebutChargesFixes(); // idem, pour le suivi de paiement des charges fixes
   // Firebase sera initialisé via onFirebaseDatabaseLoaded()
   // Vérifier s'il y a une session active (persiste après actualisation)
@@ -25984,7 +26801,7 @@ window.onload=function(){
       v.status = 'devis_termine'; migrated = true;
     }
   });
-  if(migrated) saveV();loadPersonnel();initFournisseurs();initBanques();loadForfaitFactures();loadStock();loadChargesFixes();loadEngagementsBancaires();loadForfaitsClients();loadClientsSansVehicule();
+  if(migrated) saveV();loadPersonnel();initFournisseurs();initBanques();loadForfaitFactures();loadStock();loadChargesFixes();loadEngagementsBancaires();loadForfaitsClients();loadClientsSansVehicule();loadExpositionSnapshots();
   // Alimenter le catalogue pièces depuis l'historique existant
   vehicles.forEach(function(v){ if(v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length) indexerPiecesChiffrage(v); });
   renderNav();renderPage();
