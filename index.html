@@ -1945,7 +1945,7 @@ function initFournisseurs(){
 var NAV = {
   direction:[
     {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'},{id:'acces_clients',e:'AC',l:'Acces clients'},{id:'messages_clients',e:'MC',l:'Messages clients'},{id:'import_historique',e:'IH',l:'Import historique'},{id:'presences',e:'Pr',l:'Presences'}]},
-    {l:'Finances',items:[{id:'finances_dashboard',e:'FD',l:'Tableau de bord'},{id:'facturation',e:'F',l:'Facturation'},{id:'caisse',e:'Ca',l:'Caisse'},{id:'dettes_fournisseurs',e:'DF',l:'Dettes fournisseurs'},{id:'prevision_treso',e:'PT',l:'Prevision tresorerie'}]},
+    {l:'Finances',items:[{id:'finances_dashboard',e:'FD',l:'Tableau de bord'},{id:'facturation',e:'F',l:'Facturation'},{id:'caisse',e:'Ca',l:'Caisse'},{id:'dettes_fournisseurs',e:'DF',l:'Dettes fournisseurs'},{id:'prevision_treso',e:'PT',l:'Prevision tresorerie'},{id:'historique_paiements',e:'HP',l:'Historique paiements'}]},
     {l:'Rentabilite',items:[{id:'rentabilite',e:'RD',l:'Clients Devis'},{id:'rentabilite_forfait',e:'RF',l:'Clients Forfait'},{id:'analyse_pieces',e:'AP',l:'Analyse pieces'}]},
     {l:'Gestion',items:[{id:'archives',e:'Ar',l:'Archives'},{id:'banques',e:'B',l:'Banques'},{id:'charges_fixes',e:'CF',l:'Charges fixes'},{id:'engagements_bancaires',e:'EB',l:'Engagements bancaires'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'stock',e:'St',l:'Gestion du stock'},{id:'travaux_prevoir',e:'TP',l:'Travaux a prevoir'},{id:'devis_differes',e:'DD',l:'Devis differes'},{id:'sinistres',e:'S',l:'Sinistres'},{id:'val_fin',e:'VF',l:'Validation financiere'},{id:'kpi',e:'K',l:'KPI'}]}
   ],
@@ -5225,6 +5225,7 @@ function renderPage(){
   else if(p==='finances_dashboard') html=pageFinancesDashboard();
   else if(p==='dettes_fournisseurs') html=pageDettesFournisseurs();
   else if(p==='prevision_treso') html=pagePrevisionTresorerie();
+  else if(p==='historique_paiements') html=pageHistoriquePaiements();
   else if(p==='facturation_forfait') html=pageFacturationForfait();
   else if(p==='chiffrage') html=pageChiffrageAchats();
   else if(p==='testeur') html=pageDashTesteur();
@@ -5349,6 +5350,39 @@ function migrerValideDirFacturesManuelles(){
   });
   if(nbCorrige>0) saveV();
   return nbCorrige;
+}
+
+// Migration retroactive : avant cette correction, un paiement client
+// (devis ou forfait) n'etait jamais trace individuellement — seul un
+// montant total et une date UNIQUE etaient conserves, et un versement en
+// plusieurs fois EFFACAIT le precedent (bug corrige dans validerPaiement).
+// Convertit les paiements deja enregistres en un premier versement dans
+// le nouvel historique detaille (paiementsClient), pour ne perdre aucune
+// donnee et permettre l'historique des paiements par la suite.
+function migrerPaiementsClients(){
+  var nbMigres = 0;
+  vehicles.forEach(function(v){
+    if(v.paiementsClient) return; // deja migre
+    if(!v.montantPaye || v.montantPaye<=0) return;
+    v.paiementsClient = [{
+      date: v.paiementDate || v.entree || Date.now(),
+      montant: v.montantPaye,
+      note: v.paiementNote || ''
+    }];
+    nbMigres++;
+  });
+  FORFAIT_FACTURES.forEach(function(f){
+    if(f.paiementsClient) return;
+    if(!f.montantPaye || f.montantPaye<=0) return;
+    f.paiementsClient = [{
+      date: f.paiementDate || f.emiseDate || Date.now(),
+      montant: f.montantPaye,
+      note: f.paiementNote || ''
+    }];
+    nbMigres++;
+  });
+  if(nbMigres>0){ saveV(); saveForfaitFactures(); }
+  return nbMigres;
 }
 
 function advance(id){
@@ -8546,8 +8580,10 @@ function validerPaiement(){
     var note    = document.getElementById('paiementNote').value.trim();
     if(!montant){ alert('Saisissez un montant.'); return; }
     if(montant>totalF){ alert('Montant superieur a la facture ('+totalF.toLocaleString('fr-FR')+' FCFA).'); return; }
-    f.montantPaye = (f.montantPaye||0) + montant;
-    f.paiementDate = date ? new Date(date).getTime() : Date.now();
+    if(!f.paiementsClient) f.paiementsClient = [];
+    f.paiementsClient.push({date: date?new Date(date).getTime():Date.now(), montant: montant, note: note});
+    f.montantPaye = f.paiementsClient.reduce(function(s,p){return s+p.montant;},0);
+    f.paiementDate = date ? new Date(date).getTime() : Date.now(); // conserve pour retro-compat des lectures existantes
     f.paiementNote = note;
     if(f.montantPaye >= totalF) f.statut = 'payee';
     saveForfaitFactures();
@@ -8562,14 +8598,20 @@ function validerPaiement(){
   var lignes  = v.chiffrage && v.chiffrage.lignes ? v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
   var total   = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
   if(!montant){ alert('Saisissez un montant.'); return; }
-  if(montant > total){
-    alert('Le montant saisi ('+montant.toLocaleString('fr-FR')+' FCFA) ne peut pas depasser le montant de la facture ('+total.toLocaleString('fr-FR')+' FCFA).');
+  var dejaPaye = parseFloat(v.montantPaye)||0;
+  if(dejaPaye + montant > total){
+    alert('Le montant saisi ('+montant.toLocaleString('fr-FR')+' FCFA) depasserait le montant de la facture ('+total.toLocaleString('fr-FR')+' FCFA). Reste du : '+(total-dejaPaye).toLocaleString('fr-FR')+' FCFA.');
     return;
   }
-  v.montantPaye    = montant;
-  v.paiementDate   = date ? new Date(date).getTime() : Date.now();
+  // IMPORTANT : on ADDITIONNE ce versement au montant deja paye — ne
+  // jamais ecraser, sinon un paiement en plusieurs fois efface les
+  // versements precedents (bug corrige ici).
+  if(!v.paiementsClient) v.paiementsClient = [];
+  v.paiementsClient.push({date: date?new Date(date).getTime():Date.now(), montant: montant, note: note});
+  v.montantPaye    = v.paiementsClient.reduce(function(s,p){return s+p.montant;},0);
+  v.paiementDate   = date ? new Date(date).getTime() : Date.now(); // conserve pour retro-compat des lectures existantes
   v.paiementNote   = note;
-  v.paiementStatut = montant>=total ? 'paye' : 'partiel';
+  v.paiementStatut = v.montantPaye>=total ? 'paye' : 'partiel';
   saveV();
   closePaiementModal();
   renderPage();
@@ -11897,6 +11939,90 @@ function annulerPaiementLigneFournByEl(btn){
 // manuelles) — sans cette liste, une fois payee, une dette disparaissait
 // completement, sans aucun moyen de la revoir ou de corriger une erreur
 // de saisie.
+// Collecte CHAQUE versement client individuel (devis + forfait), avec le
+// delai (date de depot de la facture -> date du paiement) — un client
+// ayant regle en plusieurs fois apparait avec plusieurs lignes distinctes.
+function collecterHistoriquePaiementsClients(){
+  var historique = [];
+  vehicles.forEach(function(v){
+    if(!v.paiementsClient || !v.paiementsClient.length) return;
+    var dateDepot = v.factureDeposeeLe || null;
+    v.paiementsClient.forEach(function(p, idx){
+      historique.push({
+        type:'devis', client:v.client, vehId:v.id, immat:v.immat, marque:v.marque, modele:v.modele,
+        datePaiement:p.date, montant:p.montant, note:p.note||'',
+        dateDepot:dateDepot, delai: dateDepot ? Math.round((p.date-dateDepot)/86400000) : null,
+        numFacture: v.numeroFactureExterne||'', numSecondaire: v.numeroSecondaire||'',
+        paiementIndex: idx
+      });
+    });
+  });
+  FORFAIT_FACTURES.forEach(function(f){
+    if(!f.paiementsClient || !f.paiementsClient.length) return;
+    var dateDepot = f.deposeeDate || null;
+    f.paiementsClient.forEach(function(p, idx){
+      historique.push({
+        type:'forfait', client:f.client, periodeKey:f.periodeKey,
+        datePaiement:p.date, montant:p.montant, note:p.note||'',
+        dateDepot:dateDepot, delai: dateDepot ? Math.round((p.date-dateDepot)/86400000) : null,
+        numFacture: f.numeroFactureExterne||'', numSecondaire: f.numeroSecondaire||'',
+        paiementIndex: idx
+      });
+    });
+  });
+  historique.sort(function(a,b){return b.datePaiement-a.datePaiement;});
+  return historique;
+}
+// Regroupe l'historique par client, avec le delai moyen de reglement et
+// le montant total — pour l'affichage groupe/depliable de la page
+// Historique des paiements.
+function regrouperHistoriqueParClient(historique){
+  var groupes = {};
+  historique.forEach(function(h){
+    if(!groupes[h.client]) groupes[h.client] = {client:h.client, paiements:[], total:0, sommeDelai:0, nbAvecDelai:0};
+    var g = groupes[h.client];
+    g.paiements.push(h);
+    g.total += h.montant;
+    if(h.delai!==null){ g.sommeDelai += h.delai; g.nbAvecDelai++; }
+  });
+  return Object.keys(groupes).map(function(k){
+    var g = groupes[k];
+    g.delaiMoyen = g.nbAvecDelai ? (g.sommeDelai/g.nbAvecDelai) : null;
+    return g;
+  }).sort(function(a,b){return b.total-a.total;});
+}
+
+// Annule un versement client precis (par index) — reserve a la Direction.
+function annulerPaiementClientByEl(btn){
+  if(currentRole!=='direction'){ alert('Seule la Direction peut annuler un paiement.'); return; }
+  var type = btn.getAttribute('data-type');
+  var idx = parseInt(btn.getAttribute('data-paiement-idx'),10);
+  if(type==='devis'){
+    var vid = btn.getAttribute('data-vid');
+    var v = vehicles.find(function(x){return x.id===vid;});
+    if(!v || !v.paiementsClient || !v.paiementsClient[idx]) return;
+    var montantVerse = v.paiementsClient[idx].montant;
+    if(!confirm('Annuler ce versement de '+montantVerse.toLocaleString('fr-FR')+' FCFA sur "'+v.client+'" ('+v.immat+') ? Le solde restant du sera recalcule.')) return;
+    v.paiementsClient.splice(idx,1);
+    v.montantPaye = v.paiementsClient.reduce(function(s,p){return s+p.montant;},0);
+    var lignes = v.chiffrage && v.chiffrage.lignes ? v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
+    var total = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    v.paiementStatut = v.montantPaye>=total ? 'paye' : (v.montantPaye>0 ? 'partiel' : null);
+    saveV();
+  } else {
+    var pk = btn.getAttribute('data-pk');
+    var f = FORFAIT_FACTURES.find(function(x){return x.periodeKey===pk;});
+    if(!f || !f.paiementsClient || !f.paiementsClient[idx]) return;
+    var montantVerseF = f.paiementsClient[idx].montant;
+    if(!confirm('Annuler ce versement de '+montantVerseF.toLocaleString('fr-FR')+' FCFA sur "'+f.client+'" ? Le solde restant du sera recalcule.')) return;
+    f.paiementsClient.splice(idx,1);
+    f.montantPaye = f.paiementsClient.reduce(function(s,p){return s+p.montant;},0);
+    if(f.statut==='payee' && f.montantPaye<(f.montant||0)) f.statut = 'deposee';
+    saveForfaitFactures();
+  }
+  renderPage();
+}
+
 function collecterHistoriquePaiementsFournisseurs(){
   var historique = [];
   vehicles.forEach(function(v){
@@ -11908,12 +12034,18 @@ function collecterHistoriquePaiementsFournisseurs(){
       if(!cl.paiementsFourn || !cl.paiementsFourn.length) return;
       var f = FOURNISSEURS.find(function(x){return x.id===cl.fournisseurId;});
       if(!f) return;
+      // Delai = temps entre l'echeance PREVUE (date d'achat + delai
+      // convenu avec ce fournisseur) et la date REELLE du paiement —
+      // positif = paye en retard, negatif = paye en avance.
+      var dateAchat = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
+      var dateEcheance = dateAchat ? dateAchat + delaiEcheanceFourn(f)*86400000 : null;
       // Une ligne par VERSEMENT individuel — un paiement effectue en 3
       // fois produit bien 3 lignes distinctes dans l'historique.
       cl.paiementsFourn.forEach(function(p, idx){
         historique.push({
           type:'auto', fournisseur:f.nom,
           piece:cl.piece, montant:p.montant, datePaiement:p.date||0,
+          dateEcheance:dateEcheance, delai: dateEcheance ? Math.round((p.date-dateEcheance)/86400000) : null,
           vehId:v.id, ligneId: cl.devisId||cl.libreId||cl.id||null, immat:v.immat,
           paiementIndex: idx
         });
@@ -11927,6 +12059,7 @@ function collecterHistoriquePaiementsFournisseurs(){
       historique.push({
         type:'manuel', fournisseur: f?f.nom:'—',
         piece:dm.piece, montant:p.montant, datePaiement:p.date||0,
+        dateEcheance: dm.dateEcheance||null, delai: dm.dateEcheance ? Math.round((p.date-dm.dateEcheance)/86400000) : null,
         detteId:dm.id, paiementIndex: idx
       });
     });
@@ -12625,7 +12758,9 @@ function collecterHistoriquePaiementsChargesFixes(){
       var montant = estAncienFormat ? (parseFloat(c.montant)||0) : (parseFloat(entry.montant)||0);
       historique.push({
         chargeId: c.id, nom: c.nom, montant: montant,
-        dateEcheance: dateEcheance, datePaiement: datePaiement, paiementIndex: idx
+        dateEcheance: dateEcheance, datePaiement: datePaiement,
+        delai: dateEcheance ? Math.round((datePaiement-dateEcheance)/86400000) : null,
+        paiementIndex: idx
       });
     });
   });
@@ -12633,7 +12768,232 @@ function collecterHistoriquePaiementsChargesFixes(){
   return historique;
 }
 
-// Annule un versement precis (par index) — corrige une erreur de saisie
+// Historique des paiements des Engagements bancaires — meme principe que
+// les charges fixes (echeancier avec echeancesPayees), avec delai
+// (echeance prevue -> paiement reel).
+function collecterHistoriquePaiementsEngagements(){
+  var historique = [];
+  ENGAGEMENTS_BANCAIRES.forEach(function(e){
+    if(!e.echeancesPayees || !e.echeancesPayees.length) return;
+    e.echeancesPayees.forEach(function(entry, idx){
+      var estAncienFormat = typeof entry==='number';
+      var dateEcheance = estAncienFormat ? entry : entry.dateEcheance;
+      var datePaiement = estAncienFormat ? entry : (entry.datePaiement||entry.dateEcheance);
+      var montant = estAncienFormat ? (parseFloat(e.montant)||0) : (parseFloat(entry.montant)||0);
+      historique.push({
+        engagementId: e.id, nom: e.nom, organisme: e.organisme, montant: montant,
+        dateEcheance: dateEcheance, datePaiement: datePaiement,
+        delai: dateEcheance ? Math.round((datePaiement-dateEcheance)/86400000) : null,
+        paiementIndex: idx
+      });
+    });
+  });
+  historique.sort(function(a,b){return b.datePaiement-a.datePaiement;});
+  return historique;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// PAGE HISTORIQUE DES PAIEMENTS (Finances) — deux sections : Clients
+// (encaissements, regroupes par client avec delai moyen) et Fournisseurs
+// / Charges fixes / Engagements bancaires (decaissements, consolides).
+// ══════════════════════════════════════════════════════════════════════
+// ── Filtres de periode (mois/trimestre/annee/personnalise), reutilisables
+// pour les deux sections de la page Historique des paiements.
+var histPaieClientFiltre = 'mois';
+var histPaieClientDebut = '';
+var histPaieClientFin = '';
+var histPaieAutresFiltre = 'mois';
+var histPaieAutresDebut = '';
+var histPaieAutresFin = '';
+
+function setHistPaieClientFiltreByEl(el){ histPaieClientFiltre=el.getAttribute('data-hpcf'); renderPage(); }
+function setHistPaieClientCustom(){
+  histPaieClientDebut = document.getElementById('histPaieClientDebut').value;
+  histPaieClientFin   = document.getElementById('histPaieClientFin').value;
+  if(!histPaieClientDebut||!histPaieClientFin){ alert('Selectionnez les deux dates.'); return; }
+  histPaieClientFiltre = 'custom'; renderPage();
+}
+function setHistPaieAutresFiltreByEl(el){ histPaieAutresFiltre=el.getAttribute('data-hpaf'); renderPage(); }
+function setHistPaieAutresCustom(){
+  histPaieAutresDebut = document.getElementById('histPaieAutresDebut').value;
+  histPaieAutresFin   = document.getElementById('histPaieAutresFin').value;
+  if(!histPaieAutresDebut||!histPaieAutresFin){ alert('Selectionnez les deux dates.'); return; }
+  histPaieAutresFiltre = 'custom'; renderPage();
+}
+function bornesFiltrePeriode(filtre, debutStr, finStr){
+  var today = new Date();
+  if(filtre==='mois') return {deb:new Date(today.getFullYear(),today.getMonth(),1).getTime(), fin:Date.now()};
+  if(filtre==='trimestre'){ var q=Math.floor(today.getMonth()/3)*3; return {deb:new Date(today.getFullYear(),q,1).getTime(), fin:Date.now()}; }
+  if(filtre==='annee') return {deb:new Date(today.getFullYear(),0,1).getTime(), fin:Date.now()};
+  if(filtre==='custom' && debutStr && finStr) return {deb:new Date(debutStr).setHours(0,0,0,0), fin:new Date(finStr).setHours(23,59,59,999)};
+  return {deb:0, fin:Date.now()+999999999}; // repli : tout l'historique
+}
+
+// Page unique : les deux tableaux (Clients, puis Fournisseurs/Charges
+// fixes/Engagements) sont TOUJOURS affiches ensemble, chacun avec son
+// propre selecteur de periode.
+function pageHistoriquePaiements(){
+  var html = '<div style="margin-bottom:16px"><h2 style="font-size:16px;font-weight:700;margin:0">Historique des paiements</h2></div>';
+  html += htmlHistoriquePaiementsClients();
+  html += '<div style="margin-top:22px"></div>';
+  html += htmlHistoriquePaiementsAutres();
+  return html;
+}
+
+function htmlHistoriquePaiementsClients(){
+  var bornes = bornesFiltrePeriode(histPaieClientFiltre, histPaieClientDebut, histPaieClientFin);
+  var historiqueComplet = collecterHistoriquePaiementsClients();
+  var historique = historiqueComplet.filter(function(h){return h.datePaiement>=bornes.deb && h.datePaiement<=bornes.fin;});
+  var groupes = regrouperHistoriqueParClient(historique);
+
+  var html = '<div class="card" style="padding:14px 16px;margin-bottom:12px">';
+  html += '<div class="fw7" style="margin-bottom:8px">&#x1F465; Clients</div>';
+  html += barrePeriode(histPaieClientFiltre, 'hpcf', 'setHistPaieClientFiltreByEl', 'histPaieClientDebut', 'histPaieClientFin', histPaieClientDebut, histPaieClientFin, 'setHistPaieClientCustom');
+  html += '<input class="inp" id="histPaieRechClient" placeholder="Rechercher un client..." oninput="rechercherHistPaieClient(this.value)" autocomplete="off" style="margin-top:6px">';
+  html += '</div>';
+
+  var totalGeneral = groupes.reduce(function(s,g){return s+g.total;},0);
+  html += '<div class="kgrid k2" style="margin-bottom:16px">';
+  html += kpi('Clients ayant regle', groupes.length, '');
+  html += kpi('Total encaisse', totalGeneral?totalGeneral.toLocaleString('fr-FR')+' FCFA':'—', 'green');
+  html += '</div>';
+
+  html += '<div id="histPaieClientsWrap">';
+  html += htmlTableauHistPaieClients(groupes);
+  html += '</div>';
+  return html;
+}
+
+function htmlTableauHistPaieClients(groupes){
+  if(!groupes.length) return '<div class="card"><div class="empty">Aucun paiement sur cette periode.</div></div>';
+  var html = '<div class="card"><div class="tw"><table><thead><tr><th>Client</th><th style="text-align:center">Delai moyen</th><th style="text-align:right">Total encaisse</th></tr></thead><tbody>';
+  groupes.forEach(function(g){
+    var expandKey = 'histPaieClient::'+g.client;
+    var expanded = !!creancesClientExpand[expandKey];
+    html += '<tr style="cursor:pointer" data-ccexp="'+encodeURIComponent(expandKey)+'" onclick="toggleCreancesClientExpandByEl(this)">';
+    html += '<td class="fw7">'+(expanded?'&#9662; ':'&#9656; ')+g.client+' <span class="xs muted">('+g.paiements.length+' paiement'+(g.paiements.length>1?'s':'')+')</span></td>';
+    html += '<td style="text-align:center">'+(g.delaiMoyen!==null ? Math.round(g.delaiMoyen)+' j' : '—')+'</td>';
+    html += '<td style="text-align:right;font-weight:700;font-family:monospace">'+g.total.toLocaleString('fr-FR')+' FCFA</td>';
+    html += '</tr>';
+    if(expanded){
+      html += '<tr><td colspan="3" style="padding:0;background:#faf9f7"><div style="padding:8px 16px 12px 32px">';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:#888">';
+      html += '<th style="text-align:left;padding:4px 8px;font-size:11px">Date reglement</th><th style="text-align:left;padding:4px 8px;font-size:11px">Reference facture</th><th style="text-align:center;padding:4px 8px;font-size:11px">Delai</th><th style="text-align:left;padding:4px 8px;font-size:11px">Mode / Note</th><th style="text-align:right;padding:4px 8px;font-size:11px">Montant</th><th></th>';
+      html += '</tr></thead><tbody>';
+      g.paiements.sort(function(a,b){return b.datePaiement-a.datePaiement;}).forEach(function(p){
+        var refFacture = [p.numFacture, p.numSecondaire].filter(Boolean).join(' / ') || (p.immat||p.periodeKey||'—');
+        var delaiTxt = p.delai===null ? '—' : (p.delai+' j');
+        var delaiColor = p.delai===null ? '#888' : (p.delai>0 ? '#A32D2D' : '#3B6D11');
+        html += '<tr style="border-top:1px solid rgba(0,0,0,0.06)">';
+        html += '<td style="padding:4px 8px">'+new Date(p.datePaiement).toLocaleDateString('fr-FR')+'</td>';
+        html += '<td style="padding:4px 8px">'+(refFacture||'—')+'</td>';
+        html += '<td style="padding:4px 8px;text-align:center;color:'+delaiColor+'">'+delaiTxt+'</td>';
+        html += '<td style="padding:4px 8px">'+(p.note||'—')+'</td>';
+        html += '<td style="padding:4px 8px;text-align:right;font-family:monospace">'+p.montant.toLocaleString('fr-FR')+'</td>';
+        html += '<td style="padding:4px 8px">';
+        if(currentRole==='direction'){
+          if(p.type==='devis'){
+            html += '<button class="btn btn-sm" style="color:#A32D2D;border-color:#E0A0A0;font-size:10px;padding:2px 6px" data-type="devis" data-vid="'+p.vehId+'" data-paiement-idx="'+p.paiementIndex+'" onclick="event.stopPropagation();annulerPaiementClientByEl(this)">Annuler</button>';
+          } else {
+            html += '<button class="btn btn-sm" style="color:#A32D2D;border-color:#E0A0A0;font-size:10px;padding:2px 6px" data-type="forfait" data-pk="'+p.periodeKey+'" data-paiement-idx="'+p.paiementIndex+'" onclick="event.stopPropagation();annulerPaiementClientByEl(this)">Annuler</button>';
+          }
+        }
+        html += '</td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table></div></td></tr>';
+    }
+  });
+  html += '</tbody></table></div></div>';
+  return html;
+}
+
+function rechercherHistPaieClient(texte){
+  var wrap = document.getElementById('histPaieClientsWrap');
+  if(!wrap) return;
+  var q = texte.trim().toLowerCase();
+  var bornes = bornesFiltrePeriode(histPaieClientFiltre, histPaieClientDebut, histPaieClientFin);
+  var historique = collecterHistoriquePaiementsClients().filter(function(h){return h.datePaiement>=bornes.deb && h.datePaiement<=bornes.fin;});
+  var groupes = regrouperHistoriqueParClient(historique);
+  if(q.length>=2) groupes = groupes.filter(function(g){return g.client.toLowerCase().indexOf(q)>=0;});
+  wrap.innerHTML = htmlTableauHistPaieClients(groupes);
+}
+
+// Section Fournisseurs/Charges fixes/Engagements bancaires : DECOUPEE en
+// 3 blocs distincts (pas une liste consolidee) — chaque bloc affiche son
+// libelle, son total et son delai moyen de reglement, et se deplie au
+// clic pour montrer le detail (date, delai, montant) de chaque paiement.
+function htmlHistoriquePaiementsAutres(){
+  var bornes = bornesFiltrePeriode(histPaieAutresFiltre, histPaieAutresDebut, histPaieAutresFin);
+  var histFourn   = collecterHistoriquePaiementsFournisseurs().filter(function(h){return h.datePaiement>=bornes.deb && h.datePaiement<=bornes.fin;});
+  var histCharges = collecterHistoriquePaiementsChargesFixes().filter(function(h){return h.datePaiement>=bornes.deb && h.datePaiement<=bornes.fin;});
+  var histEngage  = collecterHistoriquePaiementsEngagements().filter(function(h){return h.datePaiement>=bornes.deb && h.datePaiement<=bornes.fin;});
+
+  var html = '<div class="card" style="padding:14px 16px;margin-bottom:12px">';
+  html += '<div class="fw7" style="margin-bottom:8px">&#x1F3EA; Fournisseurs, charges fixes &amp; engagements bancaires</div>';
+  html += barrePeriode(histPaieAutresFiltre, 'hpaf', 'setHistPaieAutresFiltreByEl', 'histPaieAutresDebut', 'histPaieAutresFin', histPaieAutresDebut, histPaieAutresFin, 'setHistPaieAutresCustom');
+  html += '</div>';
+
+  // KPI globaux sur les 3 categories combinees, pour la periode choisie.
+  var nbPaiementsTotal = histFourn.length + histCharges.length + histEngage.length;
+  var totalPayeTotal = histFourn.reduce(function(s,h){return s+h.montant;},0)
+    + histCharges.reduce(function(s,h){return s+h.montant;},0)
+    + histEngage.reduce(function(s,h){return s+h.montant;},0);
+  html += '<div class="kgrid k2" style="margin-bottom:16px">';
+  html += kpi('Nombre de paiements effectues', nbPaiementsTotal, '');
+  html += kpi('Total paye', totalPayeTotal?totalPayeTotal.toLocaleString('fr-FR')+' FCFA':'—', '');
+  html += '</div>';
+
+  html += htmlBlocCategoriePaiement('fournisseur', 'Fournisseurs', histFourn, function(h){return h.fournisseur;}, function(h){return h.piece;});
+  html += htmlBlocCategoriePaiement('charges', 'Charges fixes', histCharges, function(h){return h.nom;}, function(){return '';});
+  html += htmlBlocCategoriePaiement('engagements', 'Engagements bancaires', histEngage, function(h){return h.nom+(h.organisme?' ('+h.organisme+')':'');}, function(){return '';});
+  return html;
+}
+
+function toggleBlocCategoriePaiementByEl(el){
+  var cle = el.getAttribute('data-blocexp');
+  creancesClientExpand[cle] = !creancesClientExpand[cle];
+  renderPage();
+}
+
+function htmlBlocCategoriePaiement(cle, label, liste, nomFn, detailFn){
+  var total = liste.reduce(function(s,h){return s+h.montant;},0);
+  var avecDelai = liste.filter(function(h){return h.delai!==null;});
+  var delaiMoyen = avecDelai.length ? avecDelai.reduce(function(s,h){return s+h.delai;},0)/avecDelai.length : null;
+  var expandKey = 'histPaieBloc::'+cle;
+  var expanded = !!creancesClientExpand[expandKey];
+
+  var html = '<div class="card" style="margin-bottom:12px">';
+  html += '<div style="padding:12px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px" data-blocexp="'+expandKey+'" onclick="toggleBlocCategoriePaiementByEl(this)">';
+  html += '<div class="fw7">'+(expanded?'&#9662; ':'&#9656; ')+label+' <span class="xs muted">('+liste.length+' paiement'+(liste.length>1?'s':'')+')</span></div>';
+  html += '<div class="flex gap6" style="align-items:center">';
+  html += '<span class="xs muted">Delai moyen : <strong>'+(delaiMoyen!==null?Math.round(delaiMoyen)+' j':'—')+'</strong></span>';
+  html += '<span style="font-weight:700;font-family:monospace">'+total.toLocaleString('fr-FR')+' FCFA</span>';
+  html += '</div></div>';
+  if(expanded){
+    if(!liste.length){
+      html += '<div class="empty" style="padding:0 16px 16px">Aucun paiement sur cette periode.</div>';
+    } else {
+      html += '<div style="padding:0 16px 16px;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:#888">';
+      html += '<th style="text-align:left;padding:4px 8px;font-size:11px">Nom</th><th style="text-align:left;padding:4px 8px;font-size:11px">Date reglement</th><th style="text-align:center;padding:4px 8px;font-size:11px">Delai</th><th style="text-align:right;padding:4px 8px;font-size:11px">Montant</th>';
+      html += '</tr></thead><tbody>';
+      liste.slice().sort(function(a,b){return b.datePaiement-a.datePaiement;}).forEach(function(h){
+        var delaiTxt = h.delai===null ? '—' : (h.delai>0 ? '+'+h.delai+' j' : (h.delai<0 ? h.delai+' j' : 'A temps'));
+        var delaiColor = h.delai===null ? '#888' : (h.delai>0 ? '#A32D2D' : '#3B6D11');
+        var detail = detailFn ? detailFn(h) : '';
+        html += '<tr style="border-top:1px solid rgba(0,0,0,0.06)">';
+        html += '<td style="padding:4px 8px">'+nomFn(h)+(detail?' <span class="xs muted">— '+detail+'</span>':'')+'</td>';
+        html += '<td style="padding:4px 8px">'+new Date(h.datePaiement).toLocaleDateString('fr-FR')+'</td>';
+        html += '<td style="padding:4px 8px;text-align:center;color:'+delaiColor+'">'+delaiTxt+'</td>';
+        html += '<td style="padding:4px 8px;text-align:right;font-family:monospace">'+h.montant.toLocaleString('fr-FR')+'</td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+  }
+  html += '</div>';
+  return html;
+}
 // sans affecter les autres versements de la meme charge (y compris un
 // versement partiel parmi plusieurs sur le meme mois).
 function annulerPaiementChargeFixeByEl(btn){
@@ -27138,6 +27498,7 @@ function tryInitFirebase(){
       });
       syncEngagementsBancairesFromFirebase();
       syncForfaitFacturesFromFirebase(function(){
+        migrerPaiementsClients(); // idem, s'assure que les deux structures (vehicules + forfaits) sont bien a jour avant migration
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       });
       syncForfaitsClientsFromFirebase(function(){
@@ -27537,6 +27898,7 @@ window.onload=function(){
     }
   });
   if(migrated) saveV();loadPersonnel();initFournisseurs();initBanques();loadForfaitFactures();loadStock();loadChargesFixes();loadEngagementsBancaires();loadForfaitsClients();loadClientsSansVehicule();loadExpositionSnapshots();
+  migrerPaiementsClients(); // migration retroactive (voir commentaire de la fonction) — necessite vehicles ET FORFAIT_FACTURES deja charges
   // Alimenter le catalogue pièces depuis l'historique existant
   vehicles.forEach(function(v){ if(v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length) indexerPiecesChiffrage(v); });
   renderNav();renderPage();
