@@ -5822,6 +5822,14 @@ var rentaEvolutionPeriodeA = '';
 var rentaEvolutionPeriodeB = '';
 var rentaEvolutionTri = 'ca_desc'; // 'ca_desc','variation_desc','variation_asc'
 var rentaEvolutionClientGraphique = null; // client selectionne pour le graphique individuel
+var rentaDevisAnalysePiecesRecherche = '';
+var rentaDevisAnalysePiecesClient = '';
+var rentaDevisAnalysePiecesMarque = '';
+var rentaDevisAnalysePiecesModele = '';
+var rentaDevisAnalysePiecesSortCol = 'total';
+var rentaDevisAnalysePiecesSortDir = 'desc';
+var rentaDevisApBorneDebut = 0;
+var rentaDevisApBorneFin = null;
 var rentaFiltre = 'tous';  // 'tous','mois','trimestre','annee','custom'
 var rentaSort = 'marge';   // 'marge','taux','ca','date'
 var rentaDebut = null;
@@ -5897,11 +5905,11 @@ function pageRentabilite(){
   html += '<input type="date" class="inp" id="rentaFin" style="width:95px;font-size:11px;padding:2px 3px" value="'+(rentaFin||'')+'">';
   html += '<button class="btn btn-sm btn-primary" style="font-size:11px;padding:3px 6px" onclick="setRentaCustom()">OK</button>';
   html += '<span style="flex:1"></span>';
-  [{v:'clients',l:'Clients'},{v:'evolution',l:'&#x1F4C8; Evolution CA'}].forEach(function(v){
+  [{v:'clients',l:'Clients'},{v:'evolution',l:'&#x1F4C8; Evolution CA'},{v:'analyse_pieces',l:'&#x1F50D; Analyse pieces'}].forEach(function(v){
     html += '<button class="btn btn-sm'+(rentaVue===v.v?' btn-primary':'')+'" data-rv="'+v.v+'" onclick="setRentaVueByEl(this)" style="font-size:11px;padding:3px 7px">'+v.l+'</button>';
   });
   html += '</div>';
-  if(rentaVue!=='evolution'){
+  if(rentaVue!=='evolution' && rentaVue!=='analyse_pieces'){
   html += '<div class="kgrid k4" style="margin-bottom:8px">';
   html += kpi('Dossiers', dossiers.length, '');
   html += kpi('CA previsionnel total', totVente?totVente.toLocaleString('fr-FR')+' FCFA':'—', 'blue');
@@ -5921,6 +5929,8 @@ function pageRentabilite(){
     html += rentaVuePeriode();
   } else if(rentaVue==='evolution'){
     html += rentaEvolution();
+  } else if(rentaVue==='analyse_pieces'){
+    html += rentaDevisAnalysePieces(borneDebut, borneFin);
   } else {
     html += rentaParClient(dossiers);
   }
@@ -6565,6 +6575,180 @@ function initGraphiquesRentaEvolution(caParClientMois){
       options:{ responsive:true, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} }
     });
   }
+}
+
+// ── Analyse pieces (Clients Devis) ────────────────────────────────────
+// Meme principe que l'Analyse pieces de Clients Forfait, adaptee au
+// perimetre devis (tout SAUF forfait, meme pattern que le reste de cette
+// page — inclut les dossiers assurance).
+function collecterLignesDevisPourAnalyse(){
+  var lignes = [];
+  vehicles.filter(function(v){return v.typeClient!=='forfait';}).forEach(function(v){
+    if(!v.chiffrage || !v.chiffrage.lignes) return;
+    var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
+    if(rentaDevisApBorneDebut>0 && dateRef<rentaDevisApBorneDebut) return;
+    if(rentaDevisApBorneFin && dateRef>rentaDevisApBorneFin) return;
+    v.chiffrage.lignes.forEach(function(cl){
+      if(!(cl.piece||'').trim() || cl.valideDir!==true) return;
+      lignes.push({
+        piece: cl.piece.trim(), qte: parseInt(cl.qte)||1, prixAchat: parseFloat(cl.prixAchat)||0,
+        montant: (parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1),
+        client: v.client, marque: v.marque||'', modele: v.modele||'', immat: v.immat
+      });
+    });
+  });
+  return lignes;
+}
+
+function calculerResultatsAnalysePiecesDevis(){
+  var toutesLignes = collecterLignesDevisPourAnalyse();
+  var lignesFiltrees = toutesLignes.filter(function(l){
+    // Comparaisons insensibles a la casse ET aux espaces superflus — un
+    // meme client/marque/modele peut etre ecrit differemment d'un
+    // dossier a l'autre.
+    var lClient = (l.client||'').trim().toLowerCase();
+    var lMarque = (l.marque||'').trim().toLowerCase();
+    var lModele = (l.modele||'').trim().toLowerCase();
+    if(rentaDevisAnalysePiecesClient && lClient!==rentaDevisAnalysePiecesClient.trim().toLowerCase()) return false;
+    if(rentaDevisAnalysePiecesMarque && lMarque!==rentaDevisAnalysePiecesMarque.trim().toLowerCase()) return false;
+    if(rentaDevisAnalysePiecesModele && lModele!==rentaDevisAnalysePiecesModele.trim().toLowerCase()) return false;
+    if(rentaDevisAnalysePiecesRecherche){
+      if(l.piece.toLowerCase().indexOf(rentaDevisAnalysePiecesRecherche.toLowerCase())<0) return false;
+    }
+    return true;
+  });
+  var parPiece = {};
+  lignesFiltrees.forEach(function(l){
+    var key = l.piece.toLowerCase();
+    if(!parPiece[key]) parPiece[key] = {libelle:l.piece, qte:0, total:0};
+    parPiece[key].qte += l.qte;
+    parPiece[key].total += l.montant;
+  });
+  var liste = Object.keys(parPiece).map(function(k){
+    var p = parPiece[k];
+    p.prixUnitaire = p.qte>0 ? p.total/p.qte : 0;
+    return p;
+  });
+  liste.sort(function(a,b){
+    var va, vb;
+    if(rentaDevisAnalysePiecesSortCol==='libelle'){ va=a.libelle.toLowerCase(); vb=b.libelle.toLowerCase(); }
+    else if(rentaDevisAnalysePiecesSortCol==='qte'){ va=a.qte; vb=b.qte; }
+    else if(rentaDevisAnalysePiecesSortCol==='prixUnit'){ va=a.prixUnitaire; vb=b.prixUnitaire; }
+    else { va=a.total; vb=b.total; }
+    if(va<vb) return rentaDevisAnalysePiecesSortDir==='asc' ? -1 : 1;
+    if(va>vb) return rentaDevisAnalysePiecesSortDir==='asc' ? 1 : -1;
+    return 0;
+  });
+  return liste;
+}
+
+function flecheTriAnalysePiecesDevis(col){
+  if(rentaDevisAnalysePiecesSortCol!==col) return '';
+  return rentaDevisAnalysePiecesSortDir==='asc' ? ' &#9650;' : ' &#9660;';
+}
+
+function htmlResultatsAnalysePiecesDevis(){
+  var liste = calculerResultatsAnalysePiecesDevis();
+  var totalGeneral = liste.reduce(function(s,p){return s+p.total;},0);
+
+  var html = '<div class="kgrid k2" style="margin-bottom:16px">';
+  html += kpi('Pieces distinctes', liste.length, '');
+  html += kpi('Total', totalGeneral?totalGeneral.toLocaleString('fr-FR')+' FCFA':'—', 'red');
+  html += '</div>';
+
+  html += '<div class="card"><div class="tw"><table><thead><tr>';
+  html += '<th style="cursor:pointer" data-apsort="libelle" onclick="setRentaDevisApSortByEl(this)">Libelle'+flecheTriAnalysePiecesDevis('libelle')+'</th>';
+  html += '<th style="cursor:pointer;text-align:center" data-apsort="qte" onclick="setRentaDevisApSortByEl(this)">Quantite'+flecheTriAnalysePiecesDevis('qte')+'</th>';
+  html += '<th style="cursor:pointer;text-align:right" data-apsort="prixUnit" onclick="setRentaDevisApSortByEl(this)">Prix unitaire'+flecheTriAnalysePiecesDevis('prixUnit')+'</th>';
+  html += '<th style="cursor:pointer;text-align:right" data-apsort="total" onclick="setRentaDevisApSortByEl(this)">Total'+flecheTriAnalysePiecesDevis('total')+'</th>';
+  html += '</tr></thead><tbody>';
+  if(!liste.length){
+    html += '<tr><td colspan="4" class="empty">Aucune piece ne correspond a ces criteres</td></tr>';
+  } else {
+    liste.forEach(function(p){
+      html += '<tr>';
+      html += '<td class="fw7">'+p.libelle+'</td>';
+      html += '<td style="text-align:center">'+p.qte+'</td>';
+      html += '<td style="text-align:right;font-family:monospace">'+Math.round(p.prixUnitaire).toLocaleString('fr-FR')+'</td>';
+      html += '<td style="text-align:right;font-family:monospace;font-weight:700;color:#A32D2D">'+p.total.toLocaleString('fr-FR')+'</td>';
+      html += '</tr>';
+    });
+  }
+  html += '</tbody></table></div></div>';
+  return html;
+}
+
+function rafraichirRentaDevisApResultats(){
+  var zone = document.getElementById('rentaDevisApResultats');
+  if(zone) zone.innerHTML = htmlResultatsAnalysePiecesDevis();
+}
+function setRentaDevisApRechercheByEl(el){ rentaDevisAnalysePiecesRecherche = el.value; rafraichirRentaDevisApResultats(); }
+function setRentaDevisApClientByEl(el){ rentaDevisAnalysePiecesClient = el.value; rentaDevisAnalysePiecesMarque=''; rentaDevisAnalysePiecesModele=''; renderPage(); }
+function setRentaDevisApMarqueByEl(el){ rentaDevisAnalysePiecesMarque = el.value; rentaDevisAnalysePiecesModele=''; renderPage(); }
+function setRentaDevisApModeleByEl(el){ rentaDevisAnalysePiecesModele = el.value; renderPage(); }
+function setRentaDevisApSortByEl(el){
+  var col = el.getAttribute('data-apsort');
+  if(rentaDevisAnalysePiecesSortCol===col){
+    rentaDevisAnalysePiecesSortDir = rentaDevisAnalysePiecesSortDir==='asc' ? 'desc' : 'asc';
+  } else {
+    rentaDevisAnalysePiecesSortCol = col;
+    rentaDevisAnalysePiecesSortDir = 'desc';
+  }
+  rafraichirRentaDevisApResultats();
+}
+function reinitialiserRentaDevisAnalysePieces(){
+  rentaDevisAnalysePiecesRecherche=''; rentaDevisAnalysePiecesClient='';
+  rentaDevisAnalysePiecesMarque=''; rentaDevisAnalysePiecesModele='';
+  renderPage();
+}
+
+function rentaDevisAnalysePieces(borneDebut, borneFin){
+  rentaDevisApBorneDebut = borneDebut||0;
+  rentaDevisApBorneFin = borneFin||null;
+
+  var toutesLignes = collecterLignesDevisPourAnalyse();
+
+  // Normalise via une cle insensible a la casse ET aux espaces superflus
+  // (ex: "Kia", "KIA", " Kia " doivent former qu'une seule entree) — tout
+  // en affichant la PREMIERE valeur nettoyee rencontree comme libelle.
+  var clientsUniques = {}, marquesUniques = {}, modelesUniques = {};
+  toutesLignes.forEach(function(l){
+    var clientTrim = l.client ? l.client.trim() : '';
+    var marqueTrim = l.marque ? l.marque.trim() : '';
+    var modeleTrim = l.modele ? l.modele.trim() : '';
+    if(clientTrim){ var kC=clientTrim.toLowerCase(); if(!clientsUniques[kC]) clientsUniques[kC]=clientTrim; }
+    var clientOk = !rentaDevisAnalysePiecesClient || (clientTrim && clientTrim.toLowerCase()===rentaDevisAnalysePiecesClient.trim().toLowerCase());
+    if(marqueTrim && clientOk){ var kM=marqueTrim.toLowerCase(); if(!marquesUniques[kM]) marquesUniques[kM]=marqueTrim; }
+    var marqueOk = !rentaDevisAnalysePiecesMarque || (marqueTrim && marqueTrim.toLowerCase()===rentaDevisAnalysePiecesMarque.trim().toLowerCase());
+    if(modeleTrim && clientOk && marqueOk){ var kMo=modeleTrim.toLowerCase(); if(!modelesUniques[kMo]) modelesUniques[kMo]=modeleTrim; }
+  });
+  var listeClients = Object.keys(clientsUniques).map(function(k){return clientsUniques[k];}).sort();
+  var listeMarques = Object.keys(marquesUniques).map(function(k){return marquesUniques[k];}).sort();
+  var listeModeles = Object.keys(modelesUniques).map(function(k){return modelesUniques[k];}).sort();
+
+  var html = '<div class="card" style="padding:14px 16px;margin-bottom:16px">';
+  html += '<div class="fr" style="margin-bottom:10px"><input class="inp" id="rentaDevisApRecherche" placeholder="Recherche contextuelle (ex: plaquette, vidange...)..." value="'+rentaDevisAnalysePiecesRecherche+'" oninput="setRentaDevisApRechercheByEl(this)" autocomplete="off"></div>';
+  html += '<div class="flex gap6" style="flex-wrap:wrap;align-items:center">';
+  html += '<select class="inp" id="rentaDevisApClient" onchange="setRentaDevisApClientByEl(this)" style="width:200px">';
+  html += '<option value="">Tous les clients</option>';
+  listeClients.forEach(function(c){ html += '<option value="'+c.replace(/"/g,'&quot;')+'"'+(rentaDevisAnalysePiecesClient.trim().toLowerCase()===c.trim().toLowerCase()?' selected':'')+'>'+c+'</option>'; });
+  html += '</select>';
+  html += '<select class="inp" id="rentaDevisApMarque" onchange="setRentaDevisApMarqueByEl(this)" style="width:150px">';
+  html += '<option value="">Toutes les marques</option>';
+  listeMarques.forEach(function(m){ html += '<option value="'+m.replace(/"/g,'&quot;')+'"'+(rentaDevisAnalysePiecesMarque.trim().toLowerCase()===m.trim().toLowerCase()?' selected':'')+'>'+m+'</option>'; });
+  html += '</select>';
+  html += '<select class="inp" id="rentaDevisApModele" onchange="setRentaDevisApModeleByEl(this)" style="width:150px">';
+  html += '<option value="">Tous les modeles</option>';
+  listeModeles.forEach(function(m){ html += '<option value="'+m.replace(/"/g,'&quot;')+'"'+(rentaDevisAnalysePiecesModele.trim().toLowerCase()===m.trim().toLowerCase()?' selected':'')+'>'+m+'</option>'; });
+  html += '</select>';
+  if(rentaDevisAnalysePiecesRecherche||rentaDevisAnalysePiecesClient||rentaDevisAnalysePiecesMarque||rentaDevisAnalysePiecesModele){
+    html += '<button class="btn btn-sm" onclick="reinitialiserRentaDevisAnalysePieces()">&#x2715; Reinitialiser</button>';
+  }
+  html += '</div></div>';
+
+  html += '<div id="rentaDevisApResultats">'+htmlResultatsAnalysePiecesDevis()+'</div>';
+
+  return html;
 }
 
 function rentaParClient(dossiers){
@@ -7384,9 +7568,15 @@ function collecterLignesForfaitPourAnalyse(){
 function calculerResultatsAnalysePiecesForfait(){
   var toutesLignes = collecterLignesForfaitPourAnalyse();
   var lignesFiltrees = toutesLignes.filter(function(l){
-    if(rentaForfaitAnalysePiecesClient && l.client!==rentaForfaitAnalysePiecesClient) return false;
-    if(rentaForfaitAnalysePiecesMarque && l.marque!==rentaForfaitAnalysePiecesMarque) return false;
-    if(rentaForfaitAnalysePiecesModele && l.modele!==rentaForfaitAnalysePiecesModele) return false;
+    // Comparaisons insensibles a la casse ET aux espaces superflus — un
+    // meme client/marque/modele peut etre ecrit differemment d'un
+    // dossier a l'autre.
+    var lClient = (l.client||'').trim().toLowerCase();
+    var lMarque = (l.marque||'').trim().toLowerCase();
+    var lModele = (l.modele||'').trim().toLowerCase();
+    if(rentaForfaitAnalysePiecesClient && lClient!==rentaForfaitAnalysePiecesClient.trim().toLowerCase()) return false;
+    if(rentaForfaitAnalysePiecesMarque && lMarque!==rentaForfaitAnalysePiecesMarque.trim().toLowerCase()) return false;
+    if(rentaForfaitAnalysePiecesModele && lModele!==rentaForfaitAnalysePiecesModele.trim().toLowerCase()) return false;
     if(rentaForfaitAnalysePiecesRecherche){
       if(l.piece.toLowerCase().indexOf(rentaForfaitAnalysePiecesRecherche.toLowerCase())<0) return false;
     }
@@ -7496,30 +7686,38 @@ function rentaForfaitAnalysePieces(borneDebut, borneFin){
   // Listes uniques pour les selecteurs — marque se limite au client
   // selectionne (s'il y en a un), et modele se limite en plus a la marque
   // selectionnee (s'il y en a une) : cascade client -> marque -> modele.
+  // Normalise via une cle insensible a la casse ET aux espaces superflus
+  // (ex: "Kia", "KIA", " Kia " doivent former qu'une seule entree) — tout
+  // en affichant la PREMIERE valeur nettoyee rencontree comme libelle.
   var clientsUniques = {}, marquesUniques = {}, modelesUniques = {};
   toutesLignes.forEach(function(l){
-    if(l.client) clientsUniques[l.client]=1;
-    if(l.marque && (!rentaForfaitAnalysePiecesClient || l.client===rentaForfaitAnalysePiecesClient)) marquesUniques[l.marque]=1;
-    if(l.modele && (!rentaForfaitAnalysePiecesClient || l.client===rentaForfaitAnalysePiecesClient) && (!rentaForfaitAnalysePiecesMarque || l.marque===rentaForfaitAnalysePiecesMarque)) modelesUniques[l.modele]=1;
+    var clientTrim = l.client ? l.client.trim() : '';
+    var marqueTrim = l.marque ? l.marque.trim() : '';
+    var modeleTrim = l.modele ? l.modele.trim() : '';
+    if(clientTrim){ var kC=clientTrim.toLowerCase(); if(!clientsUniques[kC]) clientsUniques[kC]=clientTrim; }
+    var clientOk = !rentaForfaitAnalysePiecesClient || (clientTrim && clientTrim.toLowerCase()===rentaForfaitAnalysePiecesClient.trim().toLowerCase());
+    if(marqueTrim && clientOk){ var kM=marqueTrim.toLowerCase(); if(!marquesUniques[kM]) marquesUniques[kM]=marqueTrim; }
+    var marqueOk = !rentaForfaitAnalysePiecesMarque || (marqueTrim && marqueTrim.toLowerCase()===rentaForfaitAnalysePiecesMarque.trim().toLowerCase());
+    if(modeleTrim && clientOk && marqueOk){ var kMo=modeleTrim.toLowerCase(); if(!modelesUniques[kMo]) modelesUniques[kMo]=modeleTrim; }
   });
-  var listeClients = Object.keys(clientsUniques).sort();
-  var listeMarques = Object.keys(marquesUniques).sort();
-  var listeModeles = Object.keys(modelesUniques).sort();
+  var listeClients = Object.keys(clientsUniques).map(function(k){return clientsUniques[k];}).sort();
+  var listeMarques = Object.keys(marquesUniques).map(function(k){return marquesUniques[k];}).sort();
+  var listeModeles = Object.keys(modelesUniques).map(function(k){return modelesUniques[k];}).sort();
 
   var html = '<div class="card" style="padding:14px 16px;margin-bottom:16px">';
   html += '<div class="fr" style="margin-bottom:10px"><input class="inp" id="rentaForfaitApRecherche" placeholder="Recherche contextuelle (ex: plaquette, vidange...)..." value="'+rentaForfaitAnalysePiecesRecherche+'" oninput="setRentaForfaitApRechercheByEl(this)" autocomplete="off"></div>';
   html += '<div class="flex gap6" style="flex-wrap:wrap;align-items:center">';
   html += '<select class="inp" id="rentaForfaitApClient" onchange="setRentaForfaitApClientByEl(this)" style="width:200px">';
   html += '<option value="">Tous les clients</option>';
-  listeClients.forEach(function(c){ html += '<option value="'+c.replace(/"/g,'&quot;')+'"'+(rentaForfaitAnalysePiecesClient===c?' selected':'')+'>'+c+'</option>'; });
+  listeClients.forEach(function(c){ html += '<option value="'+c.replace(/"/g,'&quot;')+'"'+(rentaForfaitAnalysePiecesClient.trim().toLowerCase()===c.trim().toLowerCase()?' selected':'')+'>'+c+'</option>'; });
   html += '</select>';
   html += '<select class="inp" id="rentaForfaitApMarque" onchange="setRentaForfaitApMarqueByEl(this)" style="width:150px">';
   html += '<option value="">Toutes les marques</option>';
-  listeMarques.forEach(function(m){ html += '<option value="'+m.replace(/"/g,'&quot;')+'"'+(rentaForfaitAnalysePiecesMarque===m?' selected':'')+'>'+m+'</option>'; });
+  listeMarques.forEach(function(m){ html += '<option value="'+m.replace(/"/g,'&quot;')+'"'+(rentaForfaitAnalysePiecesMarque.trim().toLowerCase()===m.trim().toLowerCase()?' selected':'')+'>'+m+'</option>'; });
   html += '</select>';
   html += '<select class="inp" id="rentaForfaitApModele" onchange="setRentaForfaitApModeleByEl(this)" style="width:150px">';
   html += '<option value="">Tous les modeles</option>';
-  listeModeles.forEach(function(m){ html += '<option value="'+m.replace(/"/g,'&quot;')+'"'+(rentaForfaitAnalysePiecesModele===m?' selected':'')+'>'+m+'</option>'; });
+  listeModeles.forEach(function(m){ html += '<option value="'+m.replace(/"/g,'&quot;')+'"'+(rentaForfaitAnalysePiecesModele.trim().toLowerCase()===m.trim().toLowerCase()?' selected':'')+'>'+m+'</option>'; });
   html += '</select>';
   if(rentaForfaitAnalysePiecesRecherche||rentaForfaitAnalysePiecesClient||rentaForfaitAnalysePiecesMarque||rentaForfaitAnalysePiecesModele){
     html += '<button class="btn btn-sm" onclick="reinitialiserRentaForfaitAnalysePieces()">&#x2715; Reinitialiser</button>';
