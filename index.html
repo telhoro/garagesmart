@@ -6141,6 +6141,7 @@ var METRIQUES_FINANCIERES_LISTE = [
   {cle:'margeOperationnelle', label:'Marge operationnelle', format:'pourcentage', hausseEstPositive:true},
   {cle:'encaissementsRealises', label:'Encaissements realises', format:'montant', hausseEstPositive:true},
   {cle:'tauxEncaissement', label:'Taux d\'encaissement', format:'pourcentage', hausseEstPositive:true},
+  {cle:'montantNonEncaisse', label:'Montant CA non encaisse (cumule)', format:'montant', hausseEstPositive:false},
   {cle:'expositionMoyenne', label:'Exposition financiere (moyenne)', format:'montant', hausseEstPositive:false},
   {cle:'echeances', label:'Echeances de la periode', format:'montant', hausseEstPositive:false}
 ];
@@ -6219,11 +6220,36 @@ function calculerMetriquesFinancieres(borneDebut, borneFin){
   var decaissementsAttendus = collecterDecaissementsAttendus();
   var echeances = decaissementsAttendus.filter(function(d){return d.dateEcheance>=borneDebut && d.dateEcheance<=borneFin;}).reduce(function(s,d){return s+d.montant;},0);
 
+  // Montant CA non encaisse : SOLDE CUMULE (pas limite a cette periode) —
+  // tout ce que les clients restent devoir sur TOUTES les factures
+  // emises jusqu'a la fin de cette periode, quelle que soit leur date
+  // d'origine. Un solde de 1M fin janvier devient, fin fevrier, 1M + les
+  // nouvelles ventes de fevrier non encore encaissees - les paiements
+  // recus en fevrier (y compris sur d'anciennes factures).
+  var montantNonEncaisse = 0;
+  vehicles.forEach(function(v){
+    if(!v.chiffrage || !v.chiffrage.lignes) return;
+    var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
+    if(!dateFacture || dateFacture>borneFin) return;
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    var vente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var paye = parseFloat(v.montantPaye)||0;
+    montantNonEncaisse += Math.max(0, vente-paye);
+  });
+  FORFAIT_FACTURES.forEach(function(f){
+    var dateFacture = f.deposeeDate || f.emiseDate || 0;
+    if(!dateFacture || dateFacture>borneFin) return;
+    var montant = f.montant||0;
+    var paye = f.statut==='payee' ? montant : (f.montantPaye||0);
+    montantNonEncaisse += Math.max(0, montant-paye);
+  });
+
   return {
     ca:caTotal, depenses:achatTotal, margeBrute:margeBrute, tauxMarge:tauxMarge,
     chargesVariables:chargesVariablesCaisse, dettesFournisseurs:dettesManuellesPeriode,
     resultatOperationnel:resultatOperationnel, margeOperationnelle:margeOperationnelle,
     encaissementsRealises:encaisseRealise, tauxEncaissement:tauxEncaissement,
+    montantNonEncaisse:montantNonEncaisse,
     expositionMoyenne:expositionMoyenne, echeances:echeances
   };
 }
