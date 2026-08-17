@@ -12230,9 +12230,18 @@ function collecterForfaitsPrevisionnels(){
   var items = [];
   var maintenant = Date.now();
   var dNow = new Date();
+  // IMPORTANT : horizon FIXE (36 mois), independant de previsionNbPeriodes
+  // — cette derniere represente un nombre de PERIODES DANS LA GRANULARITE
+  // ACTUELLEMENT AFFICHEE (semaines par defaut, ou trimestres...), pas un
+  // nombre de MOIS. La reutiliser directement ici faisait disparaitre a
+  // tort les previsions de forfait au bout de seulement quelques mois des
+  // qu'on affichait une granularite plus large (ex: 8 trimestres = 24
+  // mois attendus, mais seulement 8 mois generes). Un horizon fixe de 36
+  // mois couvre confortablement toutes les granularites disponibles.
+  var HORIZON_MOIS = 36;
   FORFAITS_CLIENTS.forEach(function(fc){
     if(!fc.montantMensuel || fc.montantMensuel<=0) return;
-    for(var m=0; m<previsionNbPeriodes; m++){
+    for(var m=0; m<HORIZON_MOIS; m++){
       var anneeMois = new Date(dNow.getFullYear(), dNow.getMonth()+m, 1);
       var periodeKey = anneeMois.getFullYear()+'-'+String(anneeMois.getMonth()+1).padStart(2,'0');
       var dejaExistant = FORFAIT_FACTURES.some(function(f){return f.client===fc.client && f.periodeKey===periodeKey;});
