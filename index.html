@@ -11062,7 +11062,10 @@ function setDashTresoCustom(){
 
 // Barre de selection de periode reutilisable (memes boutons + calendrier
 // que Tresorerie/Rentabilite/Prevision, pour rester coherent visuellement).
-function barrePeriode(filtreActif, prefixData, onClickFn, idDebut, idFin, valDebut, valFin, onApplyFn){
+// extraBoutonHtml (optionnel) : HTML d'un bouton supplementaire insere sur
+// la MEME ligne, juste apres "Appliquer" — n'affecte que l'appelant qui le
+// fournit explicitement, les autres pages n'en sont pas impactees.
+function barrePeriode(filtreActif, prefixData, onClickFn, idDebut, idFin, valDebut, valFin, onApplyFn, extraBoutonHtml){
   var html = '<div class="flex gap6" style="align-items:center;flex-wrap:wrap;margin-bottom:10px">';
   [{v:'mois',l:'Mois'},{v:'trimestre',l:'Trimestre'},{v:'annee',l:'Annee'}].forEach(function(f){
     html += '<button class="btn btn-sm'+(filtreActif===f.v?' btn-primary':'')+'" data-'+prefixData+'="'+f.v+'" onclick="'+onClickFn+'(this)" style="font-size:11px;padding:3px 8px">'+f.l+'</button>';
@@ -11073,6 +11076,7 @@ function barrePeriode(filtreActif, prefixData, onClickFn, idDebut, idFin, valDeb
   html += '<input type="date" id="'+idFin+'" style="border:none;font-size:11px;width:90px" value="'+(valFin||'')+'">';
   html += '</span>';
   html += '<button class="btn btn-sm'+(filtreActif==='custom'?' btn-primary':'')+'" onclick="'+onApplyFn+'()" style="font-size:11px;padding:3px 8px">Appliquer</button>';
+  if(extraBoutonHtml) html += extraBoutonHtml;
   html += '</div>';
   return html;
 }
@@ -11207,7 +11211,6 @@ function pageFinancesDashboard(){
 
   var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Finances — vue d\'ensemble</h2>';
-  html += '<button class="btn btn-sm" onclick="dashEvolutionActive=true;renderPage()">&#x1F4C8; Evolution</button>';
   html += '</div>';
 
   function bloc(titre, valeurTotale, couleur, sousLignes){
@@ -11227,7 +11230,7 @@ function pageFinancesDashboard(){
 
   // ── Ligne 1 : Activite ──
   html += '<div class="xs muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:6px">Activite</div>';
-  html += barrePeriode(dashActiviteFiltre, 'daf', 'setDashActiviteFiltreByEl', 'dashActiviteDebut', 'dashActiviteFin', dashActiviteDebut, dashActiviteFin, 'setDashActiviteCustom');
+  html += barrePeriode(dashActiviteFiltre, 'daf', 'setDashActiviteFiltreByEl', 'dashActiviteDebut', 'dashActiviteFin', dashActiviteDebut, dashActiviteFin, 'setDashActiviteCustom', '<button class="btn btn-sm" style="font-size:11px;padding:3px 8px;margin-left:2cm" onclick="dashEvolutionActive=true;renderPage()">&#x1F4C8; Evolution</button>');
   html += '<div class="kgrid k4" style="margin-bottom:20px">';
   html += bloc('CA de la periode', caTotal?caTotal.toLocaleString('fr-FR')+' FCFA':'—', '#185FA5', [
     {label:'CA Devis', value:caDevis?caDevis.toLocaleString('fr-FR'):'—'},
