@@ -6191,7 +6191,7 @@ function calculerMetriquesFinancieres(borneDebut, borneFin){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     if(dateFacture<borneDebut || dateFacture>borneFin) return;
-    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     var vente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
     var achat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
     if(v.typeClient==='forfait'){ caForfait+=vente; achatForfait+=achat; }
@@ -6233,7 +6233,7 @@ function calculerMetriquesFinancieres(borneDebut, borneFin){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     if(dateFacture<borneDebut || dateFacture>borneFin) return;
-    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     factureSurPeriode += lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
     encaisseRealise += parseFloat(v.montantPaye)||0;
   });
@@ -6265,7 +6265,7 @@ function calculerMetriquesFinancieres(borneDebut, borneFin){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     if(!dateFacture || dateFacture>borneFin) return;
-    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     var vente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
     var paye = parseFloat(v.montantPaye)||0;
     montantNonEncaisse += Math.max(0, vente-paye);
@@ -6294,7 +6294,7 @@ function collecterCATotalParMois(){
   var data = {};
   vehicles.forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
-    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     var vente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
     if(!vente) return;
     var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
@@ -11073,18 +11073,21 @@ var dashTresoFin = null;
 // Calcule les bornes {deb,fin} d'une periode sans dependre des variables
 // globales de Tresorerie/Rentabilite (tresoFiltre, rentaFiltre) : chaque
 // selecteur du tableau de bord est independant, evite toute interference.
+// Bornes de dates du tableau de bord Finances — harmonisees avec la vue
+// Evolution (meme fonctions reutilisees : mois/trimestre/annee designent
+// desormais toujours la periode COMPLETE, pas "a ce jour"). Avant cette
+// harmonisation, "Mois" s'arretait a aujourd'hui, alors qu'Evolution
+// prenait le mois entier — ce qui faussait la comparaison des charges
+// fixes proratisees (et donc le resultat operationnel) entre les deux
+// vues, uniquement sur le mois en cours.
 function calculerBornesPeriode(filtre, debutStr, finStr){
-  var today = new Date(); today.setHours(0,0,0,0);
-  var fin = new Date(); fin.setHours(23,59,59,999);
-  var deb;
-  if(filtre==='mois')          { deb = new Date(today.getFullYear(), today.getMonth(), 1); }
-  else if(filtre==='trimestre'){ var q=Math.floor(today.getMonth()/3)*3; deb=new Date(today.getFullYear(),q,1); }
-  else if(filtre==='annee')    { deb = new Date(today.getFullYear(), 0, 1); }
-  else if(filtre==='custom' && debutStr && finStr){
-    deb = new Date(debutStr); deb.setHours(0,0,0,0);
-    fin = new Date(finStr);   fin.setHours(23,59,59,999);
-  } else { deb = new Date(today.getFullYear(), today.getMonth(), 1); }
-  return {deb: deb.getTime(), fin: fin.getTime()};
+  if(filtre==='custom' && debutStr && finStr){
+    var deb = new Date(debutStr); deb.setHours(0,0,0,0);
+    var fin = new Date(finStr); fin.setHours(23,59,59,999);
+    return {deb: deb.getTime(), fin: fin.getTime()};
+  }
+  var type = (filtre==='mois'||filtre==='trimestre'||filtre==='annee') ? filtre : 'mois';
+  return bornesDePeriode(periodeKeyDuMoment(type), type);
 }
 
 function setDashActiviteFiltreByEl(el){ dashActiviteFiltre=el.getAttribute('data-daf'); renderPage(); }
@@ -11135,7 +11138,7 @@ function pageFinancesDashboard(){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     if(dateFacture<bornesActivite.deb || dateFacture>bornesActivite.fin) return;
-    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     var vente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
     var achat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
     if(v.typeClient==='forfait'){ caForfait+=vente; achatForfait+=achat; }
@@ -11205,7 +11208,7 @@ function pageFinancesDashboard(){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     if(dateFacture<bornesTreso.deb || dateFacture>bornesTreso.fin) return;
-    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     factureSurPeriode += lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
     encaisseRealise += parseFloat(v.montantPaye)||0;
   });
@@ -13434,6 +13437,34 @@ function pageEngagementsBancaires(){
       html += '<td><strong>'+item.engagement.nom+'</strong></td>';
       html += '<td class="xs muted">'+(item.engagement.organisme||'—')+'</td>';
       html += '<td class="xs" style="color:#A32D2D">'+new Date(item.dateEcheance).toLocaleDateString('fr-FR')+' <span class="xs muted">('+jours+' j)</span></td>';
+      html += '<td style="text-align:right;font-family:monospace;font-weight:700">'+(parseFloat(item.engagement.montant)||0).toLocaleString('fr-FR')+' FCFA</td>';
+      html += '<td><button class="btn btn-success btn-sm" data-egid="'+item.engagement.id+'" onclick="marquerEcheancePayeeByEl(this)">&#x2714; Marquer payee</button></td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div></div>';
+  }
+
+  // ── Engagements du mois en cours (pas encore en retard) ──
+  var moisEnCoursListe = [];
+  actifs.forEach(function(e){
+    echeancesImpayees(e).forEach(function(d){
+      var dt = new Date(d), now = new Date(maintenant);
+      if(dt.getFullYear()===now.getFullYear() && dt.getMonth()===now.getMonth() && d>=maintenant){
+        moisEnCoursListe.push({engagement:e, dateEcheance:d});
+      }
+    });
+  });
+  moisEnCoursListe.sort(function(a,b){return a.dateEcheance-b.dateEcheance;});
+  if(moisEnCoursListe.length){
+    html += '<div class="card" style="margin-bottom:16px;border:1px solid #d0cec9">';
+    html += '<div class="card-head">&#x1F4C5; Engagements mois en cours ('+moisEnCoursListe.length+')</div>';
+    html += '<div class="tw"><table><thead><tr><th>Engagement</th><th>Banque</th><th>Date d\'echeance</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
+    moisEnCoursListe.forEach(function(item){
+      var joursRestants = Math.ceil((item.dateEcheance-maintenant)/86400000);
+      html += '<tr>';
+      html += '<td><strong>'+item.engagement.nom+'</strong></td>';
+      html += '<td class="xs muted">'+(item.engagement.organisme||'—')+'</td>';
+      html += '<td class="xs">'+new Date(item.dateEcheance).toLocaleDateString('fr-FR')+' <span class="xs muted">(dans '+joursRestants+' j)</span></td>';
       html += '<td style="text-align:right;font-family:monospace;font-weight:700">'+(parseFloat(item.engagement.montant)||0).toLocaleString('fr-FR')+' FCFA</td>';
       html += '<td><button class="btn btn-success btn-sm" data-egid="'+item.engagement.id+'" onclick="marquerEcheancePayeeByEl(this)">&#x2714; Marquer payee</button></td>';
       html += '</tr>';
