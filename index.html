@@ -12216,6 +12216,41 @@ function collecterEncaissementsAttendus(){
   return items;
 }
 
+// Forfaits PREVISIONNELS : utilise UNIQUEMENT par la Prevision de
+// tresorerie (pas par collecterEncaissementsAttendus, qui alimente aussi
+// les "4 tableaux" de Facturation et le tableau de bord Finances — la ces
+// vues doivent rester strictement des VRAIES factures, pas des
+// estimations). Pour chaque client forfait ayant un montant mensuel connu
+// (FORFAITS_CLIENTS), les mois a venir qui n'ont pas encore de facture
+// forfait reellement generee sont estimes a partir de ce montant deja
+// connu — evite d'attendre la generation effective de la facture pour
+// voir apparaitre ce CA quasi-certain dans la previsions de tresorerie.
+// Echeance au 15 du mois (delai habituel de reglement forfait).
+function collecterForfaitsPrevisionnels(){
+  var items = [];
+  var maintenant = Date.now();
+  var dNow = new Date();
+  FORFAITS_CLIENTS.forEach(function(fc){
+    if(!fc.montantMensuel || fc.montantMensuel<=0) return;
+    for(var m=0; m<previsionNbPeriodes; m++){
+      var anneeMois = new Date(dNow.getFullYear(), dNow.getMonth()+m, 1);
+      var periodeKey = anneeMois.getFullYear()+'-'+String(anneeMois.getMonth()+1).padStart(2,'0');
+      var dejaExistant = FORFAIT_FACTURES.some(function(f){return f.client===fc.client && f.periodeKey===periodeKey;});
+      if(dejaExistant) continue; // une vraie facture existe deja pour ce mois, ne pas dupliquer
+      if(fc.dateDebut && anneeMois.getTime()<fc.dateDebut) continue; // avant le debut du contrat
+      var dateEcheancePrev = new Date(anneeMois.getFullYear(), anneeMois.getMonth(), 15, 23,59,59).getTime();
+      items.push({
+        nom:fc.client, immat:'Forfait previsionnel '+periodeKey, marque:'', modele:'',
+        montant:fc.montantMensuel, dateEcheance:dateEcheancePrev,
+        enRetard:(dateEcheancePrev>0 && dateEcheancePrev<maintenant),
+        categorieClient:'forfait_previsionnel', vid:null, periodeKey:periodeKey,
+        estimation:true
+      });
+    }
+  });
+  return items;
+}
+
 function collecterDecaissementsAttendus(){
   var items = [];
   var maintenant = Date.now();
@@ -12333,7 +12368,11 @@ function construirePeriodesPrevision(){
 function pagePrevisionTresorerie(){
   var soldeActuel = BANQUES.filter(function(b){return b.actif;}).reduce(function(s,b){return s+(parseFloat(b.solde)||0);},0);
 
-  var encaissements = collecterEncaissementsAttendus();
+  // Les forfaits prevus (montant mensuel connu, mois pas encore facture)
+  // sont ajoutes UNIQUEMENT ici — la prevision de tresorerie est le seul
+  // endroit ou une estimation a sa place, contrairement aux vrais
+  // tableaux de facturation.
+  var encaissements = collecterEncaissementsAttendus().concat(collecterForfaitsPrevisionnels());
   var decaissements = collecterDecaissementsAttendus();
   var maintenant = Date.now();
 
@@ -12498,7 +12537,7 @@ function pagePrevisionTresorerie(){
             if(exp2){
               g.lignes.forEach(function(l){
                 html += '<tr style="border-top:1px solid #f5f3ef">';
-                html += '<td style="padding:3px 8px 3px 28px" class="xs muted">'+(l.immat||'—')+' '+(l.marque||'')+' '+(l.modele||'')+(l.enRetard?' <span style="color:#A32D2D;font-weight:600">&#9888; en retard</span>':'')+'</td>';
+                html += '<td style="padding:3px 8px 3px 28px" class="xs muted">'+(l.immat||'—')+' '+(l.marque||'')+' '+(l.modele||'')+(l.estimation?' <span class="badge b-blue" style="font-size:8px">Estime</span>':'')+(l.enRetard?' <span style="color:#A32D2D;font-weight:600">&#9888; en retard</span>':'')+'</td>';
                 html += '<td style="padding:3px 8px;text-align:right;font-family:monospace;font-size:11px">'+l.montant.toLocaleString('fr-FR')+'</td>';
                 html += '</tr>';
               });
