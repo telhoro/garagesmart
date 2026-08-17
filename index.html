@@ -5897,7 +5897,7 @@ function pageRentabilite(){
   html += '<input type="date" class="inp" id="rentaFin" style="width:95px;font-size:11px;padding:2px 3px" value="'+(rentaFin||'')+'">';
   html += '<button class="btn btn-sm btn-primary" style="font-size:11px;padding:3px 6px" onclick="setRentaCustom()">OK</button>';
   html += '<span style="flex:1"></span>';
-  [{v:'dossiers',l:'Dossiers'},{v:'clients',l:'Clients'},{v:'periode',l:'Vue periode'},{v:'evolution',l:'&#x1F4C8; Evolution CA'}].forEach(function(v){
+  [{v:'clients',l:'Clients'},{v:'evolution',l:'&#x1F4C8; Evolution CA'}].forEach(function(v){
     html += '<button class="btn btn-sm'+(rentaVue===v.v?' btn-primary':'')+'" data-rv="'+v.v+'" onclick="setRentaVueByEl(this)" style="font-size:11px;padding:3px 7px">'+v.l+'</button>';
   });
   html += '</div>';
@@ -6635,26 +6635,50 @@ function rentaParClient(dossiers){
 // ============================================================
 // PAGE RENTABILITE CLIENTS FORFAIT
 // ============================================================
-var rentaForfaitVue = 'vehicules'; // 'vehicules' ou 'clients'
-var rentaForfaitFiltre = 'mois';   // 'mois','trimestre','annee','tous'
+var rentaForfaitVue = 'clients'; // 'vehicules','clients','suivi_client','evolution'
+var rentaForfaitEvolutionType = 'mois';
+var rentaForfaitEvolutionPeriodeA = '';
+var rentaForfaitEvolutionPeriodeB = '';
+var rentaForfaitEvolutionClientGraphique = null;
+var rentaForfaitAnalysePiecesRecherche = '';
+var rentaForfaitAnalysePiecesClient = '';
+var rentaForfaitAnalysePiecesMarque = '';
+var rentaForfaitAnalysePiecesModele = '';
+var rentaForfaitAnalysePiecesSortCol = 'total'; // 'libelle','qte','prixUnit','total'
+var rentaForfaitAnalysePiecesSortDir = 'desc';
+// Bornes de periode courantes, conservees pour rester accessibles depuis
+// les rafraichissements cibles (hors rendu complet de la page).
+var rentaForfaitApBorneDebut = 0;
+var rentaForfaitApBorneFin = null;
+var rentaForfaitFiltre = 'mois';   // 'mois','trimestre','annee','tous','custom'
+var rentaForfaitDebut = null;
+var rentaForfaitFin = null;
 
 function pageRentabiliteForfait(){
   var today = new Date();
   var borneDebut = 0;
+  var borneFin = null;
   var nbMois = 1;
   if(rentaForfaitFiltre==='mois'){
     borneDebut = new Date(today.getFullYear(), today.getMonth(), 1).getTime();
+    borneFin = new Date(today.getFullYear(), today.getMonth()+1, 0, 23,59,59,999).getTime();
     nbMois = 1;
   } else if(rentaForfaitFiltre==='trimestre'){
     var q=Math.floor(today.getMonth()/3)*3;
     borneDebut = new Date(today.getFullYear(),q,1).getTime();
+    borneFin = new Date(today.getFullYear(), q+3, 0, 23,59,59,999).getTime();
     nbMois = 3;
   } else if(rentaForfaitFiltre==='annee'){
     borneDebut = new Date(today.getFullYear(),0,1).getTime();
+    borneFin = new Date(today.getFullYear(),11,31,23,59,59,999).getTime();
     nbMois = 12;
+  } else if(rentaForfaitFiltre==='custom' && rentaForfaitDebut){
+    borneDebut = new Date(rentaForfaitDebut).setHours(0,0,0,0);
+    borneFin = rentaForfaitFin ? new Date(rentaForfaitFin).setHours(23,59,59,999) : Date.now();
+    nbMois = Math.max(1, (borneFin-borneDebut)/(30*86400000));
   }
 
-  var labelsPeriode = {mois:'Ce mois', trimestre:'Ce trimestre', annee:'Cette annee', tous:'Tout'};
+  var labelsPeriode = {mois:'Ce mois', trimestre:'Ce trimestre', annee:'Cette annee', tous:'Tout', custom:'Personnalise'};
 
   // Nombre de vehicules forfait par client, pour repartir le forfait
   // annuel client (s'il est configure) proportionnellement entre eux.
@@ -6678,12 +6702,14 @@ function pageRentabiliteForfait(){
       forfaitMensuel = parseFloat(v.forfaitMensuel)||0;
     }
     var forfaitPeriode = forfaitMensuel * nbMois;
-    // Toutes les dépenses sur ce véhicule
-    var lignes = (v.chiffrage && v.chiffrage.lignes) ? v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
+    // Toutes les dépenses sur ce véhicule — seules les pieces dont
+    // l'ACHAT A ETE VALIDE par Direction comptent reellement.
+    var lignes = (v.chiffrage && v.chiffrage.lignes) ? v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;}) : [];
     var depTotal = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
     // Dépenses sur la période
     var dateRef = v.chiffrage ? (v.chiffrage.valideDirLe || v.chiffrage.soumisLe || 0) : 0;
-    var depPeriode = (borneDebut===0 || dateRef>=borneDebut) ? depTotal : 0;
+    var dansLaPeriode = (borneDebut===0 || dateRef>=borneDebut) && (!borneFin || dateRef<=borneFin);
+    var depPeriode = dansLaPeriode ? depTotal : 0;
     var marge = forfaitPeriode - depPeriode;
     var tauxCouv = forfaitPeriode>0 ? (depPeriode/forfaitPeriode*100) : 0;
     var nbInterventions = vehicles.filter(function(x){return x.immat===v.immat && x.typeClient==='forfait';}).length;
@@ -6715,13 +6741,19 @@ function pageRentabiliteForfait(){
 
   // Filtres
   html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">';
-  html += '<div class="flex gap6">';
-  ['mois','trimestre','annee','tous'].forEach(function(f){
+  html += '<div class="flex gap6" style="align-items:center">';
+  ['mois','trimestre','annee','tous','custom'].forEach(function(f){
     html += '<button class="btn btn-sm'+(rentaForfaitFiltre===f?' btn-primary':'')+'" data-rff="'+f+'" onclick="setRentaForfaitFiltreByEl(this)">'+labelsPeriode[f]+'</button>';
   });
+  if(rentaForfaitFiltre==='custom'){
+    html += '<input type="date" class="inp" id="rentaForfaitDebut" style="width:135px" value="'+(rentaForfaitDebut||'')+'">';
+    html += '<span class="xs muted">—</span>';
+    html += '<input type="date" class="inp" id="rentaForfaitFin" style="width:135px" value="'+(rentaForfaitFin||'')+'">';
+    html += '<button class="btn btn-sm btn-primary" onclick="setRentaForfaitCustom()">OK</button>';
+  }
   html += '</div>';
   html += '<div class="flex gap6" style="margin-left:auto">';
-  [{v:'vehicules',l:'Par vehicule'},{v:'clients',l:'Par client'},{v:'suivi_client',l:'Suivi client (mensuel/annuel)'}].forEach(function(vw){
+  [{v:'vehicules',l:'Par vehicule'},{v:'clients',l:'Par client'},{v:'suivi_client',l:'Suivi client (mensuel/annuel)'},{v:'evolution',l:'&#x1F4C8; Evolution'},{v:'analyse_pieces',l:'&#x1F50D; Analyse pieces'}].forEach(function(vw){
     html += '<button class="btn btn-sm'+(rentaForfaitVue===vw.v?' btn-primary':'')+'" data-rfv="'+vw.v+'" onclick="setRentaForfaitVueByEl(this)">'+vw.l+'</button>';
   });
   html += '</div></div>';
@@ -6732,6 +6764,12 @@ function pageRentabiliteForfait(){
   // s'appliquent qu'aux vues Par vehicule / Par client.
   if(rentaForfaitVue==='suivi_client'){
     return html + rentaForfaitSuiviClient();
+  }
+  if(rentaForfaitVue==='evolution'){
+    return html + rentaForfaitEvolution();
+  }
+  if(rentaForfaitVue==='analyse_pieces'){
+    return html + rentaForfaitAnalysePieces(borneDebut, borneFin);
   }
 
   // KPI
@@ -6882,7 +6920,8 @@ function rentaForfaitSuiviClient(){
     vehicles.filter(function(v){return v.client===client && v.typeClient==='forfait' && v.chiffrage && v.chiffrage.lignes;}).forEach(function(v){
       var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
       if(dateRef<deb || dateRef>fin) return;
-      var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+      // Seules les pieces dont l'achat a ete valide par Direction comptent.
+      var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
       total += lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
     });
     return total;
@@ -6982,44 +7021,513 @@ function rentaForfaitSuiviClient(){
   return html;
 }
 
-function setRentaForfaitFiltreByEl(el){ rentaForfaitFiltre=el.getAttribute('data-rff'); renderPage(); }
+function setRentaForfaitFiltreByEl(el){
+  rentaForfaitFiltre=el.getAttribute('data-rff');
+  if(rentaForfaitFiltre!=='custom'){ rentaForfaitDebut=null; rentaForfaitFin=null; }
+  renderPage();
+}
+function setRentaForfaitCustom(){
+  rentaForfaitDebut = document.getElementById('rentaForfaitDebut').value;
+  rentaForfaitFin   = document.getElementById('rentaForfaitFin').value;
+  if(!rentaForfaitDebut){ alert('Selectionnez au moins une date de debut.'); return; }
+  renderPage();
+}
 function setRentaForfaitVueByEl(el){ rentaForfaitVue=el.getAttribute('data-rfv'); renderPage(); }
 
-function rentaForfaitVehicules(dossiers){
-  // Trier par taux de couverture décroissant (les plus consommateurs en premier)
-  var sorted = dossiers.slice().sort(function(a,b){return b.tauxCouv-a.tauxCouv;});
-  var html = '<div class="card"><div class="card-head">Analyse par vehicule ('+sorted.length+')</div>';
-  if(!sorted.length){ html += '<div class="empty">Aucun vehicule en forfait</div></div>'; return html; }
-  html += '<div class="tw"><table><thead><tr>';
-  html += '<th>Vehicule</th><th>Client / Entite</th><th>Statut</th><th>Forfait / mois</th><th>Forfait periode</th><th>Depenses</th><th>Marge</th><th>Taux couv.</th><th>Alerte</th>';
-  html += '</tr></thead><tbody>';
-  sorted.forEach(function(d){
-    var mc = d.marge>0?'#3B6D11':d.marge<0?'#A32D2D':'#888';
-    var tc = d.tauxCouv;
-    var alerteColor = tc>=100?'#A32D2D':tc>=80?'#854F0B':'#3B6D11';
-    var alerteTxt   = tc>=100?'DEFICIT':tc>=80?'ALERTE':'OK';
-    var alerteBadge = tc>=100?'b-red':tc>=80?'b-amber':'b-green';
-    // Barre de progression
-    var barW = Math.min(tc, 100).toFixed(0);
-    var barColor = tc>=100?'#A32D2D':tc>=80?'#E8A44A':'#4CAF50';
-    html += '<tr style="'+(d.marge<0?'background:#FFF5F5':d.tauxCouv>=80&&d.tauxCouv<100?'background:#FFFBF0':'')+'">';
-    html += '<td><div class="fw7">'+d.immat+'</div><div class="xs muted">'+d.marque+' '+d.modele+'</div></td>';
-    html += '<td>'+d.client+'<div class="xs muted">'+d.entite+'</div></td>';
-    html += '<td>'+sbadge(d.status)+'</td>';
-    html += '<td style="font-family:monospace">'+d.forfaitMensuel.toLocaleString('fr-FR')+'</td>';
-    html += '<td style="font-family:monospace;color:#185FA5">'+d.forfaitPeriode.toLocaleString('fr-FR')+'</td>';
-    html += '<td style="font-family:monospace;color:#A32D2D">'+d.depPeriode.toLocaleString('fr-FR')+'</td>';
-    html += '<td style="font-family:monospace;font-weight:700;color:'+mc+'">'+(d.marge>0?'+':'')+d.marge.toLocaleString('fr-FR')+'</td>';
-    html += '<td>';
-    html += '<div style="background:#e8e5e0;border-radius:4px;height:8px;width:80px;margin-bottom:3px"><div style="background:'+barColor+';height:8px;border-radius:4px;width:'+barW+'%"></div></div>';
-    html += '<span style="font-size:11px;font-weight:700;color:'+alerteColor+'">'+tc.toFixed(1)+'%</span>';
-    html += '</td>';
-    html += '<td><span class="badge '+alerteBadge+'">'+alerteTxt+'</span>';
-    if(d.nbPieces>0) html += ' <button class="btn btn-sm" onclick="openDetById(this)" data-vid="'+d.id+'">&#x1F441;</button>';
-    html += '</td>';
-    html += '</tr>';
+function rentaForfaitVehicules(dossiersBruts){
+  // Cumule par vehicule (immat) : un vehicule ayant eu plusieurs visites
+  // (dossiers) sur la periode selectionnee doit apparaitre en UNE seule
+  // ligne avec la depense totale cumulee, pas une ligne par visite.
+  // Exclut aussi les vehicules sans aucune depense sur la periode.
+  var parImmat = {};
+  dossiersBruts.forEach(function(d){
+    if(d.depPeriode<=0) return;
+    var key = d.client+'||'+d.immat;
+    if(!parImmat[key]){
+      parImmat[key] = {client:d.client, immat:d.immat, marque:d.marque, modele:d.modele, entite:d.entite, depPeriode:0, lignes:[]};
+    }
+    parImmat[key].depPeriode += d.depPeriode;
+    parImmat[key].lignes = parImmat[key].lignes.concat(d.lignes);
   });
+  var dossiers = Object.keys(parImmat).map(function(k){return parImmat[k];});
+
+  // Regroupe par client, chaque client trie du montant le plus eleve au
+  // plus bas — a la fois les clients entre eux (par depense totale) et
+  // les vehicules entre eux (au sein d'un meme client).
+  var parClient = {};
+  dossiers.forEach(function(d){
+    if(!parClient[d.client]) parClient[d.client] = {client:d.client, entite:d.entite, vehicules:[], totalDep:0};
+    parClient[d.client].vehicules.push(d);
+    parClient[d.client].totalDep += d.depPeriode;
+  });
+  var clients = Object.keys(parClient).map(function(k){return parClient[k];})
+    .sort(function(a,b){return b.totalDep-a.totalDep;});
+  clients.forEach(function(c){
+    c.vehicules.sort(function(a,b){return b.depPeriode-a.depPeriode;});
+  });
+
+  var html = '<div class="card"><div class="card-head">Analyse par vehicule ('+dossiers.length+')</div>';
+  if(!clients.length){ html += '<div class="empty">Aucun vehicule forfait n\'a de depense enregistree sur cette periode</div></div>'; return html; }
+
+  clients.forEach(function(c){
+    html += '<div style="padding:10px 16px;background:#f5f4f1;border-top:1px solid #e5e2dc;display:flex;justify-content:space-between;align-items:center">';
+    html += '<div class="fw7">'+c.client+' <span class="xs muted">('+c.vehicules.length+' vehicule'+(c.vehicules.length>1?'s':'')+')</span></div>';
+    html += '<div style="font-family:monospace;font-weight:700;color:#A32D2D">'+c.totalDep.toLocaleString('fr-FR')+' FCFA</div>';
+    html += '</div>';
+    html += '<div class="tw"><table><tbody>';
+    c.vehicules.forEach(function(d){
+      var expandKey = 'rentaForfaitVeh::'+d.client+'::'+d.immat;
+      var expanded = !!creancesClientExpand[expandKey];
+      html += '<tr style="cursor:pointer" data-ccexp="'+encodeURIComponent(expandKey)+'" onclick="toggleCreancesClientExpandByEl(this)">';
+      html += '<td style="width:60%"><div class="fw7">'+(expanded?'&#9662; ':'&#9656; ')+d.immat+'</div><div class="xs muted">'+d.marque+' '+d.modele+'</div></td>';
+      html += '<td style="text-align:right;font-family:monospace;color:#A32D2D;font-weight:700">'+d.depPeriode.toLocaleString('fr-FR')+' FCFA</td>';
+      html += '</tr>';
+      if(expanded){
+        html += '<tr><td colspan="2" style="padding:0 16px 12px 16px;background:#faf9f7">';
+        if(!d.lignes.length){
+          html += '<div class="xs muted" style="padding:8px 0">Aucune piece enregistree sur ce vehicule pour cette periode.</div>';
+        } else {
+          // Pieces achetees, du montant le plus eleve au plus bas.
+          var lignesTri = d.lignes.slice().sort(function(a,b){
+            var montA = (parseFloat(a.prixAchat)||0)*(parseInt(a.qte)||1);
+            var montB = (parseFloat(b.prixAchat)||0)*(parseInt(b.qte)||1);
+            return montB-montA;
+          });
+          html += '<table style="width:100%;font-size:12px"><thead><tr style="color:#888">';
+          html += '<th style="text-align:left;padding:4px 8px;font-size:11px">Piece</th><th style="text-align:center;padding:4px 8px;font-size:11px">Qte</th><th style="text-align:right;padding:4px 8px;font-size:11px">Prix unitaire</th><th style="text-align:right;padding:4px 8px;font-size:11px">Total</th>';
+          html += '</tr></thead><tbody>';
+          lignesTri.forEach(function(l){
+            var montant = (parseFloat(l.prixAchat)||0)*(parseInt(l.qte)||1);
+            html += '<tr style="border-top:1px solid rgba(0,0,0,0.06)">';
+            html += '<td style="padding:4px 8px">'+l.piece+'</td>';
+            html += '<td style="padding:4px 8px;text-align:center">'+(parseInt(l.qte)||1)+'</td>';
+            html += '<td style="padding:4px 8px;text-align:right;font-family:monospace">'+(parseFloat(l.prixAchat)||0).toLocaleString('fr-FR')+'</td>';
+            html += '<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:700">'+montant.toLocaleString('fr-FR')+'</td>';
+            html += '</tr>';
+          });
+          html += '</tbody></table>';
+        }
+        html += '</td></tr>';
+      }
+    });
+    html += '</tbody></table></div>';
+  });
+  html += '</div>';
+  return html;
+}
+
+// ── Evolution des depenses forfait (par client) ──────────────────────────
+// Contrairement au CA (fixe/contractuel pour le forfait), c'est la
+// DEPENSE qui varie et merite d'etre suivie dans le temps, client par
+// client — pour reperer une derive de consommation.
+function collecterDepensesParClientMoisForfait(){
+  var data = {};
+  vehicles.filter(function(v){return v.typeClient==='forfait';}).forEach(function(v){
+    if(!v.chiffrage || !v.chiffrage.lignes) return;
+    // Seules les pieces dont l'achat a ete valide par Direction comptent.
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
+    var depenses = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
+    if(!depenses) return;
+    var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
+    if(!dateRef) return;
+    var dt = new Date(dateRef);
+    var moisKey = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+    if(!data[v.client]) data[v.client] = {};
+    data[v.client][moisKey] = (data[v.client][moisKey]||0) + depenses;
+  });
+  return data;
+}
+// CA forfait total (toutes factures forfait) par mois — pour le premier
+// graphique de tendance globale.
+function collecterCATotalForfaitParMois(){
+  var data = {};
+  FORFAIT_FACTURES.forEach(function(f){
+    var dateFacture = f.deposeeDate || f.emiseDate || 0;
+    if(!dateFacture) return;
+    var dt = new Date(dateFacture);
+    var moisKey = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+    data[moisKey] = (data[moisKey]||0) + (f.montant||0);
+  });
+  return data;
+}
+// Depenses forfait totales (tous clients confondus) par mois — pour le
+// second graphique de tendance globale. Derive directement des depenses
+// par client deja collectees, pour eviter de recalculer deux fois.
+function collecterDepensesTotalesForfaitParMois(depensesParClientMois){
+  var data = {};
+  Object.keys(depensesParClientMois).forEach(function(client){
+    Object.keys(depensesParClientMois[client]).forEach(function(mois){
+      data[mois] = (data[mois]||0) + depensesParClientMois[client][mois];
+    });
+  });
+  return data;
+}
+
+// ── Gestionnaires de periode pour Evolution forfait — meme principe que
+// Evolution CA (Rentabilite Devis) et Evolution Finances, etat garde
+// separe (prefixe Forfait) pour ne jamais interferer avec les deux autres.
+function setRentaForfaitEvolutionTypeByEl(el){
+  rentaForfaitEvolutionType = el.getAttribute('data-ret');
+  rentaForfaitEvolutionPeriodeA = periodeKeyDuMoment(rentaForfaitEvolutionType);
+  rentaForfaitEvolutionPeriodeB = periodePrecedente(rentaForfaitEvolutionPeriodeA, rentaForfaitEvolutionType);
+  renderPage();
+}
+function onChangeForfaitEvoMois(cible){
+  var val = document.getElementById('forfaitEvo'+cible+'_mois').value;
+  if(cible==='A') rentaForfaitEvolutionPeriodeA = val; else rentaForfaitEvolutionPeriodeB = val;
+  renderPage();
+}
+function onChangeForfaitEvoQS(cible){
+  var lettre = rentaForfaitEvolutionType==='trimestre' ? 'Q' : 'S';
+  var num = document.getElementById('forfaitEvo'+cible+'_num').value;
+  var annee = document.getElementById('forfaitEvo'+cible+'_annee').value;
+  var val = annee+'-'+lettre+num;
+  if(cible==='A') rentaForfaitEvolutionPeriodeA = val; else rentaForfaitEvolutionPeriodeB = val;
+  renderPage();
+}
+function onChangeForfaitEvoAnnee(cible){
+  var val = document.getElementById('forfaitEvo'+cible+'_anneeSeule').value;
+  if(cible==='A') rentaForfaitEvolutionPeriodeA = val; else rentaForfaitEvolutionPeriodeB = val;
+  renderPage();
+}
+function selectionnerClientGraphiqueForfaitByEl(el){
+  var c = decodeURIComponent(el.getAttribute('data-cli'));
+  rentaForfaitEvolutionClientGraphique = (rentaForfaitEvolutionClientGraphique===c) ? null : c;
+  renderPage();
+}
+function htmlPickerPeriodeForfait(cible, type, valeurActuelle){
+  if(type==='mois'){
+    return '<input type="month" class="inp" id="forfaitEvo'+cible+'_mois" value="'+valeurActuelle+'" onchange="onChangeForfaitEvoMois(\''+cible+'\')" style="width:auto">';
+  }
+  if(type==='trimestre'||type==='semestre'){
+    var lettre = type==='trimestre'?'Q':'S';
+    var maxN = type==='trimestre'?4:2;
+    var parts = valeurActuelle.split('-'+lettre);
+    var annee = parts[0]||new Date().getFullYear(), num = parts[1]||'1';
+    var html = '<select class="inp" id="forfaitEvo'+cible+'_num" onchange="onChangeForfaitEvoQS(\''+cible+'\')" style="width:auto;display:inline-block">';
+    for(var i=1;i<=maxN;i++){ html += '<option value="'+i+'"'+(String(i)===num?' selected':'')+'>'+lettre+i+'</option>'; }
+    html += '</select> <input type="number" class="inp" id="forfaitEvo'+cible+'_annee" value="'+annee+'" onchange="onChangeForfaitEvoQS(\''+cible+'\')" style="width:75px;display:inline-block">';
+    return html;
+  }
+  return '<input type="number" class="inp" id="forfaitEvo'+cible+'_anneeSeule" value="'+valeurActuelle+'" onchange="onChangeForfaitEvoAnnee(\''+cible+'\')" style="width:85px">';
+}
+
+function rentaForfaitEvolution(){
+  if(!rentaForfaitEvolutionPeriodeA){
+    rentaForfaitEvolutionPeriodeA = periodeKeyDuMoment(rentaForfaitEvolutionType);
+    rentaForfaitEvolutionPeriodeB = periodePrecedente(rentaForfaitEvolutionPeriodeA, rentaForfaitEvolutionType);
+  }
+  var depensesParClientMois = collecterDepensesParClientMoisForfait();
+
+  var ordre = ordonnerPeriodesParChronologie(rentaForfaitEvolutionPeriodeA, rentaForfaitEvolutionPeriodeB, rentaForfaitEvolutionType);
+  var periodeRecente = ordre.recente, periodeAncienne = ordre.ancienne;
+
+  var html = '<div class="card" style="padding:14px 16px;margin-bottom:16px">';
+  html += '<div class="flex gap6" style="flex-wrap:wrap;margin-bottom:12px">';
+  ['mois','trimestre','semestre','annee'].forEach(function(t){
+    var lbl = {mois:'Mensuel',trimestre:'Trimestriel',semestre:'Semestriel',annee:'Annuel'}[t];
+    html += '<button class="btn btn-sm'+(rentaForfaitEvolutionType===t?' btn-primary':'')+'" data-ret="'+t+'" onclick="setRentaForfaitEvolutionTypeByEl(this)">'+lbl+'</button>';
+  });
+  html += '</div>';
+  html += '<div class="flex gap6" style="align-items:center;flex-wrap:wrap">';
+  html += '<span class="xs muted">Periode A</span>'+htmlPickerPeriodeForfait('A', rentaForfaitEvolutionType, rentaForfaitEvolutionPeriodeA);
+  html += '<span class="xs muted" style="margin-left:12px">Periode B</span>'+htmlPickerPeriodeForfait('B', rentaForfaitEvolutionType, rentaForfaitEvolutionPeriodeB);
+  html += '</div>';
+  html += '<div class="xs muted" style="margin-top:6px">La periode B se propose automatiquement comme la periode precedente — modifiable librement. La plus recente des deux s\'affiche toujours en seconde position.</div>';
+  html += '</div>';
+
+  var tousClients = Object.keys(depensesParClientMois);
+  var comparaison = tousClients.map(function(client){
+    var depRecent = calculerCAPeriode(depensesParClientMois, client, periodeRecente, rentaForfaitEvolutionType);
+    var depAncien = calculerCAPeriode(depensesParClientMois, client, periodeAncienne, rentaForfaitEvolutionType);
+    var variation = depAncien>0 ? ((depRecent-depAncien)/depAncien*100) : (depRecent>0 ? null : 0);
+    return {client:client, depRecent:depRecent, depAncien:depAncien, variation:variation};
+  }).filter(function(c){return c.depRecent>0 || c.depAncien>0;}).sort(function(a,b){return b.depRecent-a.depRecent;});
+
+  var totalRecent = comparaison.reduce(function(s,c){return s+c.depRecent;},0);
+  var totalAncien = comparaison.reduce(function(s,c){return s+c.depAncien;},0);
+  var variationGlobale = totalAncien>0 ? ((totalRecent-totalAncien)/totalAncien*100) : null;
+
+  html += '<div class="kgrid k3" style="margin-bottom:16px">';
+  html += kpi('Depenses '+formaterLabelPeriode(periodeAncienne,rentaForfaitEvolutionType), totalAncien?totalAncien.toLocaleString('fr-FR')+' FCFA':'—', '');
+  html += kpi('Depenses '+formaterLabelPeriode(periodeRecente,rentaForfaitEvolutionType), totalRecent?totalRecent.toLocaleString('fr-FR')+' FCFA':'—', 'blue');
+  // Pour une DEPENSE, une hausse est une mauvaise nouvelle (rouge), a
+  // l'inverse d'un CA — logique de couleur inversee ici.
+  html += kpi('Variation globale', variationGlobale!==null?(variationGlobale>=0?'+':'')+variationGlobale.toFixed(1)+'%':'—', variationGlobale===null?'':(variationGlobale>=0?'red':'green'));
+  html += '</div>';
+
+  // ── Deux graphiques de tendance globale : CA forfait et depenses forfait ──
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">';
+  html += '<div class="card" style="padding:14px 16px">';
+  html += '<div class="fw7" style="margin-bottom:8px">Tendance — CA total forfaits (12 derniers mois)</div>';
+  html += '<canvas id="forfaitEvoChartCA" height="90"></canvas>';
+  html += '</div>';
+  html += '<div class="card" style="padding:14px 16px">';
+  html += '<div class="fw7" style="margin-bottom:8px">Tendance — Depenses totales forfaits (12 derniers mois)</div>';
+  html += '<canvas id="forfaitEvoChartDepenses" height="90"></canvas>';
+  html += '</div>';
+  html += '</div>';
+
+  html += '<div class="card"><div class="card-head">Depenses par client ('+comparaison.length+')</div>';
+  if(!comparaison.length){
+    html += '<div class="empty">Aucune donnee sur ces periodes</div></div>';
+  } else {
+    html += '<div class="tw"><table><thead><tr><th>Client</th><th style="text-align:right">Depenses '+formaterLabelPeriode(periodeAncienne,rentaForfaitEvolutionType)+'</th><th style="text-align:right">Depenses '+formaterLabelPeriode(periodeRecente,rentaForfaitEvolutionType)+'</th><th style="text-align:right">Variation</th></tr></thead><tbody>';
+    comparaison.forEach(function(c){
+      var estSelectionne = rentaForfaitEvolutionClientGraphique===c.client;
+      var varTxt = c.variation===null ? 'Nouveau' : (c.variation>=0?'&#9650; +':'&#9660; ')+c.variation.toFixed(1)+'%';
+      // Hausse de depense = rouge (mauvaise nouvelle), baisse = vert
+      var varColor = c.variation===null ? '#185FA5' : (c.variation>=0?'#A32D2D':'#3B6D11');
+      html += '<tr style="cursor:pointer;'+(estSelectionne?'background:#EBF3FB':'')+'" data-cli="'+encodeURIComponent(c.client)+'" onclick="selectionnerClientGraphiqueForfaitByEl(this)">';
+      html += '<td class="fw7">'+(estSelectionne?'&#9662; ':'&#9656; ')+c.client+'</td>';
+      html += '<td style="text-align:right;font-family:monospace;color:#888">'+c.depAncien.toLocaleString('fr-FR')+'</td>';
+      html += '<td style="text-align:right;font-family:monospace">'+c.depRecent.toLocaleString('fr-FR')+'</td>';
+      html += '<td style="text-align:right;font-weight:700;color:'+varColor+'">'+varTxt+'</td>';
+      html += '</tr>';
+      if(estSelectionne){
+        html += '<tr><td colspan="4" style="padding:10px 16px 16px 16px;background:#faf9f7">';
+        html += '<div class="xs fw7" style="margin-bottom:6px">Tendance — '+c.client+' (12 derniers mois)</div>';
+        html += '<canvas id="forfaitEvoChartClient" height="70"></canvas>';
+        html += '</td></tr>';
+      }
+    });
+    html += '</tbody></table></div>';
+  }
+  html += '</div>';
+
+  setTimeout(function(){ initGraphiquesForfaitEvolution(depensesParClientMois); }, 50);
+  return html;
+}
+
+// Initialise les 3 graphiques Chart.js possibles de la vue Evolution
+// forfait (CA global, depenses globales, et depenses du client
+// selectionne) — appelee apres l'insertion du HTML dans le DOM.
+function initGraphiquesForfaitEvolution(depensesParClientMois){
+  if(typeof Chart==='undefined') return;
+  var maintenant = new Date();
+  var douzeMois = [];
+  for(var i=11;i>=0;i--){
+    var d = new Date(maintenant.getFullYear(), maintenant.getMonth()-i, 1);
+    douzeMois.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));
+  }
+  var labels = douzeMois.map(function(m){return formaterLabelPeriode(m,'mois');});
+
+  var canvasCA = document.getElementById('forfaitEvoChartCA');
+  if(canvasCA){
+    var caParMois = collecterCATotalForfaitParMois();
+    var valeursCA = douzeMois.map(function(m){ return caParMois[m]||0; });
+    if(window._chartForfaitCA) window._chartForfaitCA.destroy();
+    window._chartForfaitCA = new Chart(canvasCA, {
+      type:'bar',
+      data:{ labels: labels, datasets:[{ label:'CA forfait', data: valeursCA, backgroundColor:'#185FA5' }] },
+      options:{ responsive:true, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} }
+    });
+  }
+
+  var canvasDep = document.getElementById('forfaitEvoChartDepenses');
+  if(canvasDep){
+    var depTotalesParMois = collecterDepensesTotalesForfaitParMois(depensesParClientMois);
+    var valeursDep = douzeMois.map(function(m){ return depTotalesParMois[m]||0; });
+    if(window._chartForfaitDep) window._chartForfaitDep.destroy();
+    window._chartForfaitDep = new Chart(canvasDep, {
+      type:'bar',
+      data:{ labels: labels, datasets:[{ label:'Depenses forfait', data: valeursDep, backgroundColor:'#A32D2D' }] },
+      options:{ responsive:true, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} }
+    });
+  }
+
+  var canvasClient = document.getElementById('forfaitEvoChartClient');
+  if(canvasClient && rentaForfaitEvolutionClientGraphique){
+    var dataClient = depensesParClientMois[rentaForfaitEvolutionClientGraphique] || {};
+    var valeursClient = douzeMois.map(function(m){ return dataClient[m]||0; });
+    if(window._chartForfaitClient) window._chartForfaitClient.destroy();
+    window._chartForfaitClient = new Chart(canvasClient, {
+      type:'line',
+      data:{ labels: labels, datasets:[{ label:'Depenses '+rentaForfaitEvolutionClientGraphique, data: valeursClient, borderColor:'#A32D2D', backgroundColor:'rgba(163,45,45,0.1)', fill:true, tension:0.25 }] },
+      options:{ responsive:true, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} }
+    });
+  }
+}
+
+// ── Analyse pieces (forfait) ──────────────────────────────────────────
+// Collecte toutes les lignes de chiffrage des vehicules FORFAIT
+// uniquement, avec les infos necessaires aux filtres combinables
+// (client, marque, modele) — seules les pieces dont l'achat a ete
+// valide par Direction comptent (coherent avec le reste de Rentabilite
+// Forfait).
+function collecterLignesForfaitPourAnalyse(){
+  var lignes = [];
+  vehicles.filter(function(v){return v.typeClient==='forfait';}).forEach(function(v){
+    if(!v.chiffrage || !v.chiffrage.lignes) return;
+    // Respecte la periode selectionnee en haut de page (Ce mois/Trimestre/
+    // Annee/Tout/Personnalise) — sans ca, la liste des pieces restait
+    // toujours "Tout", quelle que soit la periode choisie.
+    var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || 0;
+    if(rentaForfaitApBorneDebut>0 && dateRef<rentaForfaitApBorneDebut) return;
+    if(rentaForfaitApBorneFin && dateRef>rentaForfaitApBorneFin) return;
+    v.chiffrage.lignes.forEach(function(cl){
+      if(!(cl.piece||'').trim() || cl.valideDir!==true) return;
+      lignes.push({
+        piece: cl.piece.trim(), qte: parseInt(cl.qte)||1, prixAchat: parseFloat(cl.prixAchat)||0,
+        montant: (parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1),
+        client: v.client, marque: v.marque||'', modele: v.modele||'', immat: v.immat
+      });
+    });
+  });
+  return lignes;
+}
+
+// Filtre + agrege + trie — fonction pure, reutilisee a la fois pour le
+// rendu initial de la page ET pour le rafraichissement cible declenche
+// par la saisie dans les barres de recherche (sans reconstruire toute la
+// page, pour ne jamais faire perdre le focus du champ en cours de frappe).
+function calculerResultatsAnalysePiecesForfait(){
+  var toutesLignes = collecterLignesForfaitPourAnalyse();
+  var lignesFiltrees = toutesLignes.filter(function(l){
+    if(rentaForfaitAnalysePiecesClient && l.client!==rentaForfaitAnalysePiecesClient) return false;
+    if(rentaForfaitAnalysePiecesMarque && l.marque!==rentaForfaitAnalysePiecesMarque) return false;
+    if(rentaForfaitAnalysePiecesModele && l.modele!==rentaForfaitAnalysePiecesModele) return false;
+    if(rentaForfaitAnalysePiecesRecherche){
+      if(l.piece.toLowerCase().indexOf(rentaForfaitAnalysePiecesRecherche.toLowerCase())<0) return false;
+    }
+    return true;
+  });
+  var parPiece = {};
+  lignesFiltrees.forEach(function(l){
+    var key = l.piece.toLowerCase();
+    if(!parPiece[key]) parPiece[key] = {libelle:l.piece, qte:0, total:0};
+    parPiece[key].qte += l.qte;
+    parPiece[key].total += l.montant;
+  });
+  var liste = Object.keys(parPiece).map(function(k){
+    var p = parPiece[k];
+    p.prixUnitaire = p.qte>0 ? p.total/p.qte : 0;
+    return p;
+  });
+  liste.sort(function(a,b){
+    var va, vb;
+    if(rentaForfaitAnalysePiecesSortCol==='libelle'){ va=a.libelle.toLowerCase(); vb=b.libelle.toLowerCase(); }
+    else if(rentaForfaitAnalysePiecesSortCol==='qte'){ va=a.qte; vb=b.qte; }
+    else if(rentaForfaitAnalysePiecesSortCol==='prixUnit'){ va=a.prixUnitaire; vb=b.prixUnitaire; }
+    else { va=a.total; vb=b.total; }
+    if(va<vb) return rentaForfaitAnalysePiecesSortDir==='asc' ? -1 : 1;
+    if(va>vb) return rentaForfaitAnalysePiecesSortDir==='asc' ? 1 : -1;
+    return 0;
+  });
+  return liste;
+}
+
+function flecheTriAnalysePiecesForfait(col){
+  if(rentaForfaitAnalysePiecesSortCol!==col) return '';
+  return rentaForfaitAnalysePiecesSortDir==='asc' ? ' &#9650;' : ' &#9660;';
+}
+
+function htmlResultatsAnalysePiecesForfait(){
+  var liste = calculerResultatsAnalysePiecesForfait();
+  var totalGeneral = liste.reduce(function(s,p){return s+p.total;},0);
+
+  var html = '<div class="kgrid k2" style="margin-bottom:16px">';
+  html += kpi('Pieces distinctes', liste.length, '');
+  html += kpi('Total', totalGeneral?totalGeneral.toLocaleString('fr-FR')+' FCFA':'—', 'red');
+  html += '</div>';
+
+  html += '<div class="card"><div class="tw"><table><thead><tr>';
+  html += '<th style="cursor:pointer" data-apsort="libelle" onclick="setRentaForfaitApSortByEl(this)">Libelle'+flecheTriAnalysePiecesForfait('libelle')+'</th>';
+  html += '<th style="cursor:pointer;text-align:center" data-apsort="qte" onclick="setRentaForfaitApSortByEl(this)">Quantite'+flecheTriAnalysePiecesForfait('qte')+'</th>';
+  html += '<th style="cursor:pointer;text-align:right" data-apsort="prixUnit" onclick="setRentaForfaitApSortByEl(this)">Prix unitaire'+flecheTriAnalysePiecesForfait('prixUnit')+'</th>';
+  html += '<th style="cursor:pointer;text-align:right" data-apsort="total" onclick="setRentaForfaitApSortByEl(this)">Total'+flecheTriAnalysePiecesForfait('total')+'</th>';
+  html += '</tr></thead><tbody>';
+  if(!liste.length){
+    html += '<tr><td colspan="4" class="empty">Aucune piece ne correspond a ces criteres</td></tr>';
+  } else {
+    liste.forEach(function(p){
+      html += '<tr>';
+      html += '<td class="fw7">'+p.libelle+'</td>';
+      html += '<td style="text-align:center">'+p.qte+'</td>';
+      html += '<td style="text-align:right;font-family:monospace">'+Math.round(p.prixUnitaire).toLocaleString('fr-FR')+'</td>';
+      html += '<td style="text-align:right;font-family:monospace;font-weight:700;color:#A32D2D">'+p.total.toLocaleString('fr-FR')+'</td>';
+      html += '</tr>';
+    });
+  }
   html += '</tbody></table></div></div>';
+  return html;
+}
+
+// Rafraichit UNIQUEMENT la zone de resultats (KPI + tableau), sans
+// toucher aux champs de saisie eux-memes — indispensable pour les barres
+// de recherche en texte libre (sinon le champ perdrait le focus a chaque
+// caractere tape, puisqu'un renderPage() complet le reconstruirait).
+function rafraichirRentaForfaitApResultats(){
+  var zone = document.getElementById('rentaForfaitApResultats');
+  if(zone) zone.innerHTML = htmlResultatsAnalysePiecesForfait();
+}
+function setRentaForfaitApRechercheByEl(el){ rentaForfaitAnalysePiecesRecherche = el.value; rafraichirRentaForfaitApResultats(); }
+function setRentaForfaitApClientByEl(el){ rentaForfaitAnalysePiecesClient = el.value; rentaForfaitAnalysePiecesMarque=''; rentaForfaitAnalysePiecesModele=''; renderPage(); }
+// Marque/modele utilisent des <select> (onchange, pas de frappe continue)
+// — un renderPage() complet reste sans risque ici, et permet de
+// recalculer la liste des modeles disponibles selon la marque choisie.
+function setRentaForfaitApMarqueByEl(el){ rentaForfaitAnalysePiecesMarque = el.value; rentaForfaitAnalysePiecesModele=''; renderPage(); }
+function setRentaForfaitApModeleByEl(el){ rentaForfaitAnalysePiecesModele = el.value; renderPage(); }
+function setRentaForfaitApSortByEl(el){
+  var col = el.getAttribute('data-apsort');
+  if(rentaForfaitAnalysePiecesSortCol===col){
+    rentaForfaitAnalysePiecesSortDir = rentaForfaitAnalysePiecesSortDir==='asc' ? 'desc' : 'asc';
+  } else {
+    rentaForfaitAnalysePiecesSortCol = col;
+    rentaForfaitAnalysePiecesSortDir = 'desc';
+  }
+  rafraichirRentaForfaitApResultats();
+}
+function reinitialiserRentaForfaitAnalysePieces(){
+  rentaForfaitAnalysePiecesRecherche=''; rentaForfaitAnalysePiecesClient='';
+  rentaForfaitAnalysePiecesMarque=''; rentaForfaitAnalysePiecesModele='';
+  renderPage();
+}
+
+function rentaForfaitAnalysePieces(borneDebut, borneFin){
+  // Conserve les bornes de periode pour qu'elles restent accessibles
+  // depuis les rafraichissements cibles (recherche, tri) qui ne repassent
+  // pas par un rendu complet de la page.
+  rentaForfaitApBorneDebut = borneDebut||0;
+  rentaForfaitApBorneFin = borneFin||null;
+
+  var toutesLignes = collecterLignesForfaitPourAnalyse();
+
+  // Listes uniques pour les selecteurs — marque se limite au client
+  // selectionne (s'il y en a un), et modele se limite en plus a la marque
+  // selectionnee (s'il y en a une) : cascade client -> marque -> modele.
+  var clientsUniques = {}, marquesUniques = {}, modelesUniques = {};
+  toutesLignes.forEach(function(l){
+    if(l.client) clientsUniques[l.client]=1;
+    if(l.marque && (!rentaForfaitAnalysePiecesClient || l.client===rentaForfaitAnalysePiecesClient)) marquesUniques[l.marque]=1;
+    if(l.modele && (!rentaForfaitAnalysePiecesClient || l.client===rentaForfaitAnalysePiecesClient) && (!rentaForfaitAnalysePiecesMarque || l.marque===rentaForfaitAnalysePiecesMarque)) modelesUniques[l.modele]=1;
+  });
+  var listeClients = Object.keys(clientsUniques).sort();
+  var listeMarques = Object.keys(marquesUniques).sort();
+  var listeModeles = Object.keys(modelesUniques).sort();
+
+  var html = '<div class="card" style="padding:14px 16px;margin-bottom:16px">';
+  html += '<div class="fr" style="margin-bottom:10px"><input class="inp" id="rentaForfaitApRecherche" placeholder="Recherche contextuelle (ex: plaquette, vidange...)..." value="'+rentaForfaitAnalysePiecesRecherche+'" oninput="setRentaForfaitApRechercheByEl(this)" autocomplete="off"></div>';
+  html += '<div class="flex gap6" style="flex-wrap:wrap;align-items:center">';
+  html += '<select class="inp" id="rentaForfaitApClient" onchange="setRentaForfaitApClientByEl(this)" style="width:200px">';
+  html += '<option value="">Tous les clients</option>';
+  listeClients.forEach(function(c){ html += '<option value="'+c.replace(/"/g,'&quot;')+'"'+(rentaForfaitAnalysePiecesClient===c?' selected':'')+'>'+c+'</option>'; });
+  html += '</select>';
+  html += '<select class="inp" id="rentaForfaitApMarque" onchange="setRentaForfaitApMarqueByEl(this)" style="width:150px">';
+  html += '<option value="">Toutes les marques</option>';
+  listeMarques.forEach(function(m){ html += '<option value="'+m.replace(/"/g,'&quot;')+'"'+(rentaForfaitAnalysePiecesMarque===m?' selected':'')+'>'+m+'</option>'; });
+  html += '</select>';
+  html += '<select class="inp" id="rentaForfaitApModele" onchange="setRentaForfaitApModeleByEl(this)" style="width:150px">';
+  html += '<option value="">Tous les modeles</option>';
+  listeModeles.forEach(function(m){ html += '<option value="'+m.replace(/"/g,'&quot;')+'"'+(rentaForfaitAnalysePiecesModele===m?' selected':'')+'>'+m+'</option>'; });
+  html += '</select>';
+  if(rentaForfaitAnalysePiecesRecherche||rentaForfaitAnalysePiecesClient||rentaForfaitAnalysePiecesMarque||rentaForfaitAnalysePiecesModele){
+    html += '<button class="btn btn-sm" onclick="reinitialiserRentaForfaitAnalysePieces()">&#x2715; Reinitialiser</button>';
+  }
+  html += '</div></div>';
+
+  html += '<div id="rentaForfaitApResultats">'+htmlResultatsAnalysePiecesForfait()+'</div>';
+
   return html;
 }
 
@@ -7051,7 +7559,7 @@ function rentaForfaitClients(dossiers){
     html += '<tr style="'+(c.marge<0?'background:#FFF5F5':tc>=80&&tc<100?'background:#FFFBF0':'')+'">';
     html += '<td class="fw7">'+c.client+'<div class="xs muted">'+c.tel+'</div></td>';
     html += '<td class="xs">'+c.entite+'</td>';
-    html += '<td style="text-align:center">'+c.nb+'<div class="xs muted">'+c.vehicules.join(', ')+'</div></td>';
+    html += '<td style="text-align:center">'+c.nb+'</td>';
     html += '<td style="font-family:monospace;color:#185FA5">'+c.forfaitPeriode.toLocaleString('fr-FR')+'</td>';
     html += '<td style="font-family:monospace;color:#A32D2D">'+c.depPeriode.toLocaleString('fr-FR')+'</td>';
     html += '<td style="font-family:monospace;font-weight:700;color:'+mc+'">'+(c.marge>0?'+':'')+c.marge.toLocaleString('fr-FR')+'</td>';
