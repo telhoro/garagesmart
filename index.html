@@ -13946,13 +13946,57 @@ function regrouperEngagementsParBanque(){
   var maintenant = Date.now();
   ENGAGEMENTS_BANCAIRES.filter(function(e){return e.actif;}).forEach(function(e){
     var banque = e.organisme || 'Non precise';
-    if(!buckets[banque]) buckets[banque] = {banque:banque, nb:0, totalMontant:0, totalRestantDu:0, totalRetard:0};
-    buckets[banque].nb++;
-    buckets[banque].totalMontant += parseFloat(e.montant)||0;
-    buckets[banque].totalRestantDu += montantRestantDu(e);
-    buckets[banque].totalRetard += montantEnRetard(e, maintenant);
+    if(!buckets[banque]) buckets[banque] = {
+      banque:banque, nb:0, totalEcheancesUnique:0, totalEcheancesMensuelle:0,
+      totalRestantCCT:0, totalRetard:0, engagements:[]
+    };
+    var b = buckets[banque];
+    b.nb++;
+    // Echeances unique : somme des engagements a echeance UNIQUE (ponctuelle)
+    if(e.periodicite==='unique') b.totalEcheancesUnique += parseFloat(e.montant)||0;
+    // Echeances mensuelle : somme des engagements factures MENSUELLEMENT
+    else if(e.periodicite==='mensuel') b.totalEcheancesMensuelle += parseFloat(e.montant)||0;
+    // Restant CCT (credit court terme) : total restant du, TOUTES
+    // periodicites confondues (unique, mensuel, trimestriel, annuel)
+    b.totalRestantCCT += montantRestantDu(e);
+    b.totalRetard += montantEnRetard(e, maintenant);
+    b.engagements.push(e);
   });
-  return Object.keys(buckets).map(function(k){return buckets[k];}).sort(function(a,b){return b.totalRestantDu-a.totalRestantDu;});
+  return Object.keys(buckets).map(function(k){return buckets[k];}).sort(function(a,b){return b.totalRestantCCT-a.totalRestantCCT;});
+}
+
+// Rend UNE ligne d'engagement (reutilisee a la fois par le tableau
+// detaille complet et par le detail depliable par banque).
+function htmlLigneEngagement(e, maintenant){
+  var periodLabel = e.periodicite==='trimestriel'?'Trimestriel':e.periodicite==='annuel'?'Annuel':e.periodicite==='unique'?'Echeance unique':'Mensuel';
+  var impayeesTriees = e.actif ? echeancesImpayees(e).sort(function(a,b){return a-b;}) : [];
+  var prochaineImpayee = impayeesTriees.length ? impayeesTriees[0] : null;
+  var estEnRetard = prochaineImpayee!==null && prochaineImpayee<maintenant;
+  var prochaineAffichee = prochaineImpayee!==null ? prochaineImpayee : (e.actif ? prochainEcheanceEngagement(e) : null);
+  var estTermine = e.actif && e.periodicite!=='unique' && e.dateFin && !prochaineImpayee && genererEcheancesEngagement(e).length>0;
+  var detailLabel = e.periodicite==='unique' ? '' : ' <span class="xs muted">le '+(e.jourEcheance||1)+' de chaque mois</span>';
+  var periodeTxt = (e.dateDebut||e.dateFin)
+    ? (e.dateDebut?new Date(e.dateDebut).toLocaleDateString('fr-FR'):'—')+' &rarr; '+(e.dateFin?new Date(e.dateFin).toLocaleDateString('fr-FR'):'—')
+    : '<span class="xs muted">Indefinie</span>';
+  var html = '<tr style="'+(e.actif?'':'opacity:0.5;background:#fafafa')+'">';
+  html += '<td><strong>'+e.nom+'</strong>'+(e.descriptif?'<div class="xs muted" style="margin-top:2px;max-width:220px;white-space:normal">'+e.descriptif+'</div>':'')+'</td>';
+  html += '<td class="xs muted">'+(e.organisme||'—')+'</td>';
+  html += '<td style="font-family:monospace">'+(parseFloat(e.montant)||0).toLocaleString('fr-FR')+' FCFA</td>';
+  html += '<td><span class="badge b-purple">'+periodLabel+'</span>'+detailLabel+'</td>';
+  html += '<td class="xs">'+periodeTxt+'</td>';
+  html += '<td class="xs">'+(estTermine?'<span class="badge b-gray">Termine</span>':(prochaineAffichee?'<span'+(estEnRetard?' style="color:#A32D2D;font-weight:700"':'')+'>'+new Date(prochaineAffichee).toLocaleDateString('fr-FR')+(estEnRetard?' &#x26A0;':'')+'</span>':'—'))+'</td>';
+  html += '<td><span class="badge '+(e.actif?'b-green':'b-gray')+'">'+(e.actif?'Actif':'Inactif')+'</span></td>';
+  html += '<td><div class="flex gap6">';
+  if(e.actif && prochaineImpayee!==null){
+    html += '<button class="btn btn-success btn-sm" data-egid="'+e.id+'" onclick="event.stopPropagation();marquerEcheancePayeeByEl(this)" title="Marquer la prochaine echeance payee">&#x2714; Payee</button>';
+  }
+  html += '<button class="btn btn-sm" data-egid="'+e.id+'" onclick="event.stopPropagation();openEngagementFormById(this)">&#x270F;</button>';
+  html += '<button class="btn btn-sm" data-egid2="'+e.id+'" onclick="event.stopPropagation();toggleEngagementById(this)">'+(e.actif?'Desactiver':'Activer')+'</button>';
+  if(currentRole==='direction'){
+    html += '<button class="btn btn-sm" data-egid="'+e.id+'" onclick="event.stopPropagation();supprimerEngagementById(this)" style="color:#A32D2D;border-color:#E0A0A0">&#x2715;</button>';
+  }
+  html += '</div></td></tr>';
+  return html;
 }
 
 function pageEngagementsBancaires(){
@@ -14069,15 +14113,26 @@ function pageEngagementsBancaires(){
   var parBanque = regrouperEngagementsParBanque();
   if(parBanque.length){
     html += '<div class="card" style="margin-bottom:16px"><div class="card-head">Niveau d\'engagement par banque</div>';
-    html += '<div class="tw"><table><thead><tr><th>Banque / organisme</th><th style="text-align:center">Nb engagements</th><th style="text-align:right">Total periodique</th><th style="text-align:right">Restant du</th><th style="text-align:right">En retard</th></tr></thead><tbody>';
+    html += '<div class="tw"><table><thead><tr><th>Banque / organisme</th><th style="text-align:center">Nb engagements</th><th style="text-align:right">Echeances unique</th><th style="text-align:right">Echeances mensuelle</th><th style="text-align:right">Restant CCT</th><th style="text-align:right">En retard</th></tr></thead><tbody>';
     parBanque.forEach(function(b){
-      html += '<tr>';
-      html += '<td><strong>'+b.banque+'</strong></td>';
+      var expandKey = 'engBanque::'+b.banque;
+      var expanded = !!creancesClientExpand[expandKey];
+      html += '<tr style="cursor:pointer" data-ccexp="'+encodeURIComponent(expandKey)+'" onclick="toggleCreancesClientExpandByEl(this)">';
+      html += '<td><strong>'+(expanded?'&#9662; ':'&#9656; ')+b.banque+'</strong></td>';
       html += '<td style="text-align:center">'+b.nb+'</td>';
-      html += '<td style="text-align:right;font-family:monospace">'+b.totalMontant.toLocaleString('fr-FR')+' FCFA</td>';
-      html += '<td style="text-align:right;font-family:monospace;font-weight:700;color:'+(b.totalRestantDu>0?'#A32D2D':'#999')+'">'+(b.totalRestantDu?b.totalRestantDu.toLocaleString('fr-FR')+' FCFA':'—')+'</td>';
+      html += '<td style="text-align:right;font-family:monospace">'+(b.totalEcheancesUnique?b.totalEcheancesUnique.toLocaleString('fr-FR')+' FCFA':'—')+'</td>';
+      html += '<td style="text-align:right;font-family:monospace">'+(b.totalEcheancesMensuelle?b.totalEcheancesMensuelle.toLocaleString('fr-FR')+' FCFA':'—')+'</td>';
+      html += '<td style="text-align:right;font-family:monospace;font-weight:700;color:'+(b.totalRestantCCT>0?'#A32D2D':'#999')+'">'+(b.totalRestantCCT?b.totalRestantCCT.toLocaleString('fr-FR')+' FCFA':'—')+'</td>';
       html += '<td style="text-align:right;font-family:monospace;'+(b.totalRetard>0?'font-weight:700;color:#A32D2D':'color:#999')+'">'+(b.totalRetard?b.totalRetard.toLocaleString('fr-FR')+' FCFA':'—')+'</td>';
       html += '</tr>';
+      if(expanded){
+        html += '<tr><td colspan="6" style="padding:0;background:#faf9f7"><div style="padding:8px 16px 12px 16px">';
+        html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:#888">';
+        html += '<th style="text-align:left;padding:4px 8px;font-size:11px">Engagement</th><th style="text-align:left;padding:4px 8px;font-size:11px">Banque</th><th style="text-align:left;padding:4px 8px;font-size:11px">Montant</th><th style="text-align:left;padding:4px 8px;font-size:11px">Periodicite</th><th style="text-align:left;padding:4px 8px;font-size:11px">Periode</th><th style="text-align:left;padding:4px 8px;font-size:11px">Prochaine echeance</th><th style="text-align:left;padding:4px 8px;font-size:11px">Statut</th><th></th>';
+        html += '</tr></thead><tbody>';
+        b.engagements.forEach(function(e){ html += htmlLigneEngagement(e, maintenant); });
+        html += '</tbody></table></div></td></tr>';
+      }
     });
     html += '</tbody></table></div></div>';
   }
@@ -14091,37 +14146,7 @@ function pageEngagementsBancaires(){
   }
 
   ENGAGEMENTS_BANCAIRES.forEach(function(e){
-    var periodLabel = e.periodicite==='trimestriel'?'Trimestriel':e.periodicite==='annuel'?'Annuel':e.periodicite==='unique'?'Echeance unique':'Mensuel';
-    var impayeesTriees = e.actif ? echeancesImpayees(e).sort(function(a,b){return a-b;}) : [];
-    var prochaineImpayee = impayeesTriees.length ? impayeesTriees[0] : null;
-    var estEnRetard = prochaineImpayee!==null && prochaineImpayee<maintenant;
-    // Pour un engagement SANS date de fin (indefini), on ne genere les
-    // echeances impayees que jusqu'a maintenant — s'il n'y en a aucune,
-    // on retombe sur le calcul purement calendaire pour la prochaine date.
-    var prochaineAffichee = prochaineImpayee!==null ? prochaineImpayee : (e.actif ? prochainEcheanceEngagement(e) : null);
-    var estTermine = e.actif && e.periodicite!=='unique' && e.dateFin && !prochaineImpayee && genererEcheancesEngagement(e).length>0;
-    var detailLabel = e.periodicite==='unique' ? '' : ' <span class="xs muted">le '+(e.jourEcheance||1)+' de chaque mois</span>';
-    var periodeTxt = (e.dateDebut||e.dateFin)
-      ? (e.dateDebut?new Date(e.dateDebut).toLocaleDateString('fr-FR'):'—')+' &rarr; '+(e.dateFin?new Date(e.dateFin).toLocaleDateString('fr-FR'):'—')
-      : '<span class="xs muted">Indefinie</span>';
-    html += '<tr style="'+(e.actif?'':'opacity:0.5;background:#fafafa')+'">';
-    html += '<td><strong>'+e.nom+'</strong>'+(e.descriptif?'<div class="xs muted" style="margin-top:2px;max-width:220px;white-space:normal">'+e.descriptif+'</div>':'')+'</td>';
-    html += '<td class="xs muted">'+(e.organisme||'—')+'</td>';
-    html += '<td style="font-family:monospace">'+(parseFloat(e.montant)||0).toLocaleString('fr-FR')+' FCFA</td>';
-    html += '<td><span class="badge b-purple">'+periodLabel+'</span>'+detailLabel+'</td>';
-    html += '<td class="xs">'+periodeTxt+'</td>';
-    html += '<td class="xs">'+(estTermine?'<span class="badge b-gray">Termine</span>':(prochaineAffichee?'<span'+(estEnRetard?' style="color:#A32D2D;font-weight:700"':'')+'>'+new Date(prochaineAffichee).toLocaleDateString('fr-FR')+(estEnRetard?' &#x26A0;':'')+'</span>':'—'))+'</td>';
-    html += '<td><span class="badge '+(e.actif?'b-green':'b-gray')+'">'+(e.actif?'Actif':'Inactif')+'</span></td>';
-    html += '<td><div class="flex gap6">';
-    if(e.actif && prochaineImpayee!==null){
-      html += '<button class="btn btn-success btn-sm" data-egid="'+e.id+'" onclick="marquerEcheancePayeeByEl(this)" title="Marquer la prochaine echeance payee">&#x2714; Payee</button>';
-    }
-    html += '<button class="btn btn-sm" data-egid="'+e.id+'" onclick="openEngagementFormById(this)">&#x270F;</button>';
-    html += '<button class="btn btn-sm" data-egid2="'+e.id+'" onclick="toggleEngagementById(this)">'+(e.actif?'Desactiver':'Activer')+'</button>';
-    if(currentRole==='direction'){
-      html += '<button class="btn btn-sm" data-egid="'+e.id+'" onclick="supprimerEngagementById(this)" style="color:#A32D2D;border-color:#E0A0A0">&#x2715;</button>';
-    }
-    html += '</div></td></tr>';
+    html += htmlLigneEngagement(e, maintenant);
   });
   html += '</tbody></table></div></div>';
   return html;
