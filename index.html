@@ -13451,7 +13451,15 @@ function htmlTableauHistPaieClients(groupes){
       html += '<th style="text-align:left;padding:4px 8px;font-size:11px">Date reglement</th><th style="text-align:left;padding:4px 8px;font-size:11px">Reference facture</th><th style="text-align:center;padding:4px 8px;font-size:11px">Delai</th><th style="text-align:left;padding:4px 8px;font-size:11px">Mode / Note</th><th style="text-align:right;padding:4px 8px;font-size:11px">Montant</th><th></th>';
       html += '</tr></thead><tbody>';
       g.paiements.sort(function(a,b){return b.datePaiement-a.datePaiement;}).forEach(function(p){
-        var refFacture = [p.numFacture, p.numSecondaire].filter(Boolean).join(' / ') || (p.immat||p.periodeKey||'—');
+        var refFacture = [p.numFacture, p.numSecondaire].filter(Boolean).join(' / ') || (p.immat||'—');
+        // Pour un forfait, le mois concerne DOIT toujours apparaitre —
+        // meme quand un numero de facture externe existe deja (avant
+        // cette correction, le mois n'etait montre qu'en dernier recours,
+        // donc invisible des qu'un numero de facture etait present).
+        if(p.type==='forfait' && p.periodeKey){
+          var moisLabelForfait = formaterLabelPeriode(p.periodeKey,'mois');
+          refFacture = (refFacture==='—') ? ('Forfait '+moisLabelForfait) : (refFacture+' — Forfait '+moisLabelForfait);
+        }
         var delaiTxt = p.delai===null ? '—' : (p.delai+' j');
         var delaiColor = p.delai===null ? '#888' : (p.delai>0 ? '#A32D2D' : '#3B6D11');
         html += '<tr style="border-top:1px solid rgba(0,0,0,0.06)">';
