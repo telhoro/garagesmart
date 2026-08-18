@@ -13916,15 +13916,6 @@ function montantEnRetard(e, maintenant){
 function montantRestantDu(e){
   return echeancesImpayees(e).reduce(function(s,d){return s+resteDuEcheance(e,d);},0);
 }
-// Restant "CCT" (credit court terme) : UNIQUEMENT les echeances FUTURES
-// (pas encore en retard) — evite le double comptage avec la colonne "En
-// retard" deja affichee separement. Ex : echeance mensuelle 1 600 000,
-// 6 mois restants avant la fin du credit -> 6 x 1 600 000, meme s'il y a
-// par ailleurs un arriere en retard (compte a part, pas ici).
-function montantRestantFutur(e, maintenant){
-  return echeancesImpayees(e).filter(function(d){return d>=maintenant;})
-    .reduce(function(s,d){return s+resteDuEcheance(e,d);},0);
-}
 // Enregistre un versement (partiel ou total) sur une echeance precise.
 function enregistrerPaiementEcheance(e, dateEcheance, montantVerse){
   if(!e.echeancesPayees) e.echeancesPayees = [];
@@ -13967,7 +13958,15 @@ function regrouperEngagementsParBanque(){
     else if(e.periodicite==='mensuel') b.totalEcheancesMensuelle += parseFloat(e.montant)||0;
     // Restant CCT (credit court terme) : total restant du, TOUTES
     // periodicites confondues (unique, mensuel, trimestriel, annuel)
-    b.totalRestantCCT += montantRestantFutur(e, maintenant);
+    // Restant CCT (credit court terme) : UNIQUEMENT les engagements
+    // RECURRENTS (mensuel/trimestriel/annuel) — les echeances UNIQUES
+    // (avals, garanties ponctuelles...) ne sont pas des credits amortis
+    // et n'ont pas leur place dans ce total. Pour les engagements
+    // recurrents retenus, on reprend le retard ET le futur (montantRestantDu)
+    // — le solde restant du sur le credit, quelle que soit l'echeance.
+    if(e.periodicite!=='unique'){
+      b.totalRestantCCT += montantRestantDu(e);
+    }
     b.totalRetard += montantEnRetard(e, maintenant);
     b.engagements.push(e);
   });
