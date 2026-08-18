@@ -1945,7 +1945,7 @@ function initFournisseurs(){
 var NAV = {
   direction:[
     {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'},{id:'acces_clients',e:'AC',l:'Acces clients'},{id:'messages_clients',e:'MC',l:'Messages clients'},{id:'import_historique',e:'IH',l:'Import historique'},{id:'presences',e:'Pr',l:'Presences'}]},
-    {l:'Finances',items:[{id:'finances_dashboard',e:'FD',l:'Tableau de bord'},{id:'facturation',e:'F',l:'Facturation'},{id:'caisse',e:'Ca',l:'Caisse'},{id:'dettes_fournisseurs',e:'DF',l:'Dettes fournisseurs'},{id:'prevision_treso',e:'PT',l:'Prevision tresorerie'},{id:'historique_paiements',e:'HP',l:'Historique paiements'}]},
+    {l:'Finances',items:[{id:'finances_dashboard',e:'FD',l:'Tableau de bord'},{id:'facturation',e:'F',l:'Facturation'},{id:'caisse',e:'Ca',l:'Caisse'},{id:'dettes_fournisseurs',e:'DF',l:'Dettes fournisseurs'},{id:'prevision_treso',e:'PT',l:'Prevision tresorerie'},{id:'historique_paiements',e:'HP',l:'Historique paiements'},{id:'rapport_financier',e:'RF',l:'Rapport financier'}]},
     {l:'Rentabilite',items:[{id:'rentabilite',e:'RD',l:'Clients Devis'},{id:'rentabilite_forfait',e:'RF',l:'Clients Forfait'},{id:'analyse_pieces',e:'AP',l:'Analyse pieces'}]},
     {l:'Gestion',items:[{id:'archives',e:'Ar',l:'Archives'},{id:'banques',e:'B',l:'Banques'},{id:'charges_fixes',e:'CF',l:'Charges fixes'},{id:'engagements_bancaires',e:'EB',l:'Engagements bancaires'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'stock',e:'St',l:'Gestion du stock'},{id:'travaux_prevoir',e:'TP',l:'Travaux a prevoir'},{id:'devis_differes',e:'DD',l:'Devis differes'},{id:'sinistres',e:'S',l:'Sinistres'},{id:'val_fin',e:'VF',l:'Validation financiere'},{id:'kpi',e:'K',l:'KPI'}]}
   ],
@@ -5226,6 +5226,7 @@ function renderPage(){
   else if(p==='dettes_fournisseurs') html=pageDettesFournisseurs();
   else if(p==='prevision_treso') html=pagePrevisionTresorerie();
   else if(p==='historique_paiements') html=pageHistoriquePaiements();
+  else if(p==='rapport_financier') html=pageRapportFinancier();
   else if(p==='facturation_forfait') html=pageFacturationForfait();
   else if(p==='chiffrage') html=pageChiffrageAchats();
   else if(p==='testeur') html=pageDashTesteur();
@@ -6288,6 +6289,207 @@ function calculerMetriquesFinancieres(borneDebut, borneFin){
   };
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// RAPPORT FINANCIER — export PDF et Excel, avec selection des sections
+// (Finance/Rentabilite/Gestion) et du niveau de detail (KPI/Detail/Les
+// deux) pour chacune. Reutilise systematiquement les fonctions de
+// collecte deja existantes, pour ne jamais dupliquer un calcul.
+// ══════════════════════════════════════════════════════════════════════
+var RAPPORT_SECTIONS = [
+  {id:'dashboard', label:'Tableau de bord', groupe:'Finance'},
+  {id:'facturation', label:'Facturation', groupe:'Finance'},
+  {id:'caisse', label:'Caisse', groupe:'Finance'},
+  {id:'dettes_fournisseurs', label:'Dette fournisseur', groupe:'Finance'},
+  {id:'prevision_treso', label:'Prevision tresorerie', groupe:'Finance'},
+  {id:'historique_paiements', label:'Historique paiement', groupe:'Finance'},
+  {id:'renta_devis', label:'Client devis', groupe:'Rentabilite'},
+  {id:'renta_forfait', label:'Client forfait', groupe:'Rentabilite'},
+  {id:'banques', label:'Banque', groupe:'Gestion'},
+  {id:'charges_fixes', label:'Charges fixes', groupe:'Gestion'},
+  {id:'engagements', label:'Engagements bancaires', groupe:'Gestion'},
+  {id:'stock', label:'Gestion du stock', groupe:'Gestion'}
+];
+var rapportSelection = {}; // {sectionId: true/false}
+var rapportNiveau = {};    // {sectionId: 'kpi'|'detail'|'les_deux'}
+
+function fmtFCFA(v){ return Math.round(v||0).toLocaleString('fr-FR')+' FCFA'; }
+function fmtPct(v){ return v===null||v===undefined ? '—' : v.toFixed(1)+'%'; }
+
+// Retourne les KPI d'une section : [{label, value}]
+function rapportKPIs(sectionId){
+  if(sectionId==='dashboard'){
+    var b = bornesDePeriode(periodeKeyDuMoment('mois'),'mois');
+    var m = calculerMetriquesFinancieres(b.deb, b.fin);
+    return [
+      {label:'CA de la periode', value:fmtFCFA(m.ca)}, {label:'Depenses', value:fmtFCFA(m.depenses)},
+      {label:'Marge brute', value:fmtFCFA(m.margeBrute)}, {label:'Taux de marge', value:fmtPct(m.tauxMarge)},
+      {label:'Resultat operationnel', value:fmtFCFA(m.resultatOperationnel)}, {label:'Marge operationnelle', value:fmtPct(m.margeOperationnelle)},
+      {label:'Encaissements realises', value:fmtFCFA(m.encaissementsRealises)}, {label:'Taux encaissement', value:fmtPct(m.tauxEncaissement)},
+      {label:'Montant CA non encaisse', value:fmtFCFA(m.montantNonEncaisse)}, {label:'Echeances de la periode', value:fmtFCFA(m.echeances)}
+    ];
+  }
+  if(sectionId==='facturation'){
+    var collecte = collecterExpositionFinanciere();
+    var totalExpo = 0; Object.keys(collecte.buckets).forEach(function(k){ totalExpo += collecte.buckets[k].totalExpose; });
+    return [{label:'Exposition financiere totale', value:fmtFCFA(totalExpo)}, {label:'Nombre de clients exposes', value:Object.keys(collecte.buckets).length}];
+  }
+  if(sectionId==='caisse'){
+    var solde = CAISSE_MOUVEMENTS.reduce(function(s,mv){return s+(mv.type==='entree'?(parseFloat(mv.montant)||0):-(parseFloat(mv.montant)||0));},0);
+    var entrees = CAISSE_MOUVEMENTS.filter(function(mv){return mv.type==='entree';}).reduce(function(s,mv){return s+(parseFloat(mv.montant)||0);},0);
+    var sorties = CAISSE_MOUVEMENTS.filter(function(mv){return mv.type==='sortie';}).reduce(function(s,mv){return s+(parseFloat(mv.montant)||0);},0);
+    return [{label:'Solde caisse cumule', value:fmtFCFA(solde)}, {label:'Total entrees', value:fmtFCFA(entrees)}, {label:'Total sorties', value:fmtFCFA(sorties)}];
+  }
+  if(sectionId==='dettes_fournisseurs'){
+    var dettes = collecterDettesFournisseurs();
+    var total = dettes.reduce(function(s,g){return s+g.total;},0);
+    return [{label:'Nombre de fournisseurs dus', value:dettes.length}, {label:'Total du', value:fmtFCFA(total)}];
+  }
+  if(sectionId==='prevision_treso'){
+    var soldeActuel = BANQUES.filter(function(b){return b.actif;}).reduce(function(s,b){return s+(parseFloat(b.solde)||0);},0);
+    return [{label:'Solde de tresorerie actuel', value:fmtFCFA(soldeActuel)}];
+  }
+  if(sectionId==='historique_paiements'){
+    var hist = collecterHistoriquePaiementsClients();
+    var total = hist.reduce(function(s,h){return s+h.montant;},0);
+    return [{label:'Nombre de paiements', value:hist.length}, {label:'Total encaisse', value:fmtFCFA(total)}];
+  }
+  if(sectionId==='renta_devis' || sectionId==='renta_forfait'){
+    var estForfait = sectionId==='renta_forfait';
+    var dossiers = vehicles.filter(function(v){
+      if(!v.chiffrage || !v.chiffrage.lignes) return false;
+      return estForfait ? v.typeClient==='forfait' : v.typeClient!=='forfait';
+    }).map(function(v){
+      var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
+      return {
+        client:v.client,
+        totalVente: lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0),
+        totalAchat: lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0)
+      };
+    });
+    var totalVente = dossiers.reduce(function(s,d){return s+d.totalVente;},0);
+    var totalAchat = dossiers.reduce(function(s,d){return s+d.totalAchat;},0);
+    var marge = totalVente-totalAchat;
+    return [
+      {label:'Nombre de dossiers', value:dossiers.length}, {label:'CA total', value:fmtFCFA(totalVente)},
+      {label:'Marge brute', value:fmtFCFA(marge)}, {label:'Taux de marge', value:fmtPct(totalVente>0?(marge/totalVente*100):null)}
+    ];
+  }
+  if(sectionId==='banques'){
+    var actives = BANQUES.filter(function(b){return b.actif;});
+    var totalSolde = actives.reduce(function(s,b){return s+(parseFloat(b.solde)||0);},0);
+    return [{label:'Nombre de banques actives', value:actives.length}, {label:'Solde total', value:fmtFCFA(totalSolde)}];
+  }
+  if(sectionId==='charges_fixes'){
+    var actives = CHARGES_FIXES.filter(function(c){return c.actif;});
+    var totalMensuel = actives.reduce(function(s,c){
+      var mt = parseFloat(c.montant)||0;
+      if(c.periodicite==='trimestriel') return s+mt/3;
+      if(c.periodicite==='annuel') return s+mt/12;
+      return s+mt;
+    },0);
+    return [{label:'Nombre de charges actives', value:actives.length}, {label:'Equivalent mensuel total', value:fmtFCFA(totalMensuel)}];
+  }
+  if(sectionId==='engagements'){
+    var actifs = ENGAGEMENTS_BANCAIRES.filter(function(e){return e.actif!==false;});
+    var totalDu = actifs.reduce(function(s,e){return s+montantRestantDu(e);},0);
+    return [{label:'Nombre d\'engagements actifs', value:actifs.length}, {label:'Total restant du', value:fmtFCFA(totalDu)}];
+  }
+  if(sectionId==='stock'){
+    var valeurStock = STOCK.reduce(function(s,a){return s+(parseFloat(a.prixAchat)||0)*(parseFloat(a.qte)||0);},0);
+    return [{label:'Nombre d\'articles', value:STOCK.length}, {label:'Valeur totale du stock', value:fmtFCFA(valeurStock)}];
+  }
+  return [];
+}
+
+// Retourne le detail d'une section : {headers:[...], rows:[[...],...]}
+function rapportDetail(sectionId){
+  if(sectionId==='dashboard'){
+    return {headers:['Indicateur','Valeur'], rows: rapportKPIs('dashboard').map(function(k){return [k.label, k.value];})};
+  }
+  if(sectionId==='facturation'){
+    var collecte = collecterExpositionFinanciere();
+    var rows = Object.keys(collecte.buckets).map(function(k){
+      var b = collecte.buckets[k];
+      return [k, fmtFCFA(b.totalExpose)];
+    });
+    return {headers:['Client','Exposition'], rows:rows};
+  }
+  if(sectionId==='caisse'){
+    var rows = CAISSE_MOUVEMENTS.slice().sort(function(a,b){return b.date-a.date;}).slice(0,200).map(function(mv){
+      return [new Date(mv.date).toLocaleDateString('fr-FR'), mv.type==='entree'?'Entree':'Sortie', mv.motif||mv.categorie||'—', fmtFCFA(mv.montant)];
+    });
+    return {headers:['Date','Type','Motif','Montant'], rows:rows};
+  }
+  if(sectionId==='dettes_fournisseurs'){
+    var dettes = collecterDettesFournisseurs();
+    var rows = dettes.map(function(g){return [g.fournisseur.nom, g.lignes.length, fmtFCFA(g.total)];});
+    return {headers:['Fournisseur','Nb pieces dues','Total du'], rows:rows};
+  }
+  if(sectionId==='prevision_treso'){
+    var periodes = construirePeriodesPrevision();
+    var encaissements = collecterEncaissementsAttendus().concat(collecterForfaitsPrevisionnels());
+    var decaissements = collecterDecaissementsAttendus();
+    var soldeActuel = BANQUES.filter(function(b){return b.actif;}).reduce(function(s,b){return s+(parseFloat(b.solde)||0);},0);
+    function assignerPeriodeRapport(item){
+      if(item.enRetard || item.dateEcheance<=periodes[0].fin) return 0;
+      for(var i=1;i<periodes.length;i++){ if(item.dateEcheance<=periodes[i].fin) return i; }
+      return -1;
+    }
+    periodes.forEach(function(p){ p.encaisse=0; p.decaisse=0; });
+    encaissements.forEach(function(e){ var idx=assignerPeriodeRapport(e); if(idx>=0){ periodes[idx].encaisse+=e.montant; } });
+    decaissements.forEach(function(d){ var idx=assignerPeriodeRapport(d); if(idx>=0){ periodes[idx].decaisse+=d.montant; } });
+    var solde = soldeActuel;
+    var rows = periodes.map(function(p){
+      solde += p.encaisse-p.decaisse;
+      return [p.label, fmtFCFA(p.encaisse), fmtFCFA(p.decaisse), fmtFCFA(solde)];
+    });
+    return {headers:['Periode','Encaissements','Decaissements','Solde projete'], rows:rows};
+  }
+  if(sectionId==='historique_paiements'){
+    var hist = collecterHistoriquePaiementsClients();
+    var groupes = regrouperHistoriqueParClient(hist);
+    var rows = groupes.map(function(g){return [g.client, g.paiements.length, g.delaiMoyen!==null?Math.round(g.delaiMoyen)+' j':'—', fmtFCFA(g.total)];});
+    return {headers:['Client','Nb paiements','Delai moyen','Total encaisse'], rows:rows};
+  }
+  if(sectionId==='renta_devis' || sectionId==='renta_forfait'){
+    var estForfait = sectionId==='renta_forfait';
+    var parClient = {};
+    vehicles.forEach(function(v){
+      if(!v.chiffrage || !v.chiffrage.lignes) return;
+      if(estForfait ? v.typeClient!=='forfait' : v.typeClient==='forfait') return;
+      var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
+      var vente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+      var achat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
+      if(!parClient[v.client]) parClient[v.client] = {client:v.client, nb:0, vente:0, achat:0};
+      parClient[v.client].nb++; parClient[v.client].vente+=vente; parClient[v.client].achat+=achat;
+    });
+    var rows = Object.keys(parClient).map(function(k){
+      var c = parClient[k]; var marge = c.vente-c.achat;
+      return [c.client, c.nb, fmtFCFA(c.vente), fmtFCFA(marge), fmtPct(c.vente>0?(marge/c.vente*100):null)];
+    }).sort(function(a,b){return b[0]<a[0]?1:-1;});
+    return {headers:['Client','Nb dossiers','CA','Marge','Taux marge'], rows:rows};
+  }
+  if(sectionId==='banques'){
+    var rows = BANQUES.filter(function(b){return b.actif;}).map(function(b){return [b.nom, fmtFCFA(b.solde)];});
+    return {headers:['Banque','Solde'], rows:rows};
+  }
+  if(sectionId==='charges_fixes'){
+    var rows = CHARGES_FIXES.filter(function(c){return c.actif;}).map(function(c){return [c.nom, c.periodicite, fmtFCFA(c.montant)];});
+    return {headers:['Charge','Periodicite','Montant'], rows:rows};
+  }
+  if(sectionId==='engagements'){
+    var rows = ENGAGEMENTS_BANCAIRES.filter(function(e){return e.actif!==false;}).map(function(e){
+      return [e.nom, e.organisme||'—', fmtFCFA(montantRestantDu(e))];
+    });
+    return {headers:['Engagement','Organisme','Reste du'], rows:rows};
+  }
+  if(sectionId==='stock'){
+    var rows = STOCK.map(function(a){return [a.nom, a.marque||'—', a.qte, fmtFCFA((parseFloat(a.prixAchat)||0)*(parseFloat(a.qte)||0))];});
+    return {headers:['Article','Marque','Qte','Valeur'], rows:rows};
+  }
+  return {headers:[], rows:[]};
+}
+
 // CA total (devis+forfait combines) par mois — pour le graphique de
 // tendance globale sur 12 mois.
 function collecterCATotalParMois(){
@@ -6311,6 +6513,158 @@ function collecterCATotalParMois(){
     data[moisKey] = (data[moisKey]||0) + (f.montant||0);
   });
   return data;
+}
+
+function toggleRapportSectionByEl(el){
+  var id = el.getAttribute('data-rs');
+  rapportSelection[id] = el.checked;
+  if(el.checked && !rapportNiveau[id]) rapportNiveau[id] = 'les_deux';
+  renderPage();
+}
+function setRapportNiveauByEl(el){
+  var id = el.getAttribute('data-rn');
+  rapportNiveau[id] = el.value;
+}
+function toggleRapportGroupeByEl(el){
+  var groupe = el.getAttribute('data-rg');
+  var coche = el.checked;
+  RAPPORT_SECTIONS.filter(function(s){return s.groupe===groupe;}).forEach(function(s){
+    rapportSelection[s.id] = coche;
+    if(coche && !rapportNiveau[s.id]) rapportNiveau[s.id] = 'les_deux';
+  });
+  renderPage();
+}
+
+function pageRapportFinancier(){
+  var html = '<div style="margin-bottom:16px"><h2 style="font-size:16px;font-weight:700;margin:0">Rapport financier</h2>';
+  html += '<div class="xs muted" style="margin-top:4px">Selectionnez les sections a inclure, et pour chacune le niveau de detail souhaite.</div></div>';
+
+  var groupes = ['Finance','Rentabilite','Gestion'];
+  groupes.forEach(function(groupe){
+    var sections = RAPPORT_SECTIONS.filter(function(s){return s.groupe===groupe;});
+    var toutesCochees = sections.every(function(s){return rapportSelection[s.id];});
+    html += '<div class="card" style="padding:14px 16px;margin-bottom:12px">';
+    html += '<label class="flex" style="align-items:center;gap:8px;cursor:pointer;margin-bottom:10px">';
+    html += '<input type="checkbox" data-rg="'+groupe+'" onchange="toggleRapportGroupeByEl(this)"'+(toutesCochees?' checked':'')+' style="width:16px;height:16px">';
+    html += '<span class="fw7">'+groupe+'</span></label>';
+    sections.forEach(function(s){
+      var coche = !!rapportSelection[s.id];
+      html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0 6px 24px;border-top:1px solid #f0ede8">';
+      html += '<label class="flex" style="align-items:center;gap:8px;cursor:pointer">';
+      html += '<input type="checkbox" data-rs="'+s.id+'" onchange="toggleRapportSectionByEl(this)"'+(coche?' checked':'')+' style="width:15px;height:15px">';
+      html += '<span class="xs">'+s.label+'</span></label>';
+      if(coche){
+        html += '<select class="inp" data-rn="'+s.id+'" onchange="setRapportNiveauByEl(this)" style="font-size:11px;width:auto;padding:3px 6px">';
+        ['kpi','detail','les_deux'].forEach(function(niv){
+          var lbl = {kpi:'KPI seulement', detail:'Detail seulement', les_deux:'KPI + Detail'}[niv];
+          html += '<option value="'+niv+'"'+(rapportNiveau[s.id]===niv?' selected':'')+'>'+lbl+'</option>';
+        });
+        html += '</select>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+
+  var nbSelectionnes = RAPPORT_SECTIONS.filter(function(s){return rapportSelection[s.id];}).length;
+  html += '<div class="card" style="padding:14px 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
+  html += '<span class="xs muted" style="margin-right:8px">'+nbSelectionnes+' section(s) selectionnee(s)</span>';
+  html += '<button class="btn btn-primary btn-sm" onclick="genererRapportPDF()" '+(nbSelectionnes?'':'disabled')+'>&#x1F4C4; Generer PDF</button>';
+  html += '<button class="btn btn-primary btn-sm" onclick="genererRapportExcel()" '+(nbSelectionnes?'':'disabled')+'>&#x1F4CA; Generer Excel</button>';
+  html += '</div>';
+  return html;
+}
+
+// Construit le contenu HTML imprimable (utilise a la fois pour l'apercu
+// et pour l'impression PDF native du navigateur — pas de dependance
+// externe necessaire).
+function construireHtmlRapport(){
+  var dateGen = new Date().toLocaleDateString('fr-FR', {day:'2-digit',month:'long',year:'numeric'});
+  var html = '<div style="font-family:Arial,sans-serif;padding:20px;max-width:900px;margin:0 auto">';
+  html += '<h1 style="font-size:22px;margin-bottom:2px">Rapport financier</h1>';
+  html += '<div style="color:#888;font-size:12px;margin-bottom:24px">Genere le '+dateGen+'</div>';
+
+  RAPPORT_SECTIONS.forEach(function(s){
+    if(!rapportSelection[s.id]) return;
+    var niveau = rapportNiveau[s.id]||'les_deux';
+    html += '<div style="margin-bottom:28px;page-break-inside:avoid">';
+    html += '<h2 style="font-size:16px;border-bottom:2px solid #185FA5;padding-bottom:4px;margin-bottom:12px">'+s.label+'</h2>';
+
+    if(niveau==='kpi' || niveau==='les_deux'){
+      var kpis = rapportKPIs(s.id);
+      if(kpis.length){
+        html += '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">';
+        kpis.forEach(function(k){
+          html += '<div style="background:#f5f4f1;border-radius:8px;padding:8px 14px;min-width:150px">';
+          html += '<div style="font-size:10px;color:#888;text-transform:uppercase">'+k.label+'</div>';
+          html += '<div style="font-size:15px;font-weight:700">'+k.value+'</div>';
+          html += '</div>';
+        });
+        html += '</div>';
+      }
+    }
+    if(niveau==='detail' || niveau==='les_deux'){
+      var det = rapportDetail(s.id);
+      if(det.rows.length){
+        html += '<table style="width:100%;border-collapse:collapse;font-size:11px">';
+        html += '<thead><tr>'+det.headers.map(function(h){return '<th style="text-align:left;padding:5px 8px;border-bottom:2px solid #ddd;color:#555">'+h+'</th>';}).join('')+'</tr></thead>';
+        html += '<tbody>';
+        det.rows.forEach(function(row){
+          html += '<tr>'+row.map(function(c){return '<td style="padding:4px 8px;border-bottom:1px solid #f0ede8">'+c+'</td>';}).join('')+'</tr>';
+        });
+        html += '</tbody></table>';
+      } else {
+        html += '<div style="font-size:11px;color:#888">Aucune donnee.</div>';
+      }
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+  return html;
+}
+
+// PDF : ouvre une fenetre imprimable avec le contenu du rapport, et
+// declenche l'impression native du navigateur (l'utilisateur choisit
+// "Enregistrer en PDF" comme destination) — aucune dependance externe.
+function genererRapportPDF(){
+  var contenu = construireHtmlRapport();
+  var fenetre = window.open('', '_blank');
+  if(!fenetre){ alert('Le navigateur a bloque l\'ouverture de la fenetre d\'impression. Autorisez les popups pour ce site.'); return; }
+  fenetre.document.write('<!DOCTYPE html><html><head><title>Rapport financier</title><meta charset="utf-8"></head><body>'+contenu+'</body></html>');
+  fenetre.document.close();
+  setTimeout(function(){ fenetre.print(); }, 300);
+}
+
+// Excel : un onglet par section selectionnee, avec ses KPI puis son
+// detail selon le niveau choisi — reutilise xlsx.js deja charge dans l'app.
+function genererRapportExcel(){
+  if(typeof XLSX==='undefined'){ alert('La bibliotheque Excel n\'est pas chargee.'); return; }
+  var wb = XLSX.utils.book_new();
+  var auMoinsUne = false;
+  RAPPORT_SECTIONS.forEach(function(s){
+    if(!rapportSelection[s.id]) return;
+    var niveau = rapportNiveau[s.id]||'les_deux';
+    var aoa = [];
+    if(niveau==='kpi' || niveau==='les_deux'){
+      aoa.push(['Indicateur','Valeur']);
+      rapportKPIs(s.id).forEach(function(k){ aoa.push([k.label, k.value]); });
+      aoa.push([]);
+    }
+    if(niveau==='detail' || niveau==='les_deux'){
+      var det = rapportDetail(s.id);
+      if(det.headers.length){
+        aoa.push(det.headers);
+        det.rows.forEach(function(r){ aoa.push(r); });
+      }
+    }
+    if(!aoa.length) return;
+    auMoinsUne = true;
+    var ws = XLSX.utils.aoa_to_sheet(aoa);
+    var nomOnglet = s.label.substring(0,31); // limite Excel : 31 caracteres
+    XLSX.utils.book_append_sheet(wb, ws, nomOnglet);
+  });
+  if(!auMoinsUne){ alert('Aucune donnee a exporter pour la selection actuelle.'); return; }
+  XLSX.writeFile(wb, 'rapport_financier_'+new Date().toISOString().slice(0,10)+'.xlsx');
 }
 
 // ── Vue "Evolution" du tableau de bord Finances ──────────────────────────
@@ -12388,7 +12742,12 @@ function pagePrevisionTresorerie(){
   var periodes = construirePeriodesPrevision();
 
   // Assigner chaque item a sa periode : l'echeance deja passee (en retard)
-  // tombe toujours dans la 1ere periode (impact immediat, cash exige des maintenant).
+  // tombe toujours dans la 1ere periode (impact immediat, cash exige des
+  // maintenant). Un item dont l'echeance depasse la FENETRE AFFICHEE est
+  // EXCLU (retourne -1) — il ne doit surtout pas etre cumule a tort dans
+  // la derniere periode visible, ce qui gonflait artificiellement son
+  // total (notamment avec les previsions de forfait, qui portent
+  // desormais sur 36 mois, bien au-dela d'une fenetre affichee courte).
   function assignerPeriode(item){
     if(item.enRetard || item.dateEcheance<=periodes[0].fin){
       return 0;
@@ -12396,7 +12755,7 @@ function pagePrevisionTresorerie(){
     for(var i=1;i<periodes.length;i++){
       if(item.dateEcheance<=periodes[i].fin) return i;
     }
-    return periodes.length-1;
+    return -1;
   }
 
   periodes.forEach(function(p){
@@ -12405,11 +12764,13 @@ function pagePrevisionTresorerie(){
   });
   encaissements.forEach(function(e){
     var idx = assignerPeriode(e);
+    if(idx<0) return; // hors de la fenetre affichee
     periodes[idx].encaissements.push(e);
     periodes[idx].encaisse += e.montant;
   });
   decaissements.forEach(function(d){
     var idx = assignerPeriode(d);
+    if(idx<0) return; // hors de la fenetre affichee
     periodes[idx].decaissements.push(d);
     periodes[idx].decaisse += d.montant;
   });
