@@ -12868,19 +12868,37 @@ function construirePeriodesPrevision(){
       periodes.push({label:'S'+(i+1), debut:maintenant+i*7*86400000, fin:maintenant+(i+1)*7*86400000});
     }
   } else if(previsionGranularite==='mois'){
-    var base = new Date();
+    // IMPORTANT : vrais mois CALENDAIRES (1er au dernier jour), pas une
+    // fenetre glissante de 30 jours ancree sur la date du jour — sinon
+    // l'etiquette "Aou" (par ex.) pouvait en realite s'etendre jusqu'a la
+    // mi-septembre, et un forfait prevu pour septembre s'y retrouvait
+    // affiche a tort comme s'il concernait aout. La toute premiere
+    // periode demarre AUJOURD'HUI (pas le 1er du mois) puisque les jours
+    // deja passes du mois sont soit deja regles, soit deja comptes dans
+    // "en retard" separement.
+    var today = new Date();
+    var moisNoms = ['Jan','Fev','Mar','Avr','Mai','Jun','Jul','Aou','Sep','Oct','Nov','Dec'];
     for(var i=0;i<previsionNbPeriodes;i++){
-      var deb = new Date(base.getFullYear(), base.getMonth()+i, base.getDate());
-      var fin = new Date(base.getFullYear(), base.getMonth()+i+1, base.getDate());
-      var moisNoms = ['Jan','Fev','Mar','Avr','Mai','Jun','Jul','Aou','Sep','Oct','Nov','Dec'];
-      periodes.push({label:moisNoms[deb.getMonth()], debut:deb.getTime(), fin:fin.getTime()});
+      var moisAbsolu = today.getMonth()+i;
+      var annee = today.getFullYear()+Math.floor(moisAbsolu/12);
+      var moisIdx = ((moisAbsolu%12)+12)%12;
+      var deb = (i===0) ? maintenant : new Date(annee, moisIdx, 1).getTime();
+      var finDate = new Date(annee, moisIdx+1, 0, 23,59,59,999);
+      periodes.push({label:moisNoms[moisIdx], debut:deb, fin:finDate.getTime()});
     }
   } else { // trimestre
-    var base = new Date();
+    // Meme principe : vrais trimestres CALENDAIRES, 1ere periode demarre
+    // aujourd'hui.
+    var today2 = new Date();
+    var trimCourantIdx = Math.floor(today2.getMonth()/3);
     for(var i=0;i<previsionNbPeriodes;i++){
-      var deb = new Date(base.getFullYear(), base.getMonth()+i*3, base.getDate());
-      var fin = new Date(base.getFullYear(), base.getMonth()+(i+1)*3, base.getDate());
-      periodes.push({label:'T'+(i+1), debut:deb.getTime(), fin:fin.getTime()});
+      var trimAbsolu = trimCourantIdx+i;
+      var annee2 = today2.getFullYear()+Math.floor(trimAbsolu/4);
+      var trimIdx = ((trimAbsolu%4)+4)%4;
+      var moisDebutTrim = trimIdx*3;
+      var deb2 = (i===0) ? maintenant : new Date(annee2, moisDebutTrim, 1).getTime();
+      var finDate2 = new Date(annee2, moisDebutTrim+3, 0, 23,59,59,999);
+      periodes.push({label:'T'+(trimIdx+1)+' '+annee2, debut:deb2, fin:finDate2.getTime()});
     }
   }
   return periodes;
