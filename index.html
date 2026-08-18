@@ -6310,22 +6310,47 @@ var RAPPORT_SECTIONS = [
   {id:'stock', label:'Gestion du stock', groupe:'Gestion'}
 ];
 var rapportSelection = {}; // {sectionId: true/false}
+var rapportPeriodeFiltre = 'mois'; // 'mois','trimestre','annee','custom'
+var rapportPeriodeDebut = '';
+var rapportPeriodeFin = '';
+function setRapportPeriodeFiltreByEl(el){ rapportPeriodeFiltre=el.getAttribute('data-rpf'); renderPage(); }
+function setRapportPeriodeCustom(){
+  rapportPeriodeDebut = document.getElementById('rapportPeriodeDebut').value;
+  rapportPeriodeFin   = document.getElementById('rapportPeriodeFin').value;
+  if(!rapportPeriodeDebut||!rapportPeriodeFin){ alert('Selectionnez les deux dates.'); return; }
+  rapportPeriodeFiltre = 'custom'; renderPage();
+}
 var rapportNiveau = {};    // {sectionId: 'kpi'|'detail'|'les_deux'}
 
 function fmtFCFA(v){ return Math.round(v||0).toLocaleString('fr-FR')+' FCFA'; }
 function fmtPct(v){ return v===null||v===undefined ? '—' : v.toFixed(1)+'%'; }
 
 // Retourne les KPI d'une section : [{label, value}]
-function rapportKPIs(sectionId){
+function rapportKPIs(sectionId, bornes){
   if(sectionId==='dashboard'){
-    var b = bornesDePeriode(periodeKeyDuMoment('mois'),'mois');
-    var m = calculerMetriquesFinancieres(b.deb, b.fin);
+    var b = bornes || bornesDePeriode(periodeKeyDuMoment('mois'),'mois');
+    var K = calculerKPIsDashboardComplet(b, b);
     return [
-      {label:'CA de la periode', value:fmtFCFA(m.ca)}, {label:'Depenses', value:fmtFCFA(m.depenses)},
-      {label:'Marge brute', value:fmtFCFA(m.margeBrute)}, {label:'Taux de marge', value:fmtPct(m.tauxMarge)},
-      {label:'Resultat operationnel', value:fmtFCFA(m.resultatOperationnel)}, {label:'Marge operationnelle', value:fmtPct(m.margeOperationnelle)},
-      {label:'Encaissements realises', value:fmtFCFA(m.encaissementsRealises)}, {label:'Taux encaissement', value:fmtPct(m.tauxEncaissement)},
-      {label:'Montant CA non encaisse', value:fmtFCFA(m.montantNonEncaisse)}, {label:'Echeances de la periode', value:fmtFCFA(m.echeances)}
+      {label:'CA de la periode', value:fmtFCFA(K.caTotal), sousLignes:[
+        {label:'CA Devis', value:fmtFCFA(K.caDevis)}, {label:'CA Forfaits', value:fmtFCFA(K.caForfait)}]},
+      {label:'Depenses liees', value:fmtFCFA(K.achatTotal), sousLignes:[
+        {label:'Devis', value:fmtFCFA(K.achatDevis)}, {label:'Forfaits', value:fmtFCFA(K.achatForfait)}]},
+      {label:'Marge brute', value:fmtFCFA(K.margeTotal), sousLignes:[
+        {label:'Devis', value:fmtFCFA(K.margeDevis)}, {label:'Forfaits', value:fmtFCFA(K.margeForfait)}]},
+      {label:'Taux de marge', value:fmtPct(K.tauxTotal), sousLignes:[
+        {label:'Devis', value:fmtPct(K.tauxDevis)}, {label:'Forfaits', value:fmtPct(K.tauxForfait)}]},
+      {label:'Charges variables (Caisse)', value:fmtFCFA(K.chargesVariablesCaisse)},
+      {label:'Dettes fournisseurs (manuelles)', value:fmtFCFA(K.dettesManuellesPeriode)},
+      {label:'Charges fixes (periode)', value:fmtFCFA(K.chargesFixesPeriode)},
+      {label:'Resultat operationnel', value:fmtFCFA(K.resultatOperationnel)},
+      {label:'Marge operationnelle', value:fmtPct(K.margeOperationnelle)},
+      {label:'Encaissements attendus', value:fmtFCFA(K.totalAttendu), sousLignes:[
+        {label:'Devis', value:fmtFCFA(K.attenduDevis)}, {label:'Forfaits', value:fmtFCFA(K.attenduForfait)}]},
+      {label:'Encaissements realises', value:fmtFCFA(K.encaisseRealise), sousLignes:[
+        {label:'Taux d\'encaissement', value:fmtPct(K.tauxEncaissement)}]},
+      {label:'Exposition financiere', value:fmtFCFA(K.expositionTotale)},
+      {label:'Echeances de la periode', value:fmtFCFA(K.totalEcheancesPeriode), sousLignes:[
+        {label:'Fournisseurs', value:fmtFCFA(K.echFourn)}, {label:'Charges fixes', value:fmtFCFA(K.echCharges)}, {label:'Engagements bancaires', value:fmtFCFA(K.echEngag)}]}
     ];
   }
   if(sectionId==='facturation'){
@@ -6402,9 +6427,14 @@ function rapportKPIs(sectionId){
 }
 
 // Retourne le detail d'une section : {headers:[...], rows:[[...],...]}
-function rapportDetail(sectionId){
+function rapportDetail(sectionId, bornes){
   if(sectionId==='dashboard'){
-    return {headers:['Indicateur','Valeur'], rows: rapportKPIs('dashboard').map(function(k){return [k.label, k.value];})};
+    var rows = [];
+    rapportKPIs('dashboard', bornes).forEach(function(k){
+      rows.push([k.label, k.value]);
+      (k.sousLignes||[]).forEach(function(sl){ rows.push(['   '+sl.label, sl.value]); });
+    });
+    return {headers:['Indicateur','Valeur'], rows: rows};
   }
   if(sectionId==='facturation'){
     var collecte = collecterExpositionFinanciere();
@@ -6534,19 +6564,42 @@ function toggleRapportGroupeByEl(el){
   });
   renderPage();
 }
+// Applique le meme niveau (KPI/Detail/Les deux) a TOUTES les sections
+// d'un groupe en un seul clic, et les coche automatiquement si elles ne
+// l'etaient pas encore.
+function setRapportNiveauGroupeByEl(el){
+  var groupe = el.getAttribute('data-rng');
+  var niveau = el.getAttribute('data-rnv');
+  RAPPORT_SECTIONS.filter(function(s){return s.groupe===groupe;}).forEach(function(s){
+    rapportSelection[s.id] = true;
+    rapportNiveau[s.id] = niveau;
+  });
+  renderPage();
+}
 
 function pageRapportFinancier(){
   var html = '<div style="margin-bottom:16px"><h2 style="font-size:16px;font-weight:700;margin:0">Rapport financier</h2>';
   html += '<div class="xs muted" style="margin-top:4px">Selectionnez les sections a inclure, et pour chacune le niveau de detail souhaite.</div></div>';
+
+  html += '<div class="card" style="padding:14px 16px;margin-bottom:16px">';
+  html += '<div class="fw7" style="margin-bottom:8px">Periode du rapport</div>';
+  html += barrePeriode(rapportPeriodeFiltre, 'rpf', 'setRapportPeriodeFiltreByEl', 'rapportPeriodeDebut', 'rapportPeriodeFin', rapportPeriodeDebut, rapportPeriodeFin, 'setRapportPeriodeCustom');
+  html += '</div>';
 
   var groupes = ['Finance','Rentabilite','Gestion'];
   groupes.forEach(function(groupe){
     var sections = RAPPORT_SECTIONS.filter(function(s){return s.groupe===groupe;});
     var toutesCochees = sections.every(function(s){return rapportSelection[s.id];});
     html += '<div class="card" style="padding:14px 16px;margin-bottom:12px">';
-    html += '<label class="flex" style="align-items:center;gap:8px;cursor:pointer;margin-bottom:10px">';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">';
+    html += '<label class="flex" style="align-items:center;gap:8px;cursor:pointer;margin:0">';
     html += '<input type="checkbox" data-rg="'+groupe+'" onchange="toggleRapportGroupeByEl(this)"'+(toutesCochees?' checked':'')+' style="width:16px;height:16px">';
     html += '<span class="fw7">'+groupe+'</span></label>';
+    html += '<div class="flex gap6"><span class="xs muted" style="align-self:center">Niveau pour tout le bloc :</span>';
+    [{v:'kpi',l:'KPI'},{v:'detail',l:'Detail'},{v:'les_deux',l:'KPI + Detail'}].forEach(function(niv){
+      html += '<button class="btn btn-sm" style="font-size:10px;padding:3px 7px" data-rng="'+groupe+'" data-rnv="'+niv.v+'" onclick="setRapportNiveauGroupeByEl(this)">'+niv.l+'</button>';
+    });
+    html += '</div></div>';
     sections.forEach(function(s){
       var coche = !!rapportSelection[s.id];
       html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0 6px 24px;border-top:1px solid #f0ede8">';
@@ -6579,9 +6632,12 @@ function pageRapportFinancier(){
 // et pour l'impression PDF native du navigateur — pas de dependance
 // externe necessaire).
 function construireHtmlRapport(){
+  var bornesRapport = calculerBornesPeriode(rapportPeriodeFiltre, rapportPeriodeDebut, rapportPeriodeFin);
+  var chartDataRapport = null;
   var dateGen = new Date().toLocaleDateString('fr-FR', {day:'2-digit',month:'long',year:'numeric'});
   var html = '<div style="font-family:Arial,sans-serif;padding:20px;max-width:900px;margin:0 auto">';
   html += '<h1 style="font-size:22px;margin-bottom:2px">Rapport financier</h1>';
+  html += '<div style="color:#888;font-size:12px;margin-bottom:4px">Periode : '+new Date(bornesRapport.deb).toLocaleDateString('fr-FR')+' au '+new Date(bornesRapport.fin).toLocaleDateString('fr-FR')+'</div>';
   html += '<div style="color:#888;font-size:12px;margin-bottom:24px">Genere le '+dateGen+'</div>';
 
   RAPPORT_SECTIONS.forEach(function(s){
@@ -6591,20 +6647,27 @@ function construireHtmlRapport(){
     html += '<h2 style="font-size:16px;border-bottom:2px solid #185FA5;padding-bottom:4px;margin-bottom:12px">'+s.label+'</h2>';
 
     if(niveau==='kpi' || niveau==='les_deux'){
-      var kpis = rapportKPIs(s.id);
+      var kpis = rapportKPIs(s.id, bornesRapport);
       if(kpis.length){
         html += '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">';
         kpis.forEach(function(k){
           html += '<div style="background:#f5f4f1;border-radius:8px;padding:8px 14px;min-width:150px">';
           html += '<div style="font-size:10px;color:#888;text-transform:uppercase">'+k.label+'</div>';
           html += '<div style="font-size:15px;font-weight:700">'+k.value+'</div>';
+          if(k.sousLignes && k.sousLignes.length){
+            html += '<div style="border-top:1px solid #e0ddd7;margin-top:6px;padding-top:5px">';
+            k.sousLignes.forEach(function(sl){
+              html += '<div style="display:flex;justify-content:space-between;font-size:10px;color:#666"><span>'+sl.label+'</span><span>'+sl.value+'</span></div>';
+            });
+            html += '</div>';
+          }
           html += '</div>';
         });
         html += '</div>';
       }
     }
     if(niveau==='detail' || niveau==='les_deux'){
-      var det = rapportDetail(s.id);
+      var det = rapportDetail(s.id, bornesRapport);
       if(det.rows.length){
         html += '<table style="width:100%;border-collapse:collapse;font-size:11px">';
         html += '<thead><tr>'+det.headers.map(function(h){return '<th style="text-align:left;padding:5px 8px;border-bottom:2px solid #ddd;color:#555">'+h+'</th>';}).join('')+'</tr></thead>';
@@ -6618,27 +6681,82 @@ function construireHtmlRapport(){
       }
     }
     html += '</div>';
+
+    // Section "Evolution" : incluse quand le tableau de bord est demande
+    // en KPI (ou KPI+Detail) — tendance CA sur 12 mois (vrai graphique,
+    // rendu via Chart.js injecte dans la fenetre d'impression) + la
+    // comparaison periode actuelle vs precedente pour les indicateurs.
+    if(s.id==='dashboard' && (niveau==='kpi' || niveau==='les_deux')){
+      html += '<div style="margin-bottom:28px;page-break-inside:avoid">';
+      html += '<h2 style="font-size:16px;border-bottom:2px solid #185FA5;padding-bottom:4px;margin-bottom:12px">Evolution</h2>';
+      html += '<div class="xs" style="color:#888;font-size:11px;margin-bottom:8px">Tendance CA total (devis + forfaits), 12 derniers mois</div>';
+      html += '<canvas id="rapportChartEvolution" width="800" height="260"></canvas>';
+
+      var type = (rapportPeriodeFiltre==='mois'||rapportPeriodeFiltre==='trimestre'||rapportPeriodeFiltre==='annee') ? rapportPeriodeFiltre : 'mois';
+      var periodeRecenteEvo = periodeKeyDuMoment(type);
+      var periodeAncienneEvo = periodePrecedente(periodeRecenteEvo, type);
+      var bRecente = bornesDePeriode(periodeRecenteEvo, type);
+      var bAncienne = bornesDePeriode(periodeAncienneEvo, type);
+      var mRecente = calculerMetriquesFinancieres(bRecente.deb, bRecente.fin);
+      var mAncienne = calculerMetriquesFinancieres(bAncienne.deb, bAncienne.fin);
+      html += '<div class="xs" style="color:#888;font-size:11px;margin:14px 0 8px">Comparaison — '+formaterLabelPeriode(periodeAncienneEvo,type)+' vs '+formaterLabelPeriode(periodeRecenteEvo,type)+'</div>';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr>';
+      html += '<th style="text-align:left;padding:5px 8px;border-bottom:2px solid #ddd;color:#555">Indicateur</th><th style="text-align:right;padding:5px 8px;border-bottom:2px solid #ddd;color:#555">'+formaterLabelPeriode(periodeAncienneEvo,type)+'</th><th style="text-align:right;padding:5px 8px;border-bottom:2px solid #ddd;color:#555">'+formaterLabelPeriode(periodeRecenteEvo,type)+'</th></tr></thead><tbody>';
+      METRIQUES_FINANCIERES_LISTE.forEach(function(m){
+        var fmt = function(v){ if(v===null) return '—'; return m.format==='pourcentage' ? v.toFixed(1)+'%' : fmtFCFA(v); };
+        html += '<tr><td style="padding:4px 8px;border-bottom:1px solid #f0ede8">'+m.label+'</td><td style="padding:4px 8px;border-bottom:1px solid #f0ede8;text-align:right">'+fmt(mAncienne[m.cle])+'</td><td style="padding:4px 8px;border-bottom:1px solid #f0ede8;text-align:right">'+fmt(mRecente[m.cle])+'</td></tr>';
+      });
+      html += '</tbody></table></div>';
+
+      // Donnees du graphique — retournees avec le HTML (pas stockees sur
+      // window, qui reste celui de la fenetre PARENTE, pas la popup
+      // d'impression) pour etre transmises correctement a la popup PDF.
+      var caParMoisEvo = collecterCATotalParMois();
+      var maintenantEvo = new Date();
+      var labelsEvo = [], valeursEvo = [];
+      for(var iEvo=11;iEvo>=0;iEvo--){
+        var dEvo = new Date(maintenantEvo.getFullYear(), maintenantEvo.getMonth()-iEvo, 1);
+        var keyEvo = dEvo.getFullYear()+'-'+String(dEvo.getMonth()+1).padStart(2,'0');
+        labelsEvo.push(formaterLabelPeriode(keyEvo,'mois'));
+        valeursEvo.push(caParMoisEvo[keyEvo]||0);
+      }
+      chartDataRapport = {labels:labelsEvo, valeurs:valeursEvo};
+    }
   });
   html += '</div>';
-  return html;
+  return {html:html, chartData:chartDataRapport};
 }
 
 // PDF : ouvre une fenetre imprimable avec le contenu du rapport, et
 // declenche l'impression native du navigateur (l'utilisateur choisit
 // "Enregistrer en PDF" comme destination) — aucune dependance externe.
 function genererRapportPDF(){
-  var contenu = construireHtmlRapport();
+  var resultat = construireHtmlRapport();
   var fenetre = window.open('', '_blank');
   if(!fenetre){ alert('Le navigateur a bloque l\'ouverture de la fenetre d\'impression. Autorisez les popups pour ce site.'); return; }
-  fenetre.document.write('<!DOCTYPE html><html><head><title>Rapport financier</title><meta charset="utf-8"></head><body>'+contenu+'</body></html>');
+  var scriptGraphique = '';
+  if(resultat.chartData){
+    scriptGraphique = '<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"><\/script>';
+    scriptGraphique += '<script>window.onload=function(){';
+    scriptGraphique += 'var ctx=document.getElementById("rapportChartEvolution");';
+    scriptGraphique += 'if(ctx && window.Chart){ new Chart(ctx, {type:"bar", data:{labels:'+JSON.stringify(resultat.chartData.labels)+', datasets:[{label:"CA total", data:'+JSON.stringify(resultat.chartData.valeurs)+', backgroundColor:"#185FA5"}]}, options:{responsive:false, animation:false, plugins:{legend:{display:false}}}}); }';
+    scriptGraphique += 'setTimeout(function(){ window.print(); }, 400);';
+    scriptGraphique += '};<\/script>';
+  }
+  fenetre.document.write('<!DOCTYPE html><html><head><title>Rapport financier</title><meta charset="utf-8">'+scriptGraphique+'</head><body>'+resultat.html+'</body></html>');
   fenetre.document.close();
-  setTimeout(function(){ fenetre.print(); }, 300);
+  if(!resultat.chartData){
+    setTimeout(function(){ fenetre.print(); }, 300);
+  }
+  // Si un graphique est present, l'impression est declenchee par le
+  // script injecte ci-dessus (apres le rendu du graphique), pas ici.
 }
 
 // Excel : un onglet par section selectionnee, avec ses KPI puis son
 // detail selon le niveau choisi — reutilise xlsx.js deja charge dans l'app.
 function genererRapportExcel(){
   if(typeof XLSX==='undefined'){ alert('La bibliotheque Excel n\'est pas chargee.'); return; }
+  var bornesRapport = calculerBornesPeriode(rapportPeriodeFiltre, rapportPeriodeDebut, rapportPeriodeFin);
   var wb = XLSX.utils.book_new();
   var auMoinsUne = false;
   RAPPORT_SECTIONS.forEach(function(s){
@@ -6647,11 +6765,14 @@ function genererRapportExcel(){
     var aoa = [];
     if(niveau==='kpi' || niveau==='les_deux'){
       aoa.push(['Indicateur','Valeur']);
-      rapportKPIs(s.id).forEach(function(k){ aoa.push([k.label, k.value]); });
+      rapportKPIs(s.id, bornesRapport).forEach(function(k){
+        aoa.push([k.label, k.value]);
+        (k.sousLignes||[]).forEach(function(sl){ aoa.push(['   '+sl.label, sl.value]); });
+      });
       aoa.push([]);
     }
     if(niveau==='detail' || niveau==='les_deux'){
-      var det = rapportDetail(s.id);
+      var det = rapportDetail(s.id, bornesRapport);
       if(det.headers.length){
         aoa.push(det.headers);
         det.rows.forEach(function(r){ aoa.push(r); });
@@ -6662,6 +6783,40 @@ function genererRapportExcel(){
     var ws = XLSX.utils.aoa_to_sheet(aoa);
     var nomOnglet = s.label.substring(0,31); // limite Excel : 31 caracteres
     XLSX.utils.book_append_sheet(wb, ws, nomOnglet);
+
+    // Onglet "Evolution" supplementaire, uniquement si le tableau de bord
+    // est demande en KPI (ou KPI+Detail) — tendance CA 12 mois + la
+    // comparaison periode actuelle vs precedente pour les indicateurs
+    // (equivalent Excel du graphique + tableau affiches dans le PDF).
+    if(s.id==='dashboard' && (niveau==='kpi' || niveau==='les_deux')){
+      var aoaEvo = [];
+      aoaEvo.push(['Tendance CA total (devis + forfaits), 12 derniers mois']);
+      var maintenantEvo2 = new Date();
+      var labelsEvo2 = [], valeursEvo2 = [];
+      var caParMoisEvo2 = collecterCATotalParMois();
+      for(var iEvo2=11;iEvo2>=0;iEvo2--){
+        var dEvo2 = new Date(maintenantEvo2.getFullYear(), maintenantEvo2.getMonth()-iEvo2, 1);
+        var keyEvo2 = dEvo2.getFullYear()+'-'+String(dEvo2.getMonth()+1).padStart(2,'0');
+        labelsEvo2.push(formaterLabelPeriode(keyEvo2,'mois'));
+        valeursEvo2.push(caParMoisEvo2[keyEvo2]||0);
+      }
+      aoaEvo.push(labelsEvo2);
+      aoaEvo.push(valeursEvo2);
+      aoaEvo.push([]);
+      var typeEvo2 = (rapportPeriodeFiltre==='mois'||rapportPeriodeFiltre==='trimestre'||rapportPeriodeFiltre==='annee') ? rapportPeriodeFiltre : 'mois';
+      var periodeRecenteEvo2 = periodeKeyDuMoment(typeEvo2);
+      var periodeAncienneEvo2 = periodePrecedente(periodeRecenteEvo2, typeEvo2);
+      var bRecente2 = bornesDePeriode(periodeRecenteEvo2, typeEvo2);
+      var bAncienne2 = bornesDePeriode(periodeAncienneEvo2, typeEvo2);
+      var mRecente2 = calculerMetriquesFinancieres(bRecente2.deb, bRecente2.fin);
+      var mAncienne2 = calculerMetriquesFinancieres(bAncienne2.deb, bAncienne2.fin);
+      aoaEvo.push(['Comparaison', formaterLabelPeriode(periodeAncienneEvo2,typeEvo2), formaterLabelPeriode(periodeRecenteEvo2,typeEvo2)]);
+      METRIQUES_FINANCIERES_LISTE.forEach(function(m){
+        aoaEvo.push([m.label, mAncienne2[m.cle], mRecente2[m.cle]]);
+      });
+      var wsEvo = XLSX.utils.aoa_to_sheet(aoaEvo);
+      XLSX.utils.book_append_sheet(wb, wsEvo, 'Evolution');
+    }
   });
   if(!auMoinsUne){ alert('Aucune donnee a exporter pour la selection actuelle.'); return; }
   XLSX.writeFile(wb, 'rapport_financier_'+new Date().toISOString().slice(0,10)+'.xlsx');
@@ -11480,13 +11635,12 @@ function barrePeriode(filtreActif, prefixData, onClickFn, idDebut, idFin, valDeb
   return html;
 }
 
-function pageFinancesDashboard(){
-  if(dashEvolutionActive) return pageFinancesEvolution();
-  var maintenant = Date.now();
-
-  // ═══ Ligne 1 : Activite (CA / Depenses / Marge, devis vs forfait) ═══
-  var bornesActivite = calculerBornesPeriode(dashActiviteFiltre, dashActiviteDebut, dashActiviteFin);
-
+// Calcule TOUS les indicateurs du tableau de bord Finances (Activite +
+// Tresorerie) — extrait de pageFinancesDashboard() pour etre reutilise a
+// l'identique par le Rapport financier : garantit qu'il n'y a JAMAIS de
+// divergence entre ce qui s'affiche sur le tableau de bord et ce qui
+// apparait dans un rapport genere.
+function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
   var caDevis=0, achatDevis=0, caForfait=0, achatForfait=0;
   vehicles.forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
@@ -11511,13 +11665,6 @@ function pageFinancesDashboard(){
   var tauxForfait = caForfait>0 ? (margeForfait/caForfait*100) : null;
   var tauxTotal = caTotal>0 ? (margeTotal/caTotal*100) : null;
 
-  // ═══ Marge OPERATIONNELLE : tient compte, en plus du cout des pieces,
-  // des charges VARIABLES de fonctionnement (toutes les sorties de
-  // Caisse sur la periode) et des charges FIXES (loyer, salaires...,
-  // proratisees sur la duree reelle de la periode selectionnee). Repond
-  // a la question "suis-je rentable une fois TOUTES mes charges
-  // couvertes ?", contrairement a la marge brute ci-dessus qui ne
-  // regarde que le cout des pieces. ═══
   var chargesVariablesCaisse = CAISSE_MOUVEMENTS.filter(function(m){
     return m.type==='sortie' && m.date>=bornesActivite.deb && m.date<=bornesActivite.fin;
   }).reduce(function(s,m){return s+(parseFloat(m.montant)||0);},0);
@@ -11532,22 +11679,12 @@ function pageFinancesDashboard(){
   var joursPeriodeActivite = Math.max(1, Math.round((bornesActivite.fin-bornesActivite.deb)/86400000));
   var chargesFixesPeriode = chargesFixesMensuelEquiv * (joursPeriodeActivite/30);
 
-  // Dettes fournisseurs MANUELLES (achats generaux non lies a un vehicule
-  // — stock, fournitures...) engagees sur la periode. Comptees peu importe
-  // qu'elles soient deja payees ou non (la depense a bien eu lieu, c'est
-  // une logique d'engagement, pas de tresorerie). Les pieces en credit
-  // rattachees a un vehicule ne sont PAS reprises ici : elles sont deja
-  // comptees dans achatTotal ci-dessus, quel que soit leur mode de
-  // paiement — les reprendre ferait un double comptage.
   var dettesManuellesPeriode = DETTES_MANUELLES.filter(function(dm){
     return dm.dateAchat>=bornesActivite.deb && dm.dateAchat<=bornesActivite.fin;
   }).reduce(function(s,dm){return s+(parseFloat(dm.prixAchat)||0)*(parseInt(dm.qte)||1);},0);
 
   var resultatOperationnel = caTotal - achatTotal - chargesVariablesCaisse - chargesFixesPeriode - dettesManuellesPeriode;
   var margeOperationnelle = caTotal>0 ? (resultatOperationnel/caTotal*100) : null;
-
-  // ═══ Ligne 2 : Tresorerie (encaissements / exposition / echeances) ═══
-  var bornesTreso = calculerBornesPeriode(dashTresoFiltre, dashTresoDebut, dashTresoFin);
 
   var encaissementsAttendus = collecterEncaissementsAttendus();
   var attenduDevis=0, attenduForfait=0;
@@ -11556,7 +11693,6 @@ function pageFinancesDashboard(){
   });
   var totalAttendu = attenduDevis+attenduForfait;
 
-  // Encaissements realises = paiements enregistres sur la periode tresorerie choisie
   var encaisseRealise = 0, factureSurPeriode = 0;
   vehicles.forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
@@ -11574,10 +11710,6 @@ function pageFinancesDashboard(){
   });
   var tauxEncaissement = factureSurPeriode>0 ? Math.min(100, encaisseRealise/factureSurPeriode*100) : null;
 
-  // Exposition financiere globale — reutilise desormais TOUJOURS
-  // collecterExpositionFinanciere(), la meme source que le tableau
-  // "Exposition financiere" de Facturation, pour ne jamais afficher deux
-  // chiffres differents pour la meme notion.
   var expositionTotale = 0;
   (function(){
     var collecteExpo = collecterExpositionFinanciere();
@@ -11586,7 +11718,6 @@ function pageFinancesDashboard(){
     });
   })();
 
-  // Echeances de la periode tresorerie choisie : fournisseurs / charges fixes / engagements
   var decaissementsAttendus = collecterDecaissementsAttendus();
   var echDansPeriode = decaissementsAttendus.filter(function(d){return d.dateEcheance>=bornesTreso.deb && d.dateEcheance<=bornesTreso.fin;});
   var echFourn = echDansPeriode.filter(function(d){return d.categorie==='fournisseur';}).reduce(function(s,d){return s+d.montant;},0);
@@ -11594,10 +11725,7 @@ function pageFinancesDashboard(){
   var echEngag = echDansPeriode.filter(function(d){return d.categorie==='engagement_bancaire';}).reduce(function(s,d){return s+d.montant;},0);
   var totalEcheancesPeriode = echFourn+echCharges+echEngag;
 
-  // ═══ Ligne 3 : Factures en retard / Prochaines echeances (inchange) ═══
-  var factEnRetard = encaissementsAttendus.filter(function(e){return e.enRetard;})
-    .sort(function(a,b){return a.dateEcheance-b.dateEcheance;});
-
+  var factEnRetard = encaissementsAttendus.filter(function(e){return e.enRetard;}).sort(function(a,b){return a.dateEcheance-b.dateEcheance;});
   var toutesEcheances = [];
   encaissementsAttendus.filter(function(e){return !e.enRetard;}).forEach(function(e){
     toutesEcheances.push({nom:e.nom, montant:e.montant, dateEcheance:e.dateEcheance, sens:'encaissement', categorie:'client'});
@@ -11606,7 +11734,37 @@ function pageFinancesDashboard(){
     toutesEcheances.push({nom:d.nom, montant:d.montant, dateEcheance:d.dateEcheance, sens:'decaissement', categorie:d.categorie});
   });
   toutesEcheances.sort(function(a,b){return a.dateEcheance-b.dateEcheance;});
-  var prochainesEcheances = toutesEcheances.slice(0,6);
+
+  return {
+    caDevis:caDevis, achatDevis:achatDevis, caForfait:caForfait, achatForfait:achatForfait,
+    caTotal:caTotal, achatTotal:achatTotal, margeDevis:margeDevis, margeForfait:margeForfait, margeTotal:margeTotal,
+    tauxDevis:tauxDevis, tauxForfait:tauxForfait, tauxTotal:tauxTotal,
+    chargesVariablesCaisse:chargesVariablesCaisse, chargesFixesPeriode:chargesFixesPeriode, dettesManuellesPeriode:dettesManuellesPeriode,
+    resultatOperationnel:resultatOperationnel, margeOperationnelle:margeOperationnelle,
+    totalAttendu:totalAttendu, attenduDevis:attenduDevis, attenduForfait:attenduForfait,
+    encaisseRealise:encaisseRealise, tauxEncaissement:tauxEncaissement, expositionTotale:expositionTotale,
+    totalEcheancesPeriode:totalEcheancesPeriode, echFourn:echFourn, echCharges:echCharges, echEngag:echEngag,
+    factEnRetard:factEnRetard, prochainesEcheances:toutesEcheances.slice(0,6)
+  };
+}
+
+function pageFinancesDashboard(){
+  if(dashEvolutionActive) return pageFinancesEvolution();
+  var maintenant = Date.now();
+
+  // ═══ Ligne 1 : Activite (CA / Depenses / Marge, devis vs forfait) ═══
+  var bornesActivite = calculerBornesPeriode(dashActiviteFiltre, dashActiviteDebut, dashActiviteFin);
+  var bornesTreso = calculerBornesPeriode(dashTresoFiltre, dashTresoDebut, dashTresoFin);
+  var K = calculerKPIsDashboardComplet(bornesActivite, bornesTreso);
+  var caDevis=K.caDevis, achatDevis=K.achatDevis, caForfait=K.caForfait, achatForfait=K.achatForfait;
+  var caTotal=K.caTotal, achatTotal=K.achatTotal, margeDevis=K.margeDevis, margeForfait=K.margeForfait, margeTotal=K.margeTotal;
+  var tauxDevis=K.tauxDevis, tauxForfait=K.tauxForfait, tauxTotal=K.tauxTotal;
+  var chargesVariablesCaisse=K.chargesVariablesCaisse, chargesFixesPeriode=K.chargesFixesPeriode, dettesManuellesPeriode=K.dettesManuellesPeriode;
+  var resultatOperationnel=K.resultatOperationnel, margeOperationnelle=K.margeOperationnelle;
+  var totalAttendu=K.totalAttendu, attenduDevis=K.attenduDevis, attenduForfait=K.attenduForfait;
+  var encaisseRealise=K.encaisseRealise, tauxEncaissement=K.tauxEncaissement, expositionTotale=K.expositionTotale;
+  var totalEcheancesPeriode=K.totalEcheancesPeriode, echFourn=K.echFourn, echCharges=K.echCharges, echEngag=K.echEngag;
+  var factEnRetard=K.factEnRetard, prochainesEcheances=K.prochainesEcheances;
 
   var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Finances — vue d\'ensemble</h2>';
