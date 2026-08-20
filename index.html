@@ -1038,6 +1038,12 @@ tr:hover td{background:#faf9f7}
       <div class="fr"><label class="fl">Fin de la periode (optionnel)</label><input type="date" class="inp" id="engagementDateFin"></div>
     </div>
     <div class="fr"><label class="fl">Descriptif (optionnel)</label><textarea class="inp" id="engagementDescriptif" rows="2" placeholder="Ex: Pret pour achat du pont elevateur, remboursable sur 24 mois..."></textarea></div>
+    <div class="fr">
+      <label class="fl">Factures liees (optionnel) <span class="xs muted">— pour une avance type ASBC/ASF adossee a des factures precises</span></label>
+      <input class="inp" id="engagementFactureRecherche" placeholder="Rechercher une facture par client ou numero..." oninput="rechercherFactureAAjouter(this.value)" autocomplete="off">
+      <div id="engagementFactureSuggestions" style="max-height:160px;overflow-y:auto;border:1px solid #d0cec9;border-radius:7px;margin-top:4px;display:none"></div>
+      <div id="engagementFacturesLieesListe" style="margin-top:8px"></div>
+    </div>
   </div>
   <div class="mfoot">
     <button class="btn" onclick="closeEngagementForm()">Annuler</button>
@@ -9034,7 +9040,11 @@ function pageCreances(){
     html += '<td style="font-family:monospace;font-weight:700">'+d.montantFacture.toLocaleString('fr-FR')+'</td>';
     html += '<td style="font-family:monospace;color:#3B6D11">'+(d.montantPaye?d.montantPaye.toLocaleString('fr-FR'):'—')+'</td>';
     html += '<td style="font-family:monospace;font-weight:700;color:'+(d.resteARecouvrir>0?'#A32D2D':'#3B6D11')+'">'+(d.resteARecouvrir>0?d.resteARecouvrir.toLocaleString('fr-FR'):'0')+'</td>';
-    html += '<td class="xs">'+(d.isForfaitFacture?'—':((d.numeroFactureExterne?'<span style="font-family:monospace">'+d.numeroFactureExterne+'</span>':'<span class="muted">—</span>')+'<br>'+(d.numeroSecondaire?d.numeroSecondaire:'<span class="muted">—</span>')))+'</td>';
+    html += '<td class="xs">'+(d.isForfaitFacture?'—':((d.numeroFactureExterne?'<span style="font-family:monospace">'+d.numeroFactureExterne+'</span>':'<span class="muted">—</span>')+'<br>'+(d.numeroSecondaire?d.numeroSecondaire:'<span class="muted">—</span>')))+(function(){
+      var refKeyD = d.isForfaitFacture ? refKeyFacture('forfait', (d.periodeKey||'')+'::'+d.client) : refKeyFacture('devis', d.id);
+      var engLie = trouverEngagementPourFacture(refKeyD);
+      return engLie ? '<div style="margin-top:2px"><span class="badge b-amber" style="font-size:9px" title="Facture liee a une avance bancaire">&#x1F517; '+engLie.nom+'</span></div>' : '';
+    })()+'</td>';
     html += '<td class="xs">'+(d.dateFacture?new Date(d.dateFacture).toLocaleDateString('fr-FR'):'—')+'</td>';
     html += '<td style="font-weight:700;color:'+delaiColor+'">'+alerte+' '+d.delaiJours+'j</td>';
     html += '<td><span class="badge '+statutBadge+'">'+statutLabel+'</span></td>';
@@ -13593,9 +13603,12 @@ function htmlTableauHistPaieClients(groupes){
         }
         var delaiTxt = p.delai===null ? '—' : (p.delai+' j');
         var delaiColor = p.delai===null ? '#888' : (p.delai>0 ? '#A32D2D' : '#3B6D11');
+        var refKeyP = p.type==='forfait' ? refKeyFacture('forfait', (p.periodeKey||'')+'::'+p.client) : refKeyFacture('devis', p.vehId);
+        var engLieP = trouverEngagementPourFacture(refKeyP);
+        var badgeAvance = engLieP ? '<div style="margin-top:2px"><span class="badge b-amber" style="font-size:9px" title="Facture liee a une avance bancaire">&#x1F517; '+engLieP.nom+'</span></div>' : '';
         html += '<tr style="border-top:1px solid rgba(0,0,0,0.06)">';
         html += '<td style="padding:4px 8px">'+new Date(p.datePaiement).toLocaleDateString('fr-FR')+'</td>';
-        html += '<td style="padding:4px 8px">'+(refFacture||'—')+'</td>';
+        html += '<td style="padding:4px 8px">'+(refFacture||'—')+badgeAvance+'</td>';
         html += '<td style="padding:4px 8px;text-align:center;color:'+delaiColor+'">'+delaiTxt+'</td>';
         html += '<td style="padding:4px 8px">'+(p.note||'—')+'</td>';
         html += '<td style="padding:4px 8px;text-align:right;font-family:monospace">'+p.montant.toLocaleString('fr-FR')+'</td>';
@@ -14029,6 +14042,87 @@ function montantEnRetard(e, maintenant){
 function montantRestantDu(e){
   return echeancesImpayees(e).reduce(function(s,d){return s+resteDuEcheance(e,d);},0);
 }
+// Un engagement recurrent est VRAIMENT termine seulement s'il a une date
+// de fin ET que TOUTES ses echeances (jusqu'a cette date) sont deja
+// payees. Un engagement SANS date de fin (indefini) n'est jamais
+// "termine" — il continuera a generer de nouvelles echeances chaque
+// mois. IMPORTANT : ne pas confondre avec "0 echeance impayee en ce
+// moment", qui peut juste signifier "le mois en cours vient d'etre
+// paye" sans que l'engagement soit arrete pour autant.
+function estEngagementTermine(e){
+  if(e.periodicite==='unique' || !e.dateFin) return false;
+  var toutes = genererEcheancesEngagement(e);
+  if(!toutes.length) return false;
+  return toutes.every(function(d){ return estEcheancePayee(e,d); });
+}
+// Un engagement est entierement SOLDE (plus rien a suivre) si :
+// - c'est une echeance UNIQUE deja payee (plus aucune echeance impayee)
+// - OU c'est un engagement recurrent VRAIMENT termine (voir estEngagementTermine)
+// Utilise pour faire disparaitre l'engagement de la liste depliable par
+// banque, une fois entierement regle — contrairement au tableau complet
+// en bas de page qui, lui, garde une trace (badge "Termine") a des fins
+// d'historique/audit.
+function estEngagementSolde(e){
+  if(e.periodicite==='unique') return echeancesImpayees(e).length===0;
+  return estEngagementTermine(e);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// LIAISON FACTURES <-> ENGAGEMENTS BANCAIRES (avances ASBC/ASF) — chaque
+// engagement peut etre rattache a une ou plusieurs factures clients
+// (devis ou forfait). Une facture ne peut etre liee qu'a UN SEUL
+// engagement a la fois.
+// ══════════════════════════════════════════════════════════════════════
+function refKeyFacture(refType, idOuPeriode){
+  return refType+'::'+idOuPeriode;
+}
+// Toutes les refKey deja liees a n'importe quel engagement, sauf celui
+// exclu (utile en edition, pour que l'engagement retrouve ses propres
+// factures deja liees dans la liste des "disponibles").
+function collecterRefKeysDejaLiees(engagementIdExclu){
+  var set = {};
+  ENGAGEMENTS_BANCAIRES.forEach(function(e){
+    if(e.id===engagementIdExclu) return;
+    (e.facturesLiees||[]).forEach(function(f){ set[f.refKey] = true; });
+  });
+  return set;
+}
+// Factures ELIGIBLES a etre liees : deposees, pas encore entierement
+// soldees, et pas deja liees a un AUTRE engagement.
+function collecterFacturesEligibles(engagementIdExclu){
+  var dejaLiees = collecterRefKeysDejaLiees(engagementIdExclu);
+  var resultats = [];
+  vehicles.forEach(function(v){
+    if(!v.factureDeposeeLe || !v.chiffrage || !v.chiffrage.lignes) return;
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    var total = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var paye = parseFloat(v.montantPaye)||0;
+    if(total<=0 || paye>=total) return;
+    var refKey = refKeyFacture('devis', v.id);
+    if(dejaLiees[refKey]) return;
+    resultats.push({refKey:refKey, refType:'devis', vehId:v.id, periodeKey:null, numFacture:v.numeroFactureExterne||'', client:v.client, montant:total});
+  });
+  FORFAIT_FACTURES.forEach(function(f){
+    if(f.statut!=='deposee' && f.statut!=='emise') return;
+    var paye = f.statut==='payee' ? f.montant : (f.montantPaye||0);
+    if((f.montant||0)<=0 || paye>=f.montant) return;
+    var refKey = refKeyFacture('forfait', f.periodeKey+'::'+f.client);
+    if(dejaLiees[refKey]) return;
+    resultats.push({refKey:refKey, refType:'forfait', vehId:null, periodeKey:f.periodeKey, numFacture:f.numeroFactureExterne||'', client:f.client, montant:f.montant});
+  });
+  return resultats;
+}
+// Recherche inverse : a quel engagement (le cas echeant) une facture
+// precise est-elle liee ? Utilise dans Facturation et l'Historique
+// paiements pour afficher le rattachement.
+function trouverEngagementPourFacture(refKey){
+  for(var i=0;i<ENGAGEMENTS_BANCAIRES.length;i++){
+    var e = ENGAGEMENTS_BANCAIRES[i];
+    if((e.facturesLiees||[]).some(function(f){return f.refKey===refKey;})) return e;
+  }
+  return null;
+}
+
 // Enregistre un versement (partiel ou total) sur une echeance precise.
 function enregistrerPaiementEcheance(e, dateEcheance, montantVerse){
   if(!e.echeancesPayees) e.echeancesPayees = [];
@@ -14064,7 +14158,14 @@ function regrouperEngagementsParBanque(){
       totalRestantCCT:0, totalRetard:0, engagements:[]
     };
     var b = buckets[banque];
-    b.nb++;
+    // Une echeance UNIQUE deja payee, ou un credit recurrent VRAIMENT
+    // termine, disparait entierement de la liste depliable (et du
+    // compteur "Nb engagements") — il bascule dans l'historique des
+    // paiements, il n'y a plus rien a suivre pour lui ici.
+    if(!estEngagementSolde(e)){
+      b.nb++;
+      b.engagements.push(e);
+    }
     // Echeance UNIQUE : compte uniquement si PAS encore payee — une fois
     // reglee, elle disparait de ce total (et de la liste des echeances
     // dues), elle bascule dans l'historique des paiements.
@@ -14097,7 +14198,6 @@ function regrouperEngagementsParBanque(){
       b.totalRestantCCT += montantRestantDu(e);
     }
     b.totalRetard += montantEnRetard(e, maintenant);
-    b.engagements.push(e);
   });
   return Object.keys(buckets).map(function(k){return buckets[k];}).sort(function(a,b){return b.totalRestantCCT-a.totalRestantCCT;});
 }
@@ -14110,18 +14210,27 @@ function htmlLigneEngagement(e, maintenant){
   var prochaineImpayee = impayeesTriees.length ? impayeesTriees[0] : null;
   var estEnRetard = prochaineImpayee!==null && prochaineImpayee<maintenant;
   var prochaineAffichee = prochaineImpayee!==null ? prochaineImpayee : (e.actif ? prochainEcheanceEngagement(e) : null);
-  var estTermine = e.actif && e.periodicite!=='unique' && e.dateFin && !prochaineImpayee && genererEcheancesEngagement(e).length>0;
+  var estTermine = estEngagementTermine(e);
   var detailLabel = e.periodicite==='unique' ? '' : ' <span class="xs muted">le '+(e.jourEcheance||1)+' de chaque mois</span>';
   var periodeTxt = (e.dateDebut||e.dateFin)
     ? (e.dateDebut?new Date(e.dateDebut).toLocaleDateString('fr-FR'):'—')+' &rarr; '+(e.dateFin?new Date(e.dateFin).toLocaleDateString('fr-FR'):'—')
     : '<span class="xs muted">Indefinie</span>';
   var html = '<tr style="'+(e.actif?'':'opacity:0.5;background:#fafafa')+'">';
-  html += '<td><strong>'+e.nom+'</strong>'+(e.descriptif?'<div class="xs muted" style="margin-top:2px;max-width:220px;white-space:normal">'+e.descriptif+'</div>':'')+'</td>';
+  html += '<td><span class="badge b-blue">'+e.nom+'</span>'+(e.descriptif?'<div class="xs muted" style="margin-top:2px;max-width:220px;white-space:normal">'+e.descriptif+'</div>':'')+'</td>';
   html += '<td class="xs muted">'+(e.organisme||'—')+'</td>';
   html += '<td style="font-family:monospace">'+(parseFloat(e.montant)||0).toLocaleString('fr-FR')+' FCFA</td>';
   html += '<td><span class="badge b-purple">'+periodLabel+'</span>'+detailLabel+'</td>';
   html += '<td class="xs">'+periodeTxt+'</td>';
   html += '<td class="xs">'+(estTermine?'<span class="badge b-gray">Termine</span>':(prochaineAffichee?'<span'+(estEnRetard?' style="color:#A32D2D;font-weight:700"':'')+'>'+new Date(prochaineAffichee).toLocaleDateString('fr-FR')+(estEnRetard?' &#x26A0;':'')+'</span>':'—'))+'</td>';
+  html += '<td class="xs">';
+  if(e.facturesLiees && e.facturesLiees.length){
+    e.facturesLiees.forEach(function(f){
+      html += '<div style="margin-bottom:3px"><strong>'+(f.numFacture||'(sans numero)')+'</strong> — '+f.client+' <span class="muted">('+f.montant.toLocaleString('fr-FR')+' FCFA)</span></div>';
+    });
+  } else {
+    html += '<span class="muted">—</span>';
+  }
+  html += '</td>';
   html += '<td><span class="badge '+(e.actif?'b-green':'b-gray')+'">'+(e.actif?'Actif':'Inactif')+'</span></td>';
   html += '<td><div class="flex gap6">';
   if(e.actif && prochaineImpayee!==null){
@@ -14150,8 +14259,14 @@ function pageEngagementsBancaires(){
 
   // Total des echeances fixes : somme brute des montants periodiques des
   // engagements actifs (non proratise) — la valeur telle qu'elle sera
-  // effectivement prelevee a chaque echeance, toutes periodicites confondues.
-  var totalEcheancesFixes = actifs.filter(function(e){return e.periodicite!=='unique';})
+  // effectivement prelevee a chaque echeance, toutes periodicites
+  // confondues. EXCLUT les engagements deja entierement soldes (plus
+  // aucune echeance impayee JUSQU'A LA FIN DU CREDIT) — un credit termine
+  // mais reste "actif" (non desactive manuellement) ne doit plus compter
+  // comme une charge recurrente en cours. Un engagement SANS date de fin
+  // (indefini) compte TOUJOURS, meme si le mois en cours vient d'etre
+  // paye (il n'est pas "termine" pour autant, il rechargera le mois prochain).
+  var totalEcheancesFixes = actifs.filter(function(e){return e.periodicite!=='unique' && !estEngagementTermine(e);})
     .reduce(function(s,e){return s+(parseFloat(e.montant)||0);},0);
 
   // Total des engagements : capital restant du, TOUTES periodicites
@@ -14269,7 +14384,7 @@ function pageEngagementsBancaires(){
       if(expanded){
         html += '<tr><td colspan="6" style="padding:0;background:#faf9f7"><div style="padding:8px 16px 12px 16px">';
         html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:#888">';
-        html += '<th style="text-align:left;padding:4px 8px;font-size:11px">Engagement</th><th style="text-align:left;padding:4px 8px;font-size:11px">Banque</th><th style="text-align:left;padding:4px 8px;font-size:11px">Montant</th><th style="text-align:left;padding:4px 8px;font-size:11px">Periodicite</th><th style="text-align:left;padding:4px 8px;font-size:11px">Periode</th><th style="text-align:left;padding:4px 8px;font-size:11px">Prochaine echeance</th><th style="text-align:left;padding:4px 8px;font-size:11px">Statut</th><th></th>';
+        html += '<th style="text-align:left;padding:4px 8px;font-size:11px">Engagement</th><th style="text-align:left;padding:4px 8px;font-size:11px">Banque</th><th style="text-align:left;padding:4px 8px;font-size:11px">Montant</th><th style="text-align:left;padding:4px 8px;font-size:11px">Periodicite</th><th style="text-align:left;padding:4px 8px;font-size:11px">Periode</th><th style="text-align:left;padding:4px 8px;font-size:11px">Prochaine echeance</th><th style="text-align:left;padding:4px 8px;font-size:11px">Facture</th><th style="text-align:left;padding:4px 8px;font-size:11px">Statut</th><th></th>';
         html += '</tr></thead><tbody>';
         b.engagements.forEach(function(e){ html += htmlLigneEngagement(e, maintenant); });
         html += '</tbody></table></div></td></tr>';
@@ -14279,11 +14394,11 @@ function pageEngagementsBancaires(){
   }
 
   html += '<div class="card"><div class="tw"><table><thead><tr>';
-  html += '<th>Engagement</th><th>Banque / organisme</th><th>Montant</th><th>Periodicite</th><th>Periode</th><th>Prochaine echeance</th><th>Statut</th><th></th>';
+  html += '<th>Engagement</th><th>Banque / organisme</th><th>Montant</th><th>Periodicite</th><th>Periode</th><th>Prochaine echeance</th><th>Facture</th><th>Statut</th><th></th>';
   html += '</tr></thead><tbody>';
 
   if(!ENGAGEMENTS_BANCAIRES.length){
-    html += '<tr><td colspan="8"><div class="empty">Aucun engagement bancaire enregistre.</div></td></tr>';
+    html += '<tr><td colspan="9"><div class="empty">Aucun engagement bancaire enregistre.</div></td></tr>';
   }
 
   ENGAGEMENTS_BANCAIRES.forEach(function(e){
@@ -14357,9 +14472,71 @@ function openEngagementForm(id){
   document.getElementById('engagementDescriptif').value = e ? (e.descriptif||'') : '';
   remplirEngagementOrganismeSelect(e ? (e.organisme||'') : '');
   onChangePeriodiciteEngagement();
+  engagementFormFacturesLiees = e && e.facturesLiees ? e.facturesLiees.slice() : [];
+  document.getElementById('engagementFactureRecherche').value = '';
+  document.getElementById('engagementFactureSuggestions').style.display = 'none';
+  document.getElementById('engagementFactureSuggestions').innerHTML = '';
+  renderEngagementFacturesLieesListe();
   document.getElementById('modalEngagement').style.display = 'flex';
 }
 function closeEngagementForm(){ document.getElementById('modalEngagement').style.display='none'; }
+
+// ── Factures liees dans le formulaire d'engagement ──
+var engagementFormFacturesLiees = []; // etat temporaire pendant l'edition du formulaire
+
+function renderEngagementFacturesLieesListe(){
+  var wrap = document.getElementById('engagementFacturesLieesListe');
+  if(!wrap) return;
+  if(!engagementFormFacturesLiees.length){
+    wrap.innerHTML = '<div class="xs muted">Aucune facture liee pour l\'instant.</div>';
+    return;
+  }
+  var html = '';
+  engagementFormFacturesLiees.forEach(function(f, idx){
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;background:#f5f4f1;border-radius:6px;margin-bottom:4px">';
+    html += '<span class="xs"><strong>'+(f.numFacture||'(sans numero)')+'</strong> — '+f.client+' — '+f.montant.toLocaleString('fr-FR')+' FCFA</span>';
+    html += '<button type="button" class="btn btn-sm" data-idx="'+idx+'" onclick="retirerFactureLieeByEl(this)" style="color:#A32D2D;padding:2px 6px;font-size:10px">&#x2715;</button>';
+    html += '</div>';
+  });
+  wrap.innerHTML = html;
+}
+function rechercherFactureAAjouter(texte){
+  var box = document.getElementById('engagementFactureSuggestions');
+  var q = texte.trim().toLowerCase();
+  if(q.length<2){ box.style.display='none'; box.innerHTML=''; return; }
+  var eligibles = collecterFacturesEligibles(engagementEditId);
+  var dejaAjoutees = engagementFormFacturesLiees.map(function(f){return f.refKey;});
+  var resultats = eligibles.filter(function(f){
+    return dejaAjoutees.indexOf(f.refKey)===-1 &&
+      ((f.client||'').toLowerCase().indexOf(q)>=0 || (f.numFacture||'').toLowerCase().indexOf(q)>=0);
+  }).slice(0,8);
+  window._facturesSuggerees = resultats;
+  if(!resultats.length){ box.style.display='block'; box.innerHTML='<div class="xs muted" style="padding:8px">Aucun resultat.</div>'; return; }
+  var html = '';
+  resultats.forEach(function(f, idx){
+    html += '<div style="padding:6px 8px;cursor:pointer;border-bottom:1px solid #f0ede8" data-refidx="'+idx+'" onclick="ajouterFactureLieeByEl(this)">';
+    html += '<div class="xs fw7">'+(f.numFacture||'(sans numero)')+' — '+f.client+'</div>';
+    html += '<div class="xs muted">'+f.montant.toLocaleString('fr-FR')+' FCFA</div>';
+    html += '</div>';
+  });
+  box.innerHTML = html;
+  box.style.display = 'block';
+}
+function ajouterFactureLieeByEl(el){
+  var idx = parseInt(el.getAttribute('data-refidx'),10);
+  var f = (window._facturesSuggerees||[])[idx];
+  if(!f) return;
+  engagementFormFacturesLiees.push(f);
+  document.getElementById('engagementFactureRecherche').value = '';
+  document.getElementById('engagementFactureSuggestions').style.display = 'none';
+  document.getElementById('engagementFactureSuggestions').innerHTML = '';
+  renderEngagementFacturesLieesListe();
+}
+function retirerFactureLieeByEl(el){
+  var idx = parseInt(el.getAttribute('data-idx'),10);
+  engagementFormFacturesLiees.splice(idx,1);
+  renderEngagementFacturesLieesListe();
+}
 function submitEngagementForm(){
   var nom = document.getElementById('engagementNom').value.trim();
   if(!nom){ alert('Le nom est obligatoire.'); return; }
@@ -14373,7 +14550,8 @@ function submitEngagementForm(){
   var payload = {
     nom:nom, organisme:organisme, montant:montant, periodicite:periodicite, descriptif:descriptif,
     dateDebut: (periodicite!=='unique' && dateDebutStr) ? new Date(dateDebutStr).getTime() : null,
-    dateFin: (periodicite!=='unique' && dateFinStr) ? new Date(dateFinStr).getTime() : null
+    dateFin: (periodicite!=='unique' && dateFinStr) ? new Date(dateFinStr).getTime() : null,
+    facturesLiees: engagementFormFacturesLiees.slice()
   };
   if(periodicite==='unique'){
     var dateStr = document.getElementById('engagementDate').value;
@@ -14393,6 +14571,7 @@ function submitEngagementForm(){
       e.nom=payload.nom; e.organisme=payload.organisme; e.montant=payload.montant; e.periodicite=payload.periodicite;
       e.jourEcheance=payload.jourEcheance; e.moisEcheance=payload.moisEcheance; e.dateEcheance=payload.dateEcheance;
       e.descriptif=payload.descriptif; e.dateDebut=payload.dateDebut; e.dateFin=payload.dateFin;
+      e.facturesLiees=payload.facturesLiees;
     }
   } else {
     payload.id = 'eb'+Date.now(); payload.actif = true;
