@@ -14129,7 +14129,17 @@ function htmlResumeFacturesLiees(e){
   e.facturesLiees.forEach(function(f){
     html += '<div style="margin-bottom:2px">'+(f.numFacture||'(sans numero)')+' — '+f.client+htmlComplementFactureLiee(f)+'</div>';
   });
+  html += htmlTotalFacturesLiees(e.facturesLiees);
   return html;
+}
+// Total des factures liees — affiche uniquement a partir de 2 factures
+// (inutile pour une seule, le montant est deja visible sur sa ligne).
+// Reutilise partout ou une liste de factures liees est affichee : le
+// formulaire d'engagement ET tous les tableaux d'engagements bancaires.
+function htmlTotalFacturesLiees(factures){
+  if(!factures || factures.length<2) return '';
+  var total = factures.reduce(function(s,f){return s+(f.montant||0);},0);
+  return '<div style="margin-top:4px;padding-top:4px;border-top:1px dashed #ccc;font-weight:700">Total : '+total.toLocaleString('fr-FR')+' FCFA ('+factures.length+' factures)</div>';
 }
 // Toutes les refKey deja liees a n'importe quel engagement, sauf celui
 // exclu (utile en edition, pour que l'engagement retrouve ses propres
@@ -14282,6 +14292,7 @@ function htmlLigneEngagement(e, maintenant){
     e.facturesLiees.forEach(function(f){
       html += '<div style="margin-bottom:3px"><strong>'+(f.numFacture||'(sans numero)')+'</strong> — '+f.client+htmlComplementFactureLiee(f)+' <span class="muted">('+f.montant.toLocaleString('fr-FR')+' FCFA)</span></div>';
     });
+    html += htmlTotalFacturesLiees(e.facturesLiees);
   } else {
     html += '<span class="muted">—</span>';
   }
@@ -14556,6 +14567,7 @@ function renderEngagementFacturesLieesListe(){
     html += '<button type="button" class="btn btn-sm" data-idx="'+idx+'" onclick="retirerFactureLieeByEl(this)" style="color:#A32D2D;padding:2px 6px;font-size:10px">&#x2715;</button>';
     html += '</div>';
   });
+  html += htmlTotalFacturesLiees(engagementFormFacturesLiees);
   wrap.innerHTML = html;
 }
 function rechercherFactureAAjouter(texte){
