@@ -9731,7 +9731,9 @@ function htmlCellulesFactureDetail(d){
   if(d.isForfaitFacture){
     var numFactCellF = d.numeroFactureExterne ? '<span style="font-family:monospace">'+d.numeroFactureExterne+'</span>' : '<span class="xs muted">—</span>';
     var refCellF = d.numeroSecondaire ? '<span class="xs">'+d.numeroSecondaire+'</span>' : '<span class="xs muted">—</span>';
-    h += '<td class="xs">'+numFactCellF+'<br>'+refCellF+'</td>';
+    var engLieF = trouverEngagementPourFacture(refKeyFacture('forfait', (d.periodeKey||'')+'::'+d.client));
+    var badgeAvanceF = engLieF ? '<div style="margin-top:2px"><span class="badge b-amber" style="font-size:9px" title="Facture liee a une avance bancaire">&#x1F517; '+engLieF.nom+'</span></div>' : '';
+    h += '<td class="xs">'+numFactCellF+'<br>'+refCellF+badgeAvanceF+'</td>';
 
     var delaiTxtF;
     if(d.statut==='emise_attente_depot') delaiTxtF = '<span class="xs" style="color:#854F0B;font-weight:600">Emise, a deposer</span>';
@@ -9760,7 +9762,9 @@ function htmlCellulesFactureDetail(d){
     numFactCell = '<span class="xs muted">—</span>';
   }
   var refCell = d.numeroSecondaire ? '<span class="xs">'+d.numeroSecondaire+'</span>' : '<span class="xs muted">—</span>';
-  h += '<td class="xs">'+numFactCell+'<br>'+refCell+'</td>';
+  var engLieD = trouverEngagementPourFacture(refKeyFacture('devis', d.id));
+  var badgeAvanceD = engLieD ? '<div style="margin-top:2px"><span class="badge b-amber" style="font-size:9px" title="Facture liee a une avance bancaire">&#x1F517; '+engLieD.nom+'</span></div>' : '';
+  h += '<td class="xs">'+numFactCell+'<br>'+refCell+badgeAvanceD+'</td>';
 
   var delaiTxt;
   if(!d.factureDeposee) delaiTxt = '<span class="xs muted">En attente de depot</span>';
@@ -9953,7 +9957,11 @@ function ouvrirStatutFacturesClient(client){
       html += '<td class="xs">'+libelle+'</td>';
       html += '<td style="text-align:right;font-weight:700">'+f.reste.toLocaleString('fr-FR')+'</td>';
       html += '<td class="xs">'+(f.numeroFactureExterne||'—')+'</td>';
-      html += '<td class="xs">'+(f.numeroSecondaire||'—')+'</td>';
+      html += '<td class="xs">'+(f.numeroSecondaire||'—')+(function(){
+        var refKeyF = f.type==='forfait' ? refKeyFacture('forfait', (f.periodeKey||'')+'::'+client) : refKeyFacture('devis', f.id);
+        var engLieF2 = trouverEngagementPourFacture(refKeyF);
+        return engLieF2 ? '<div style="margin-top:2px"><span class="badge b-amber" style="font-size:9px" title="Facture liee a une avance bancaire">&#x1F517; '+engLieF2.nom+'</span></div>' : '';
+      })()+'</td>';
       html += '<td class="xs">'+depotTxt+'</td>';
       html += '<td class="xs">'+echeanceTxt+'</td>';
       html += '<td><span class="badge '+statutBadge+'">'+statutLabel+'</span></td>';
@@ -13473,17 +13481,19 @@ function htmlTableauEngagementsHistorique(historique){
     return '<div class="card"><div class="empty">Aucun paiement ne correspond a ces criteres.</div></div>';
   }
   var moisLabels = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
-  var html = '<div class="card"><div class="tw"><table><thead><tr><th>Date de paiement</th><th>Engagement</th><th>Banque</th><th>Mois regle</th><th style="text-align:center">Delai</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
+  var html = '<div class="card"><div class="tw"><table><thead><tr><th>Date de paiement</th><th>Engagement</th><th>Banque</th><th>Mois regle</th><th>Facture</th><th style="text-align:center">Delai</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
   historique.forEach(function(h){
     var dtPaiement = new Date(h.datePaiement);
     var dtEcheance = new Date(h.dateEcheance);
     var delaiTxt = h.delai===null ? '—' : (h.delai>0 ? '+'+h.delai+' j' : (h.delai<0 ? h.delai+' j' : 'A temps'));
     var delaiColor = h.delai===null ? '#888' : (h.delai>0 ? '#A32D2D' : '#3B6D11');
+    var engagementRef = ENGAGEMENTS_BANCAIRES.find(function(x){return x.id===h.engagementId;});
     html += '<tr>';
     html += '<td class="xs">'+dtPaiement.toLocaleDateString('fr-FR')+'</td>';
     html += '<td><strong>'+h.nom+'</strong></td>';
     html += '<td class="xs muted">'+(h.organisme||'—')+'</td>';
     html += '<td class="xs">'+moisLabels[dtEcheance.getMonth()]+' '+dtEcheance.getFullYear()+'</td>';
+    html += '<td class="xs">'+(engagementRef?htmlResumeFacturesLiees(engagementRef):'<span class="muted">—</span>')+'</td>';
     html += '<td style="text-align:center;color:'+delaiColor+'">'+delaiTxt+'</td>';
     html += '<td style="text-align:right;font-weight:700;font-family:monospace">'+h.montant.toLocaleString('fr-FR')+' FCFA</td>';
     html += '<td><button class="btn btn-sm" data-egid="'+h.engagementId+'" data-paiement-idx="'+h.paiementIndex+'" onclick="annulerPaiementEngagementByEl(this)" style="color:#A32D2D;border-color:#E0A0A0" title="Annuler ce versement">&#x21BA; Annuler</button></td>';
@@ -14076,6 +14086,51 @@ function estEngagementSolde(e){
 function refKeyFacture(refType, idOuPeriode){
   return refType+'::'+idOuPeriode;
 }
+// Verifie EN DIRECT (pas une valeur figee au moment de la liaison) si une
+// facture liee a deja ete entierement reglee par le client — le
+// rattachement a une avance ne change rien au fait que le client peut
+// tres bien payer sa facture entre-temps, independamment du credit.
+function factureLieeEstPayee(f){
+  if(f.refType==='devis'){
+    var v = vehicles.find(function(x){return x.id===f.vehId;});
+    if(!v || !v.chiffrage || !v.chiffrage.lignes) return false;
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+    var total = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var paye = parseFloat(v.montantPaye)||0;
+    return total>0 && paye>=total;
+  }
+  if(f.refType==='forfait'){
+    var facture = FORFAIT_FACTURES.find(function(x){return x.periodeKey===f.periodeKey && x.client===f.client;});
+    if(!facture) return false;
+    if(facture.statut==='payee') return true;
+    var paye2 = parseFloat(facture.montantPaye)||0;
+    return (facture.montant||0)>0 && paye2>=facture.montant;
+  }
+  return false;
+}
+// Complement d'affichage pour une facture liee (mois du forfait + date de
+// depot + statut de paiement) — reutilise partout ou une facture liee est
+// affichee (formulaire, tableaux d'engagements, historique...), pour une
+// presentation uniforme.
+function htmlComplementFactureLiee(f){
+  var complement = '';
+  if(f.refType==='forfait' && f.periodeKey) complement += ' — Forfait '+formaterLabelPeriode(f.periodeKey,'mois');
+  if(f.dateDepot) complement += ' — depose le '+new Date(f.dateDepot).toLocaleDateString('fr-FR');
+  if(factureLieeEstPayee(f)) complement += ' <span class="badge b-green" style="font-size:9px">&#x2714; Payee</span>';
+  return complement;
+}
+// Resume compact des factures liees a un engagement — utilise dans les
+// tableaux "Echeances en retard" / "Engagements mois en cours", qui
+// n'ont qu'une seule ligne par echeance (pas de place pour le detail
+// complet comme dans le tableau principal).
+function htmlResumeFacturesLiees(e){
+  if(!e.facturesLiees || !e.facturesLiees.length) return '<span class="muted">—</span>';
+  var html = '';
+  e.facturesLiees.forEach(function(f){
+    html += '<div style="margin-bottom:2px">'+(f.numFacture||'(sans numero)')+' — '+f.client+htmlComplementFactureLiee(f)+'</div>';
+  });
+  return html;
+}
 // Toutes les refKey deja liees a n'importe quel engagement, sauf celui
 // exclu (utile en edition, pour que l'engagement retrouve ses propres
 // factures deja liees dans la liste des "disponibles").
@@ -14100,7 +14155,7 @@ function collecterFacturesEligibles(engagementIdExclu){
     if(total<=0 || paye>=total) return;
     var refKey = refKeyFacture('devis', v.id);
     if(dejaLiees[refKey]) return;
-    resultats.push({refKey:refKey, refType:'devis', vehId:v.id, periodeKey:null, numFacture:v.numeroFactureExterne||'', client:v.client, montant:total});
+    resultats.push({refKey:refKey, refType:'devis', vehId:v.id, periodeKey:null, numFacture:v.numeroFactureExterne||'', client:v.client, montant:total, dateDepot:v.factureDeposeeLe||null});
   });
   FORFAIT_FACTURES.forEach(function(f){
     if(f.statut!=='deposee' && f.statut!=='emise') return;
@@ -14108,7 +14163,7 @@ function collecterFacturesEligibles(engagementIdExclu){
     if((f.montant||0)<=0 || paye>=f.montant) return;
     var refKey = refKeyFacture('forfait', f.periodeKey+'::'+f.client);
     if(dejaLiees[refKey]) return;
-    resultats.push({refKey:refKey, refType:'forfait', vehId:null, periodeKey:f.periodeKey, numFacture:f.numeroFactureExterne||'', client:f.client, montant:f.montant});
+    resultats.push({refKey:refKey, refType:'forfait', vehId:null, periodeKey:f.periodeKey, numFacture:f.numeroFactureExterne||'', client:f.client, montant:f.montant, dateDepot:f.deposeeDate||f.emiseDate||null});
   });
   return resultats;
 }
@@ -14225,7 +14280,7 @@ function htmlLigneEngagement(e, maintenant){
   html += '<td class="xs">';
   if(e.facturesLiees && e.facturesLiees.length){
     e.facturesLiees.forEach(function(f){
-      html += '<div style="margin-bottom:3px"><strong>'+(f.numFacture||'(sans numero)')+'</strong> — '+f.client+' <span class="muted">('+f.montant.toLocaleString('fr-FR')+' FCFA)</span></div>';
+      html += '<div style="margin-bottom:3px"><strong>'+(f.numFacture||'(sans numero)')+'</strong> — '+f.client+htmlComplementFactureLiee(f)+' <span class="muted">('+f.montant.toLocaleString('fr-FR')+' FCFA)</span></div>';
     });
   } else {
     html += '<span class="muted">—</span>';
@@ -14323,13 +14378,14 @@ function pageEngagementsBancaires(){
   if(echeancesEnRetardListe.length){
     html += '<div class="card" style="margin-bottom:16px;border:1px solid #E0A0A0">';
     html += '<div class="card-head" style="color:#A32D2D">&#x26A0; Echeances en retard ('+echeancesEnRetardListe.length+')</div>';
-    html += '<div class="tw"><table><thead><tr><th>Engagement</th><th>Banque</th><th>Date d\'echeance</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
+    html += '<div class="tw"><table><thead><tr><th>Engagement</th><th>Banque</th><th>Date d\'echeance</th><th>Facture</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
     echeancesEnRetardListe.forEach(function(item){
       var jours = Math.floor((maintenant-item.dateEcheance)/86400000);
       html += '<tr>';
       html += '<td><strong>'+item.engagement.nom+'</strong></td>';
       html += '<td class="xs muted">'+(item.engagement.organisme||'—')+'</td>';
       html += '<td class="xs" style="color:#A32D2D">'+new Date(item.dateEcheance).toLocaleDateString('fr-FR')+' <span class="xs muted">('+jours+' j)</span></td>';
+      html += '<td class="xs">'+htmlResumeFacturesLiees(item.engagement)+'</td>';
       html += '<td style="text-align:right;font-family:monospace;font-weight:700">'+(parseFloat(item.engagement.montant)||0).toLocaleString('fr-FR')+' FCFA</td>';
       html += '<td><button class="btn btn-success btn-sm" data-egid="'+item.engagement.id+'" onclick="marquerEcheancePayeeByEl(this)">&#x2714; Marquer payee</button></td>';
       html += '</tr>';
@@ -14351,13 +14407,14 @@ function pageEngagementsBancaires(){
   if(moisEnCoursListe.length){
     html += '<div class="card" style="margin-bottom:16px;border:1px solid #d0cec9">';
     html += '<div class="card-head">&#x1F4C5; Engagements mois en cours ('+moisEnCoursListe.length+')</div>';
-    html += '<div class="tw"><table><thead><tr><th>Engagement</th><th>Banque</th><th>Date d\'echeance</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
+    html += '<div class="tw"><table><thead><tr><th>Engagement</th><th>Banque</th><th>Date d\'echeance</th><th>Facture</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
     moisEnCoursListe.forEach(function(item){
       var joursRestants = Math.ceil((item.dateEcheance-maintenant)/86400000);
       html += '<tr>';
       html += '<td><strong>'+item.engagement.nom+'</strong></td>';
       html += '<td class="xs muted">'+(item.engagement.organisme||'—')+'</td>';
       html += '<td class="xs">'+new Date(item.dateEcheance).toLocaleDateString('fr-FR')+' <span class="xs muted">(dans '+joursRestants+' j)</span></td>';
+      html += '<td class="xs">'+htmlResumeFacturesLiees(item.engagement)+'</td>';
       html += '<td style="text-align:right;font-family:monospace;font-weight:700">'+(parseFloat(item.engagement.montant)||0).toLocaleString('fr-FR')+' FCFA</td>';
       html += '<td><button class="btn btn-success btn-sm" data-egid="'+item.engagement.id+'" onclick="marquerEcheancePayeeByEl(this)">&#x2714; Marquer payee</button></td>';
       html += '</tr>';
@@ -14493,8 +14550,9 @@ function renderEngagementFacturesLieesListe(){
   }
   var html = '';
   engagementFormFacturesLiees.forEach(function(f, idx){
+    var complement = htmlComplementFactureLiee(f);
     html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;background:#f5f4f1;border-radius:6px;margin-bottom:4px">';
-    html += '<span class="xs"><strong>'+(f.numFacture||'(sans numero)')+'</strong> — '+f.client+' — '+f.montant.toLocaleString('fr-FR')+' FCFA</span>';
+    html += '<span class="xs"><strong>'+(f.numFacture||'(sans numero)')+'</strong> — '+f.client+complement+' — '+f.montant.toLocaleString('fr-FR')+' FCFA</span>';
     html += '<button type="button" class="btn btn-sm" data-idx="'+idx+'" onclick="retirerFactureLieeByEl(this)" style="color:#A32D2D;padding:2px 6px;font-size:10px">&#x2715;</button>';
     html += '</div>';
   });
@@ -14514,8 +14572,9 @@ function rechercherFactureAAjouter(texte){
   if(!resultats.length){ box.style.display='block'; box.innerHTML='<div class="xs muted" style="padding:8px">Aucun resultat.</div>'; return; }
   var html = '';
   resultats.forEach(function(f, idx){
+    var complement = htmlComplementFactureLiee(f);
     html += '<div style="padding:6px 8px;cursor:pointer;border-bottom:1px solid #f0ede8" data-refidx="'+idx+'" onclick="ajouterFactureLieeByEl(this)">';
-    html += '<div class="xs fw7">'+(f.numFacture||'(sans numero)')+' — '+f.client+'</div>';
+    html += '<div class="xs fw7">'+(f.numFacture||'(sans numero)')+' — '+f.client+complement+'</div>';
     html += '<div class="xs muted">'+f.montant.toLocaleString('fr-FR')+' FCFA</div>';
     html += '</div>';
   });
