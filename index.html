@@ -11440,6 +11440,11 @@ var chargesFixesHistoriquePeriode = 'tous'; // 'mois','trimestre','annee','tous'
 var chargesFixesHistoriqueDebut = '';
 var chargesFixesHistoriqueFin = '';
 var _chargesFixesHistoriquePeriodeFiltree = [];
+var engagementsBancairesVue = 'liste'; // 'liste','historique'
+var engagementsHistoriquePeriode = 'tous'; // 'mois','trimestre','annee','tous','custom'
+var engagementsHistoriqueDebut = '';
+var engagementsHistoriqueFin = '';
+var _engagementsHistoriquePeriodeFiltree = [];
 var dettesHistoriquePeriode = 'tous'; // 'mois','trimestre','annee','tous','custom'
 var dettesHistoriqueDebut = '';
 var dettesHistoriqueFin = '';
@@ -13380,6 +13385,114 @@ function collecterHistoriquePaiementsEngagements(){
   return historique;
 }
 
+// Annule un versement precis (par index) sur un engagement bancaire —
+// corrige une erreur de saisie sans affecter les autres versements du
+// meme engagement.
+function annulerPaiementEngagementByEl(btn){
+  var id = btn.getAttribute('data-egid');
+  var idx = parseInt(btn.getAttribute('data-paiement-idx'),10);
+  var e = ENGAGEMENTS_BANCAIRES.find(function(x){return x.id===id;});
+  if(!e || !e.echeancesPayees || e.echeancesPayees[idx]===undefined) return;
+  var entry = e.echeancesPayees[idx];
+  var estAncienFormat = typeof entry==='number';
+  var dateEcheance = estAncienFormat ? entry : entry.dateEcheance;
+  var montant = estAncienFormat ? (parseFloat(e.montant)||0) : (parseFloat(entry.montant)||0);
+  if(!confirm('Annuler ce versement de '+montant.toLocaleString('fr-FR')+' FCFA sur "'+e.nom+'" ('+new Date(dateEcheance).toLocaleDateString('fr-FR',{month:'long',year:'numeric'})+') ? Le solde restant du sera recalcule.')) return;
+  e.echeancesPayees.splice(idx,1);
+  saveEngagementsBancaires();
+  renderPage();
+}
+
+function setEngagementsHistoriquePeriodeByEl(el){ engagementsHistoriquePeriode=el.getAttribute('data-ehp'); renderPage(); }
+
+function pageEngagementsBancairesHistorique(){
+  var historiqueComplet = collecterHistoriquePaiementsEngagements();
+
+  var today = new Date();
+  var borneDebut = 0, borneFin = null;
+  if(engagementsHistoriquePeriode==='mois') borneDebut = new Date(today.getFullYear(), today.getMonth(), 1).getTime();
+  else if(engagementsHistoriquePeriode==='trimestre'){ var q=Math.floor(today.getMonth()/3)*3; borneDebut=new Date(today.getFullYear(),q,1).getTime(); }
+  else if(engagementsHistoriquePeriode==='annee') borneDebut = new Date(today.getFullYear(), 0, 1).getTime();
+  else if(engagementsHistoriquePeriode==='custom' && engagementsHistoriqueDebut){
+    borneDebut = new Date(engagementsHistoriqueDebut).setHours(0,0,0,0);
+    if(engagementsHistoriqueFin) borneFin = new Date(engagementsHistoriqueFin).setHours(23,59,59,999);
+  }
+  var historique = historiqueComplet.filter(function(h){
+    if(borneDebut>0 && h.datePaiement<borneDebut) return false;
+    if(borneFin && h.datePaiement>borneFin) return false;
+    return true;
+  });
+  _engagementsHistoriquePeriodeFiltree = historique;
+
+  var totalPaye = historique.reduce(function(s,h){return s+h.montant;},0);
+
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+  html += '<h2 style="font-size:16px;font-weight:700;margin:0">Historique des paiements — Engagements bancaires</h2>';
+  html += '<button class="btn btn-sm" onclick="engagementsBancairesVue=\'liste\';renderPage()">&#x2190; Retour aux engagements</button>';
+  html += '</div>';
+
+  html += '<div class="card" style="padding:10px 14px;margin-bottom:12px">';
+  html += '<input class="inp" id="engagementsHistoriqueRecherche" placeholder="Rechercher un engagement ou une banque..." oninput="rechercherEngagementsHistorique(this.value)" autocomplete="off">';
+  html += '</div>';
+
+  html += '<div class="flex gap6" style="margin-bottom:16px;flex-wrap:wrap">';
+  ['mois','trimestre','annee','tous','custom'].forEach(function(p){
+    var lbl = {mois:'Ce mois', trimestre:'Ce trimestre', annee:'Cette annee', tous:'Tout', custom:'Personnalise'}[p];
+    html += '<button class="btn btn-sm'+(engagementsHistoriquePeriode===p?' btn-primary':'')+'" data-ehp="'+p+'" onclick="setEngagementsHistoriquePeriodeByEl(this)">'+lbl+'</button>';
+  });
+  if(engagementsHistoriquePeriode==='custom'){
+    html += '<input type="date" class="inp" style="width:auto" value="'+engagementsHistoriqueDebut+'" onchange="engagementsHistoriqueDebut=this.value;renderPage()">';
+    html += '<span class="xs muted">&rarr;</span>';
+    html += '<input type="date" class="inp" style="width:auto" value="'+engagementsHistoriqueFin+'" onchange="engagementsHistoriqueFin=this.value;renderPage()">';
+  }
+  html += '</div>';
+
+  html += '<div class="kgrid k2" style="margin-bottom:16px">';
+  html += kpi('Paiements enregistres', historique.length, '');
+  html += kpi('Total paye (periode)', totalPaye?totalPaye.toLocaleString('fr-FR')+' FCFA':'—', 'green');
+  html += '</div>';
+
+  html += '<div id="engagementsHistoriqueTableWrap">';
+  html += htmlTableauEngagementsHistorique(historique);
+  html += '</div>';
+  return html;
+}
+
+function htmlTableauEngagementsHistorique(historique){
+  if(!historique.length){
+    return '<div class="card"><div class="empty">Aucun paiement ne correspond a ces criteres.</div></div>';
+  }
+  var moisLabels = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
+  var html = '<div class="card"><div class="tw"><table><thead><tr><th>Date de paiement</th><th>Engagement</th><th>Banque</th><th>Mois regle</th><th style="text-align:center">Delai</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
+  historique.forEach(function(h){
+    var dtPaiement = new Date(h.datePaiement);
+    var dtEcheance = new Date(h.dateEcheance);
+    var delaiTxt = h.delai===null ? '—' : (h.delai>0 ? '+'+h.delai+' j' : (h.delai<0 ? h.delai+' j' : 'A temps'));
+    var delaiColor = h.delai===null ? '#888' : (h.delai>0 ? '#A32D2D' : '#3B6D11');
+    html += '<tr>';
+    html += '<td class="xs">'+dtPaiement.toLocaleDateString('fr-FR')+'</td>';
+    html += '<td><strong>'+h.nom+'</strong></td>';
+    html += '<td class="xs muted">'+(h.organisme||'—')+'</td>';
+    html += '<td class="xs">'+moisLabels[dtEcheance.getMonth()]+' '+dtEcheance.getFullYear()+'</td>';
+    html += '<td style="text-align:center;color:'+delaiColor+'">'+delaiTxt+'</td>';
+    html += '<td style="text-align:right;font-weight:700;font-family:monospace">'+h.montant.toLocaleString('fr-FR')+' FCFA</td>';
+    html += '<td><button class="btn btn-sm" data-egid="'+h.engagementId+'" data-paiement-idx="'+h.paiementIndex+'" onclick="annulerPaiementEngagementByEl(this)" style="color:#A32D2D;border-color:#E0A0A0" title="Annuler ce versement">&#x21BA; Annuler</button></td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+  return html;
+}
+
+function rechercherEngagementsHistorique(texte){
+  var wrap = document.getElementById('engagementsHistoriqueTableWrap');
+  if(!wrap) return;
+  var q = texte.trim().toLowerCase();
+  var resultats = q.length<2 ? _engagementsHistoriquePeriodeFiltree : _engagementsHistoriquePeriodeFiltree.filter(function(h){
+    return h.nom.toLowerCase().indexOf(q)>=0 || (h.organisme||'').toLowerCase().indexOf(q)>=0;
+  });
+  wrap.innerHTML = htmlTableauEngagementsHistorique(resultats);
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // PAGE HISTORIQUE DES PAIEMENTS (Finances) — deux sections : Clients
 // (encaissements, regroupes par client avec delai moyen) et Fournisseurs
@@ -13952,10 +14065,26 @@ function regrouperEngagementsParBanque(){
     };
     var b = buckets[banque];
     b.nb++;
-    // Echeances unique : somme des engagements a echeance UNIQUE (ponctuelle)
-    if(e.periodicite==='unique') b.totalEcheancesUnique += parseFloat(e.montant)||0;
-    // Echeances mensuelle : somme des engagements factures MENSUELLEMENT
-    else if(e.periodicite==='mensuel') b.totalEcheancesMensuelle += parseFloat(e.montant)||0;
+    // Echeance UNIQUE : compte uniquement si PAS encore payee — une fois
+    // reglee, elle disparait de ce total (et de la liste des echeances
+    // dues), elle bascule dans l'historique des paiements.
+    if(e.periodicite==='unique'){
+      var impayeesUnique = echeancesImpayees(e);
+      if(impayeesUnique.length) b.totalEcheancesUnique += resteDuEcheance(e, impayeesUnique[0]);
+    }
+    // Echeance MENSUELLE : ne compte QUE l'echeance du MOIS EN COURS si
+    // elle n'est pas encore payee — une fois ce mois regle, il disparait
+    // de ce total (bascule dans l'historique). Un eventuel arriere d'un
+    // mois precedent reste compte a part, dans la colonne "En retard",
+    // pas ici (pas de double affichage).
+    else if(e.periodicite==='mensuel'){
+      var nowDt = new Date(maintenant);
+      var echeanceMoisEnCours = echeancesImpayees(e).find(function(d){
+        var dt = new Date(d);
+        return dt.getFullYear()===nowDt.getFullYear() && dt.getMonth()===nowDt.getMonth();
+      });
+      if(echeanceMoisEnCours) b.totalEcheancesMensuelle += resteDuEcheance(e, echeanceMoisEnCours);
+    }
     // Restant CCT (credit court terme) : total restant du, TOUTES
     // periodicites confondues (unique, mensuel, trimestriel, annuel)
     // Restant CCT (credit court terme) : UNIQUEMENT les engagements
@@ -14008,10 +14137,13 @@ function htmlLigneEngagement(e, maintenant){
 }
 
 function pageEngagementsBancaires(){
+  if(engagementsBancairesVue==='historique') return pageEngagementsBancairesHistorique();
   var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Engagements bancaires</h2>';
+  html += '<div class="flex gap6">';
+  html += '<button class="btn btn-sm" onclick="engagementsBancairesVue=\'historique\';renderPage()">Historique paiements</button>';
   html += '<button class="btn btn-primary btn-sm" onclick="openEngagementForm(null)">+ Ajouter un engagement</button>';
-  html += '</div>';
+  html += '</div></div>';
 
   var maintenant = Date.now();
   var actifs = ENGAGEMENTS_BANCAIRES.filter(function(e){return e.actif;});
