@@ -14155,11 +14155,12 @@ function pageEngagementsBancaires(){
     .reduce(function(s,e){return s+(parseFloat(e.montant)||0);},0);
 
   // Total des engagements : capital restant du, TOUTES periodicites
-  // recurrentes confondues (mensuel/trimestriel/annuel), en tenant
+  // recurrentes confondues (mensuel/trimestriel/annuel), qu'elles aient
+  // une date de fin definie ou soient a duree indefinie — en tenant
   // compte de la periode propre a chaque engagement — inclut
   // naturellement les echeances en retard (elles restent dues tant
   // qu'elles ne sont pas marquees payees).
-  var totalEngagements = actifs.filter(function(e){return e.periodicite!=='unique' && e.dateFin;})
+  var totalEngagements = actifs.filter(function(e){return e.periodicite!=='unique';})
     .reduce(function(s,e){return s+montantRestantDu(e);},0);
 
   // Total des engagements uniques : echeances ponctuelles NON encore payees.
