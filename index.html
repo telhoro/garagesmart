@@ -14598,10 +14598,17 @@ function ajouterFactureLieeByEl(el){
   var f = (window._facturesSuggerees||[])[idx];
   if(!f) return;
   engagementFormFacturesLiees.push(f);
-  document.getElementById('engagementFactureRecherche').value = '';
-  document.getElementById('engagementFactureSuggestions').style.display = 'none';
-  document.getElementById('engagementFactureSuggestions').innerHTML = '';
   renderEngagementFacturesLieesListe();
+  // IMPORTANT : ne pas vider/fermer la recherche apres l'ajout — on
+  // relance la MEME recherche, qui exclut automatiquement la facture
+  // qu'on vient d'ajouter (deja liee), pour permettre de selectionner
+  // plusieurs factures d'un meme client a la suite sans avoir a retaper.
+  var champRecherche = document.getElementById('engagementFactureRecherche');
+  if(champRecherche.value.trim().length>=2){
+    rechercherFactureAAjouter(champRecherche.value);
+  } else {
+    document.getElementById('engagementFactureSuggestions').style.display = 'none';
+  }
 }
 function retirerFactureLieeByEl(el){
   var idx = parseInt(el.getAttribute('data-idx'),10);
