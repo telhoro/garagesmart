@@ -9934,6 +9934,16 @@ function collecterToutesFacturesClient(client){
       numeroFactureExterne:f.numeroFactureExterne||'', numeroSecondaire:f.numeroSecondaire||''
     });
   });
+
+  // Classement chronologique, de la plus ancienne a la plus recente
+  // (date de depot) — une facture pas encore deposee (dateDepot=0) n'a
+  // pas de date a classer, elle est placee en dernier plutot que d'etre
+  // traitee a tort comme "la plus ancienne".
+  factures.sort(function(a,b){
+    var da = a.dateDepot || Infinity;
+    var db = b.dateDepot || Infinity;
+    return da - db;
+  });
   return factures;
 }
 
