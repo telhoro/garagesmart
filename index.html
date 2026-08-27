@@ -27590,7 +27590,19 @@ function rechercherMouvementsCaisse(texte){
   if(q.length<2){ zone.innerHTML=''; return; }
 
   var resultats = _caisseAnalyseMvtsPeriode.filter(function(m){
-    return (m.motif||'').toLowerCase().indexOf(q)>=0 || (m.categorie||'').toLowerCase().indexOf(q)>=0;
+    if((m.motif||'').toLowerCase().indexOf(q)>=0) return true;
+    if((m.categorie||'').toLowerCase().indexOf(q)>=0) return true;
+    // Recherche egalement par client ou immatriculation du vehicule lie
+    // au mouvement — utile pour retrouver toutes les depenses en liquide
+    // engagees pour un client ou une voiture precise.
+    if(m.vehiculeId){
+      var vRech = vehicles.find(function(x){return x.id===m.vehiculeId;});
+      if(vRech){
+        if((vRech.immat||'').toLowerCase().indexOf(q)>=0) return true;
+        if((vRech.client||'').toLowerCase().indexOf(q)>=0) return true;
+      }
+    }
+    return false;
   }).sort(function(a,b){return b.date-a.date;});
 
   if(!resultats.length){
@@ -27603,10 +27615,15 @@ function rechercherMouvementsCaisse(texte){
   var html = '<div class="card" style="margin-top:8px"><div class="card-head">Resultats pour "'+texte+'" ('+resultats.length+' mouvement'+(resultats.length>1?'s':'')+')</div>';
   html += '<div class="tw"><table><thead><tr><th>Date</th><th>Type</th><th>Libelle</th><th>Categorie</th><th style="text-align:right">Montant</th></tr></thead><tbody>';
   resultats.forEach(function(m){
+    var infoVehiculeRes = '';
+    if(m.vehiculeId){
+      var vRes = vehicles.find(function(x){return x.id===m.vehiculeId;});
+      if(vRes) infoVehiculeRes = ' <span class="xs muted">— '+vRes.immat+' ('+vRes.client+')</span>';
+    }
     html += '<tr>';
     html += '<td class="xs">'+new Date(m.date).toLocaleDateString('fr-FR')+'</td>';
     html += '<td>'+(m.type==='sortie'?'<span class="badge b-red">Sortie</span>':'<span class="badge b-green">Entree</span>')+'</td>';
-    html += '<td class="xs">'+(m.motif||'—')+'</td>';
+    html += '<td class="xs">'+(m.motif||'—')+infoVehiculeRes+'</td>';
     html += '<td class="xs muted">'+(m.categorie||'—')+'</td>';
     html += '<td style="text-align:right;font-weight:700;font-family:monospace">'+(parseFloat(m.montant)||0).toLocaleString('fr-FR')+' FCFA</td>';
     html += '</tr>';
@@ -27643,7 +27660,7 @@ function pageCaisseAnalyse(){
   _caisseAnalyseMvtsPeriode = mvts;
 
   var html = '<div class="card" style="padding:10px 14px;margin-bottom:8px">';
-  html += '<input class="inp" id="caisseRecherche" placeholder="Rechercher un libelle ou une categorie (ex: un nom, un motif...)..." oninput="rechercherMouvementsCaisse(this.value)" autocomplete="off">';
+  html += '<input class="inp" id="caisseRecherche" placeholder="Rechercher un libelle, une categorie, un client ou une immatriculation..." oninput="rechercherMouvementsCaisse(this.value)" autocomplete="off">';
   html += '</div>';
   html += '<div id="caisseRechercheResultats" style="margin-bottom:16px"></div>';
 
