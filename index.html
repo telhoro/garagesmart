@@ -11506,11 +11506,11 @@ function allouerPaiementFournisseur(itemsTries, montantAPayer){
   });
   return allocations;
 }
-function appliquerAllocationsPaiementFournisseur(allocations){
+function appliquerAllocationsPaiementFournisseur(allocations, modePaiement, note){
   var maintenant = Date.now();
   allocations.forEach(function(alloc){
     if(!alloc.item.paiementsFourn) alloc.item.paiementsFourn = [];
-    alloc.item.paiementsFourn.push({date:maintenant, montant:alloc.montant});
+    alloc.item.paiementsFourn.push({date:maintenant, montant:alloc.montant, mode:modePaiement||'', note:note||''});
   });
 }
 
@@ -11543,6 +11543,7 @@ function collecterDettesFournisseurs(){
       parFourn[f.id].lignes.push({
         vehId:v.id, immat:v.immat||'—', marque:v.marque, modele:v.modele,
         client:v.client, piece:cl.piece, montant:reste, montantOriginal:(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1),
+        qte:parseInt(cl.qte)||1, prixUnitaire:parseFloat(cl.prixAchat)||0,
         montantPaye:montantPaye, dateAchat:dateAchat, dateEcheance:dateEcheance,
         joursRestants:joursRestants, statut:statut, ligneId:ligneId
       });
@@ -11573,7 +11574,8 @@ function collecterDettesFournisseurs(){
     parFourn[f.id].lignes.push({
       vehId:null, immat:'—', marque:'', modele:'',
       client:'', piece:dm.piece, montant:reste, montantOriginal:(parseFloat(dm.prixAchat)||0)*(parseInt(dm.qte)||1),
-      montantPaye:montantPaye, qte:dm.qte,
+      qte:parseInt(dm.qte)||1, prixUnitaire:parseFloat(dm.prixAchat)||0,
+      montantPaye:montantPaye,
       dateAchat:dm.dateAchat, dateEcheance:dateEcheance,
       joursRestants:joursRestants, statut:statut, ligneId:null,
       manuel:true, detteId:dm.id
@@ -12188,27 +12190,37 @@ function pageDettesFournisseurs(){
     html += '</tr>';
 
     if(expanded){
-      g.lignes.forEach(function(l){
+      html += '<tr><td colspan="5" style="padding:0;background:#faf9f7"><div style="padding:8px 16px 12px 28px">';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:#888">';
+      html += '<th style="text-align:left;padding:4px 8px;font-size:11px">Libelle</th><th style="text-align:center;padding:4px 8px;font-size:11px">Quantite</th><th style="text-align:right;padding:4px 8px;font-size:11px">Prix unitaire</th><th style="text-align:right;padding:4px 8px;font-size:11px">Prix total</th><th style="text-align:right;padding:4px 8px;font-size:11px">Reste a payer</th><th style="text-align:left;padding:4px 8px;font-size:11px">Echeance</th><th style="text-align:left;padding:4px 8px;font-size:11px">Statut</th><th></th>';
+      html += '</tr></thead><tbody>';
+      // Du plus ANCIEN au plus RECENT — pour suivre l'historique des
+      // achats dans l'ordre ou ils ont ete engages.
+      var lignesTriees = g.lignes.slice().sort(function(a,b){return (a.dateAchat||0)-(b.dateAchat||0);});
+      lignesTriees.forEach(function(l){
         var badgeLabel, badgeCls;
         if(l.statut==='retard'){ badgeLabel='En retard'; badgeCls='b-red'; }
         else if(l.statut==='a_echoir'){ badgeLabel='A echoir'; badgeCls='b-amber'; }
         else { badgeLabel='Planifie'; badgeCls='b-green'; }
-        html += '<tr class="xs">';
+        var libelle = l.manuel
+          ? '<strong>'+l.piece+'</strong> <span class="badge b-gray" style="font-size:9px">Saisie manuelle</span>'
+          : '<strong>'+l.immat+'</strong> '+(l.marque||'')+' '+(l.modele||'')+' — <span class="muted">client '+l.client+'</span>'+(l.piece?' <span class="muted">('+l.piece+')</span>':'');
+        html += '<tr style="border-top:1px solid rgba(0,0,0,0.06)">';
+        html += '<td style="padding:4px 8px">'+libelle+'</td>';
+        html += '<td style="padding:4px 8px;text-align:center">'+(l.qte||1)+'</td>';
+        html += '<td style="padding:4px 8px;text-align:right;font-family:monospace">'+(l.prixUnitaire||0).toLocaleString('fr-FR')+'</td>';
+        html += '<td style="padding:4px 8px;text-align:right;font-family:monospace">'+l.montantOriginal.toLocaleString('fr-FR')+'</td>';
+        html += '<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:700;color:#A32D2D">'+l.montant.toLocaleString('fr-FR')+'</td>';
+        html += '<td style="padding:4px 8px">'+(l.dateEcheance?new Date(l.dateEcheance).toLocaleDateString('fr-FR'):'—')+'</td>';
+        html += '<td style="padding:4px 8px"><span class="badge '+badgeCls+'">'+badgeLabel+'</span></td>';
         if(l.manuel){
-          html += '<td style="padding-left:28px"><strong>'+l.piece+'</strong> <span class="badge b-gray" style="font-size:9px">Saisie manuelle</span> <span class="muted">qte : '+(l.qte||1)+'</span></td>';
+          html += '<td style="padding:4px 8px"><button class="btn btn-success btn-sm" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();marquerDetteManuelleByEl(this)">Payer</button> <button class="btn btn-sm" style="color:#A32D2D" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();supprimerDetteManuelleByEl(this)">&#x1F5D1;</button></td>';
         } else {
-          html += '<td style="padding-left:28px"><strong>'+l.immat+'</strong> '+(l.marque||'')+' '+(l.modele||'')+' — <span class="muted">client '+l.client+'</span>'+(l.piece?' <span class="muted">('+l.piece+')</span>':'')+'</td>';
-        }
-        html += '<td style="font-family:monospace">'+l.montant.toLocaleString('fr-FR')+'</td>';
-        html += '<td style="font-family:monospace;color:#A32D2D">'+l.montant.toLocaleString('fr-FR')+'</td>';
-        html += '<td><span class="badge '+badgeCls+'">'+badgeLabel+'</span></td>';
-        if(l.manuel){
-          html += '<td><button class="btn btn-success btn-sm" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();marquerDetteManuelleByEl(this)">Payer</button> <button class="btn btn-sm" style="color:#A32D2D" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();supprimerDetteManuelleByEl(this)">&#x1F5D1;</button></td>';
-        } else {
-          html += '<td><button class="btn btn-success btn-sm" data-vid="'+l.vehId+'" data-lid="'+(l.ligneId||'')+'" onclick="event.stopPropagation();marquerLigneFournPayeeByEl(this)">Payer cette ligne</button></td>';
+          html += '<td style="padding:4px 8px"><button class="btn btn-success btn-sm" data-vid="'+l.vehId+'" data-lid="'+(l.ligneId||'')+'" onclick="event.stopPropagation();marquerLigneFournPayeeByEl(this)">Payer cette ligne</button></td>';
         }
         html += '</tr>';
       });
+      html += '</tbody></table></div></td></tr>';
     }
   });
 
@@ -12245,6 +12257,8 @@ function pageDettesFournisseurs(){
   html += '<input type="hidden" id="pfModalMode"><input type="hidden" id="pfModalVid"><input type="hidden" id="pfModalLid"><input type="hidden" id="pfModalFid"><input type="hidden" id="pfModalDetteId">';
   html += '<div class="xs muted" style="margin-bottom:10px">Reste du : <strong id="pfModalResteDu" style="color:#A32D2D"></strong></div>';
   html += '<div class="fr"><label class="fl">Montant a regler (FCFA) <span style="color:red">*</span></label><input class="inp" type="number" min="1" id="pfModalMontant"></div>';
+  html += '<div class="fr" style="margin-top:10px"><label class="fl">Mode de paiement</label><select class="inp" id="pfModalModePaiement"><option value="especes">Especes</option><option value="virement">Virement</option><option value="cheque">Cheque</option><option value="mobile_money">Mobile Money</option><option value="autre">Autre</option></select></div>';
+  html += '<div class="fr" style="margin-top:10px"><label class="fl">Note / Reference <span class="xs muted">(optionnel)</span></label><textarea class="inp" id="pfModalNote" rows="2" placeholder="Ex: Cheque n 00452, virement ref TRX-..., etc."></textarea></div>';
   html += '<div class="xs muted" style="margin-top:6px">Un montant inferieur au reste du enregistre un paiement PARTIEL — la dette reste active pour le solde restant, et ce versement figurera dans l\'historique.</div>';
   html += '</div>';
   html += '<div class="mfoot"><button class="btn" onclick="fermerModalPaiementFournisseur()">Annuler</button><button class="btn btn-primary" onclick="confirmerPaiementFournisseur()">Enregistrer le paiement</button></div>';
@@ -12327,6 +12341,8 @@ function fermerModalPaiementFournisseur(){
 // dettes concernees) et enregistre chaque versement individuellement.
 function confirmerPaiementFournisseur(){
   var mode = document.getElementById('pfModalMode').value;
+  var modePaiementChoisi = (document.getElementById('pfModalModePaiement')||{}).value || '';
+  var noteChoisie = ((document.getElementById('pfModalNote')||{}).value || '').trim();
   var montantSaisi = parseFloat(document.getElementById('pfModalMontant').value);
   if(!montantSaisi || montantSaisi<=0){ alert('Indiquez un montant valide.'); return; }
 
@@ -12338,7 +12354,7 @@ function confirmerPaiementFournisseur(){
     if(!cl){ alert('Dette introuvable.'); return; }
     var reste = resteDuDette(cl);
     if(montantSaisi>reste){ alert('Le montant saisi depasse le reste du ('+reste.toLocaleString('fr-FR')+' FCFA).'); return; }
-    appliquerAllocationsPaiementFournisseur(allouerPaiementFournisseur([cl], montantSaisi));
+    appliquerAllocationsPaiementFournisseur(allouerPaiementFournisseur([cl], montantSaisi), modePaiementChoisi, noteChoisie);
     saveV();
   } else if(mode==='detteManuelle'){
     var detteId = document.getElementById('pfModalDetteId').value;
@@ -12346,7 +12362,7 @@ function confirmerPaiementFournisseur(){
     if(!dm){ alert('Dette introuvable.'); return; }
     var resteM = resteDuDette(dm);
     if(montantSaisi>resteM){ alert('Le montant saisi depasse le reste du ('+resteM.toLocaleString('fr-FR')+' FCFA).'); return; }
-    appliquerAllocationsPaiementFournisseur(allouerPaiementFournisseur([dm], montantSaisi));
+    appliquerAllocationsPaiementFournisseur(allouerPaiementFournisseur([dm], montantSaisi), modePaiementChoisi, noteChoisie);
     saveDettesManuelles();
   } else if(mode==='fournisseur'){
     var fid = document.getElementById('pfModalFid').value;
@@ -12372,7 +12388,7 @@ function confirmerPaiementFournisseur(){
     // allouerPaiementFournisseur lit resteDuDette(item) — on lui passe
     // directement les objets REELS (it.ref), pas les wrappers.
     var itemsReels = items.map(function(it){return it.ref;});
-    appliquerAllocationsPaiementFournisseur(allouerPaiementFournisseur(itemsReels, montantSaisi));
+    appliquerAllocationsPaiementFournisseur(allouerPaiementFournisseur(itemsReels, montantSaisi), modePaiementChoisi, noteChoisie);
     saveV();
     saveDettesManuelles();
   }
@@ -12582,7 +12598,7 @@ function collecterHistoriquePaiementsFournisseurs(){
       cl.paiementsFourn.forEach(function(p, idx){
         historique.push({
           type:'auto', fournisseur:f.nom,
-          piece:cl.piece, montant:p.montant, datePaiement:p.date||0,
+          piece:cl.piece, montant:p.montant, datePaiement:p.date||0, mode:p.mode||'', note:p.note||'',
           dateEcheance:dateEcheance, delai: dateEcheance ? Math.round((p.date-dateEcheance)/86400000) : null,
           vehId:v.id, ligneId: cl.devisId||cl.libreId||cl.id||null, immat:v.immat,
           paiementIndex: idx
@@ -12596,7 +12612,7 @@ function collecterHistoriquePaiementsFournisseurs(){
     dm.paiementsFourn.forEach(function(p, idx){
       historique.push({
         type:'manuel', fournisseur: f?f.nom:'—',
-        piece:dm.piece, montant:p.montant, datePaiement:p.date||0,
+        piece:dm.piece, montant:p.montant, datePaiement:p.date||0, mode:p.mode||'', note:p.note||'',
         dateEcheance: dm.dateEcheance||null, delai: dm.dateEcheance ? Math.round((p.date-dm.dateEcheance)/86400000) : null,
         detteId:dm.id, paiementIndex: idx
       });
@@ -13676,7 +13692,11 @@ function htmlHistoriquePaiementsAutres(){
   html += kpi('Total paye', totalPayeTotal?totalPayeTotal.toLocaleString('fr-FR')+' FCFA':'—', '');
   html += '</div>';
 
-  html += htmlBlocCategoriePaiement('fournisseur', 'Fournisseurs', histFourn, function(h){return h.fournisseur;}, function(h){return h.piece;});
+  html += htmlBlocCategoriePaiement('fournisseur', 'Fournisseurs', histFourn, function(h){return h.fournisseur;}, function(h){
+    var modeLabels = {especes:'Especes', virement:'Virement', cheque:'Cheque', mobile_money:'Mobile Money', autre:'Autre'};
+    var modeTxt = h.mode ? (modeLabels[h.mode]||h.mode) : '';
+    return [h.piece, modeTxt, h.note].filter(Boolean).join(' — ');
+  });
   html += htmlBlocCategoriePaiement('charges', 'Charges fixes', histCharges, function(h){return h.nom;}, function(){return '';});
   html += htmlBlocCategoriePaiement('engagements', 'Engagements bancaires', histEngage, function(h){return h.nom+(h.organisme?' ('+h.organisme+')':'');}, function(){return '';});
   return html;
@@ -18918,6 +18938,12 @@ function sortirStockVehicule(v){
   }
 }
 
+function onChangeModeStockPaiement(){
+  var mode = (document.getElementById('stk_mode_paiement')||{}).value;
+  var wrap = document.getElementById('stk_dateEcheance_wrap');
+  if(wrap) wrap.style.display = (mode==='credit') ? '' : 'none';
+}
+
 function ajouterEntreeStock(){
   var fournId = (document.getElementById('stk_fourn')||{}).value || '';
   var nom     = ((document.getElementById('stk_nom')||{}).value || '').trim();
@@ -18926,6 +18952,8 @@ function ajouterEntreeStock(){
   var qte     = parseInt((document.getElementById('stk_qte')||{}).value, 10);
   var prix    = parseFloat((document.getElementById('stk_prix')||{}).value);
   var seuil   = parseInt((document.getElementById('stk_seuil')||{}).value, 10);
+  var modePaiement = (document.getElementById('stk_mode_paiement')||{}).value || 'cash';
+  var dateEcheanceStr = (document.getElementById('stk_dateEcheance')||{}).value || '';
 
   // Controles : toast visible dans l'application (les boites natives peuvent etre bloquees)
   if(!fournId){ afficherToastNotif('Fournisseur manquant', 'Choisissez un fournisseur.', 'alerte'); return; }
@@ -18933,6 +18961,23 @@ function ajouterEntreeStock(){
   if(isNaN(qte) || qte < 1){ afficherToastNotif('Quantite invalide', 'La quantite doit etre au moins 1.', 'alerte'); return; }
   if(isNaN(prix) || prix < 0){ afficherToastNotif('Prix manquant', 'Saisissez le prix d achat unitaire.', 'alerte'); return; }
   if(isNaN(seuil) || seuil < 0) seuil = 0;
+  if(modePaiement==='credit' && !dateEcheanceStr){ afficherToastNotif('Date d echeance manquante', 'Indiquez une date d echeance pour un achat a credit.', 'alerte'); return; }
+
+  // Achat A CREDIT : cree automatiquement une dette fournisseur (comme
+  // pour toute autre depense a credit dans l'app), pour que cet achat de
+  // stock apparaisse dans le suivi "Dettes fournisseurs" — un achat en
+  // CASH ne cree aucune dette, la depense est consideree soldee immediatement.
+  var detteManuelleId = null;
+  if(modePaiement==='credit'){
+    var auteurDette = currentUser ? (currentUser.login||currentUser.nom) : currentRole;
+    detteManuelleId = 'dm_'+Date.now()+'_'+Math.random().toString(36).substr(2,5);
+    DETTES_MANUELLES.push({
+      id: detteManuelleId, fournisseurId: fournId, piece: nom+' (Stock)', qte: qte, prixAchat: prix,
+      dateAchat: Date.now(), dateEcheance: new Date(dateEcheanceStr).getTime(),
+      paye: false, payeLe: null, auteur: auteurDette
+    });
+    saveDettesManuelles();
+  }
 
   // Article identique deja en stock ? (meme nom + meme destination + meme fournisseur)
   var existant = STOCK.find(function(a){
@@ -18948,6 +18993,8 @@ function ajouterEntreeStock(){
     existant.prixAchat = prix;
     existant.seuil = seuil;
     existant.dateEntree = Date.now();
+    existant.modePaiement = modePaiement;
+    existant.detteManuelleId = detteManuelleId;
     afficherToastNotif('Stock reapprovisionne', nom+' : +'+qte+' (total '+existant.qte+')', 'ok');
   } else {
     STOCK.push({
@@ -18960,16 +19007,20 @@ function ajouterEntreeStock(){
       reserve: 0,
       prixAchat: prix,
       seuil: seuil,
-      dateEntree: Date.now()
+      dateEntree: Date.now(),
+      modePaiement: modePaiement,
+      detteManuelleId: detteManuelleId
     });
     afficherToastNotif('Article ajoute', nom+' — '+qte+' unite(s) en stock.', 'ok');
   }
   saveStock();
   // Vider le formulaire (garder le fournisseur pour enchainer les saisies)
-  ['stk_nom','stk_marque','stk_modele','stk_prix'].forEach(function(id){
+  ['stk_nom','stk_marque','stk_modele','stk_prix','stk_dateEcheance'].forEach(function(id){
     var e = document.getElementById(id); if(e) e.value = '';
   });
   var eq = document.getElementById('stk_qte'); if(eq) eq.value = '1';
+  var emp = document.getElementById('stk_mode_paiement'); if(emp) emp.value = 'cash';
+  onChangeModeStockPaiement();
   renderPage();
 }
 
@@ -19146,6 +19197,11 @@ function pageStock(){
   html += '</div>';
   html += '<div class="g3">';
   html += '<div class="fr"><label class="fl">Seuil d alerte</label><input type="number" min="0" class="inp" id="stk_seuil" value="2" title="Alerte quand la quantite disponible passe sous ce seuil"></div>';
+  html += '<div class="fr"><label class="fl">Mode de paiement *</label><select class="inp" id="stk_mode_paiement" onchange="onChangeModeStockPaiement()"><option value="cash">Cash</option><option value="credit">Credit</option></select></div>';
+  html += '<div class="fr" id="stk_dateEcheance_wrap" style="display:none"><label class="fl">Date d echeance</label><input type="date" class="inp" id="stk_dateEcheance"></div>';
+  html += '</div>';
+  html += '<div class="g3" style="margin-top:10px">';
+  html += '<div></div>';
   html += '<div class="fr" style="display:flex;align-items:flex-end"><button class="btn btn-primary" onclick="ajouterEntreeStock()" style="width:100%">&#x2714; Enregistrer l entree</button></div>';
   html += '<div></div>';
   html += '</div>';
@@ -19158,13 +19214,24 @@ function pageStock(){
     html += '<div class="empty">Aucun article en stock. Utilisez le formulaire ci-dessus pour enregistrer une entree.</div></div>';
     return html;
   }
+  html += '<div style="padding:10px 16px 0 16px"><input class="inp" id="stockRecherche" placeholder="Rechercher un article, une marque, un modele ou un fournisseur..." oninput="rechercherStock(this.value)" autocomplete="off"></div>';
+  html += '<div id="stockTableWrap">'+htmlTableauStock(STOCK.slice())+'</div>';
+  html += '</div>';
+  return html;
+}
+
+// Rendu du tableau Etat du stock — extrait a part pour permettre le
+// filtrage dynamique par la barre de recherche, sans reconstruire toute
+// la page.
+function htmlTableauStock(liste){
+  if(!liste.length) return '<div class="empty" style="margin:16px">Aucun article ne correspond a cette recherche.</div>';
   // Tri : alertes d'abord, puis par nom
-  var liste = STOCK.slice().sort(function(a,b){
+  liste = liste.slice().sort(function(a,b){
     var sa = stockSousSeuil(a)?1:0, sb = stockSousSeuil(b)?1:0;
     if(sa!==sb) return sb-sa;
     return (a.nom||'').localeCompare(b.nom||'');
   });
-  html += '<div class="tw"><table><thead><tr>'
+  var html = '<div class="tw"><table><thead><tr>'
     +'<th>Article</th>'
     +'<th>Destination</th><th>Fournisseur</th>'
     +'<th style="text-align:center">Dispo</th><th style="text-align:center">Reserve</th>'
@@ -19195,8 +19262,27 @@ function pageStock(){
     html += '</td>';
     html += '</tr>';
   });
-  html += '</tbody></table></div></div>';
+  html += '</tbody></table></div>';
   return html;
+}
+
+// Filtre le tableau du stock par nom d'article, marque, modele ou
+// fournisseur, sans reconstruire toute la page.
+function rechercherStock(texte){
+  var wrap = document.getElementById('stockTableWrap');
+  if(!wrap) return;
+  var q = texte.trim().toLowerCase();
+  var resultats = STOCK;
+  if(q.length>=2){
+    resultats = STOCK.filter(function(a){
+      var f = FOURNISSEURS.find(function(x){return x.id===a.fournisseurId;});
+      return (a.nom||'').toLowerCase().indexOf(q)>=0 ||
+        (a.marque||'').toLowerCase().indexOf(q)>=0 ||
+        (a.modele||'').toLowerCase().indexOf(q)>=0 ||
+        (f && f.nom.toLowerCase().indexOf(q)>=0);
+    });
+  }
+  wrap.innerHTML = htmlTableauStock(resultats);
 }
 
 function pageFournisseurs(){
