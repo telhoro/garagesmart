@@ -8732,7 +8732,7 @@ function collecterFacturesNonDeposees(){
   // chaque client forfait. Reutilise collecterDettesFournisseurs()-like via
   // le meme calcul que pageFacturationForfait (mois manquants).
   var clientsForfaitMap = {};
-  vehicles.filter(function(v){return v.typeClient==='forfait';}).forEach(function(v){
+  vehicles.filter(function(v){return v.typeClient==='forfait' && !estDossierAssurance(v);}).forEach(function(v){
     if(!clientsForfaitMap[v.client]) clientsForfaitMap[v.client] = {client:v.client, entite:v.entite||'Particulier'};
   });
   Object.keys(clientsForfaitMap).forEach(function(client){
@@ -8745,7 +8745,7 @@ function collecterFacturesNonDeposees(){
       premiereDate = facturesClient.reduce(function(min,f){var d=f.emiseDate||f.deposeeDate||0; return (d&&(!min||d<min))?d:min;}, null);
     }
     if(!premiereDate){
-      var vehsClient = vehicles.filter(function(v){return v.client===client && v.typeClient==='forfait' && v.entree;});
+      var vehsClient = vehicles.filter(function(v){return v.client===client && v.typeClient==='forfait' && !estDossierAssurance(v) && v.entree;});
       if(vehsClient.length) premiereDate = vehsClient.reduce(function(min,v){return (!min||v.entree<min)?v.entree:min;}, null);
     }
     if(!premiereDate) return;
@@ -8839,7 +8839,7 @@ function pageFacturationEcheances(){
     var moisSuivantRappel = new Date(aujourdhuiRappel.getFullYear(), aujourdhuiRappel.getMonth()+1, 1);
     var anneeMoisSuivantRappel = moisSuivantRappel.getFullYear(), moisIdxSuivantRappel = moisSuivantRappel.getMonth();
     var clientsForfaitRappel = {};
-    vehicles.filter(function(v){return v.typeClient==='forfait';}).forEach(function(v){ clientsForfaitRappel[v.client]=true; });
+    vehicles.filter(function(v){return v.typeClient==='forfait' && !estDossierAssurance(v);}).forEach(function(v){ clientsForfaitRappel[v.client]=true; });
     FORFAITS_CLIENTS.forEach(function(fc){ clientsForfaitRappel[fc.client]=true; });
     Object.keys(clientsForfaitRappel).forEach(function(client){
       var montantRappel = forfaitMensuelEffectifClient(client);
