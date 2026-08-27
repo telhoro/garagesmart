@@ -8829,6 +8829,36 @@ function pageFacturationEcheances(){
     });
   });
 
+  // RAPPEL PROACTIF : a partir du 20 du mois en cours, la facture forfait
+  // du MOIS SUIVANT apparait ici a l'avance (avant meme d'avoir ete
+  // emise), pour ne jamais oublier de la deposer a temps. Seul le bouton
+  // "Emettre facture" est actif tant qu'elle n'a pas ete emise — une fois
+  // emise, elle bascule naturellement dans le bloc ci-dessus.
+  var aujourdhuiRappel = new Date();
+  if(aujourdhuiRappel.getDate()>=20){
+    var moisSuivantRappel = new Date(aujourdhuiRappel.getFullYear(), aujourdhuiRappel.getMonth()+1, 1);
+    var anneeMoisSuivantRappel = moisSuivantRappel.getFullYear(), moisIdxSuivantRappel = moisSuivantRappel.getMonth();
+    var clientsForfaitRappel = {};
+    vehicles.filter(function(v){return v.typeClient==='forfait';}).forEach(function(v){ clientsForfaitRappel[v.client]=true; });
+    FORFAITS_CLIENTS.forEach(function(fc){ clientsForfaitRappel[fc.client]=true; });
+    Object.keys(clientsForfaitRappel).forEach(function(client){
+      var montantRappel = forfaitMensuelEffectifClient(client);
+      if(!montantRappel) return;
+      // Format IDENTIQUE au reste du systeme (YYYY-MM-client) — chaque
+      // client a sa propre cle, meme mois ou pas.
+      var periodeSuivanteRappel = anneeMoisSuivantRappel+'-'+String(moisIdxSuivantRappel+1).padStart(2,'0')+'-'+client;
+      var dejaExistantRappel = FORFAIT_FACTURES.some(function(f){return f.periodeKey===periodeSuivanteRappel;});
+      if(dejaExistantRappel) return; // deja emise (ou plus avancee) pour ce mois -> rappel inutile
+      dossiersUnifies.push({
+        id:null, client:client, immat:'', marque:'', modele:'',
+        resteARecouvrir:montantRappel, montantFacture:montantRappel,
+        factureDeposee:false, dateEcheance:0, enRetard:false, statut:'a_emettre_rappel',
+        isForfaitFacture:true, periodeKey:periodeSuivanteRappel,
+        numeroFactureExterne:'', numeroSecondaire:''
+      });
+    });
+  }
+
   var totalNonDeposees = nonDeposees.reduce(function(s,i){return s+i.montant;},0);
   var totalEnRetard = encaissements.filter(function(e){return e.enRetard;}).reduce(function(s,i){return s+i.montant;},0);
   var dans3Jours = Date.now() + 3*86400000;
@@ -9208,7 +9238,7 @@ function ouvrirNumerosFactureByEl(btn){
   document.getElementById('numFactureDelaiHint').textContent = typeof v.delaiPaiementPersonnalise==='number'
     ? 'Delai personnalise actuellement applique.'
     : 'Propose automatiquement ('+(estEntreprise?'devis entreprise = 30 jours':'devis particulier = paiement au depot')+'). Modifiable.';
-  document.getElementById('numFactureDateDepot').value = v.factureDeposeeLe ? new Date(v.factureDeposeeLe).toISOString().slice(0,10) : '';
+  document.getElementById('numFactureDateDepot').value = v.factureDeposeeLe ? new Date(v.factureDeposeeLe).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
   document.getElementById('modalNumerosFacture').style.display = 'flex';
 }
 function ouvrirNumerosFactureForfaitByEl(btn){
@@ -9231,7 +9261,7 @@ function ouvrirNumerosFactureForfaitByEl(btn){
   document.getElementById('numFactureDelaiHint').textContent = typeof f.delaiPaiementPersonnalise==='number'
     ? 'Delai personnalise actuel : '+f.delaiPaiementPersonnalise+' jours apres depot'
     : 'Par defaut : echeance = fin du mois de la periode facturee. Laissez vide pour garder cette regle.';
-  document.getElementById('numFactureDateDepot').value = f.deposeeDate ? new Date(f.deposeeDate).toISOString().slice(0,10) : '';
+  document.getElementById('numFactureDateDepot').value = f.deposeeDate ? new Date(f.deposeeDate).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
   document.getElementById('modalNumerosFacture').style.display = 'flex';
 }
 function closeNumerosFacture(){ document.getElementById('modalNumerosFacture').style.display='none'; }
@@ -9786,7 +9816,8 @@ function htmlCellulesFactureDetail(d){
     h += '<td class="xs">'+numFactCellF+'<br>'+refCellF+badgeAvanceF+'</td>';
 
     var delaiTxtF;
-    if(d.statut==='emise_attente_depot') delaiTxtF = '<span class="xs" style="color:#854F0B;font-weight:600">Emise, a deposer</span>';
+    if(d.statut==='a_emettre_rappel') delaiTxtF = '<span class="xs" style="color:#854F0B;font-weight:600">&#x1F514; A emettre (rappel)</span>';
+    else if(d.statut==='emise_attente_depot') delaiTxtF = '<span class="xs" style="color:#854F0B;font-weight:600">Emise, a deposer</span>';
     else if(!d.factureDeposee) delaiTxtF = '<span class="xs muted">A emettre</span>';
     else if(d.dateEcheance) delaiTxtF = '<span class="xs" style="font-weight:600">'+new Date(d.dateEcheance).toLocaleDateString('fr-FR')+'</span>';
     else delaiTxtF = '<span class="xs muted">—</span>';
@@ -9796,15 +9827,23 @@ function htmlCellulesFactureDetail(d){
     h += '<td>'+delaiTxtF+'</td>';
 
     h += '<td><div class="flex gap6">';
-    if(d.statut==='emise_attente_depot'){
-      h += '<button class="btn btn-success btn-sm" data-pk="'+d.periodeKey+'" onclick="event.stopPropagation();deposerFactureForfaitByEl(this)" title="Marquer deposee">&#x2714; Facture deposee</button>';
+    if(d.statut==='a_emettre_rappel'){
+      // Rappel proactif (mois suivant, pas encore emis) : SEUL le bouton
+      // Emettre est actif — les autres actions (deposer/payer/modifier/
+      // imprimer) n'ont pas de sens tant qu'aucune facture n'existe
+      // reellement encore.
+      h += '<button class="btn btn-sm btn-primary" data-pk="'+d.periodeKey+'" data-client="'+d.client+'" data-montant="'+d.montantFacture+'" onclick="event.stopPropagation();emettreFactureForfaitByEl(this)" title="Emettre la facture forfait de ce mois">&#x1F4CB; Emettre facture</button>';
+    } else {
+      if(d.statut==='emise_attente_depot'){
+        h += '<button class="btn btn-success btn-sm" data-pk="'+d.periodeKey+'" onclick="event.stopPropagation();deposerFactureForfaitByEl(this)" title="Marquer deposee">&#x2714; Facture deposee</button>';
+      }
+      if(d.factureDeposee){
+        h += '<button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" data-montant="'+d.montantFacture+'" onclick="event.stopPropagation();payerFactureForfaitByEl(this)" title="Enregistrer paiement">&#x1F4B5;</button>';
+        h += '<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" onclick="event.stopPropagation();ouvrirNumerosFactureForfaitByEl(this)" title="Modifier N° facture / reference / delai">&#x270F;</button>';
+      }
+      h += '<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" onclick="event.stopPropagation();imprimerFactureForfaitByEl(this)" title="'+(d.factureDeposee?'Imprimer / PDF':'Imprimer un apercu / brouillon')+'">&#x1F5A8;</button>';
+      h += '<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" onclick="event.stopPropagation();exporterFactureForfaitExcelByEl(this)" title="Exporter cette facture en Excel">&#128202;</button>';
     }
-    if(d.factureDeposee){
-      h += '<button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" data-montant="'+d.montantFacture+'" onclick="event.stopPropagation();payerFactureForfaitByEl(this)" title="Enregistrer paiement">&#x1F4B5;</button>';
-      h += '<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" onclick="event.stopPropagation();ouvrirNumerosFactureForfaitByEl(this)" title="Modifier N° facture / reference / delai">&#x270F;</button>';
-    }
-    h += '<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" onclick="event.stopPropagation();imprimerFactureForfaitByEl(this)" title="'+(d.factureDeposee?'Imprimer / PDF':'Imprimer un apercu / brouillon')+'">&#x1F5A8;</button>';
-    h += '<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-pk="'+d.periodeKey+'" onclick="event.stopPropagation();exporterFactureForfaitExcelByEl(this)" title="Exporter cette facture en Excel">&#128202;</button>';
     h += '</div></td>';
     return h;
   }
@@ -9829,6 +9868,9 @@ function htmlCellulesFactureDetail(d){
   h += '<td>'+delaiTxt+'</td>';
 
   h += '<td><div class="flex gap6">';
+  if(!d.factureDeposee){
+    h += '<button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 6px" data-vid="'+d.id+'" onclick="event.stopPropagation();ouvrirNumerosFactureByEl(this)" title="Renseigner le numero de facture et marquer comme deposee">&#x2714; Facture deposee</button>';
+  }
   h += '<button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 6px" data-vid="'+d.id+'" onclick="event.stopPropagation();ouvrirSaisiePaiement(this)" title="Enregistrer paiement">&#x1F4B5;</button>';
   h += '<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-vid="'+d.id+'" onclick="event.stopPropagation();ouvrirNumerosFactureByEl(this)" title="Modifier N° facture / reference / delai">&#x270F;</button>';
   h += '<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-vid="'+d.id+'" onclick="event.stopPropagation();openDetById(this)" title="Voir la fiche">&#x1F441;</button>';
@@ -10173,7 +10215,7 @@ function rendreQuatreTableauxParClient(dossiers, prefixeExpand, titreNonDeposee)
     // Facture forfait deja EMISE mais pas encore deposee : categorie
     // distincte des mois jamais encore factures, sinon la facture
     // nouvellement emise devient invisible / confondue avec "a emettre".
-    if(d.statut==='emise_attente_depot') cat = 'emise_non_deposee';
+    if(d.statut==='emise_attente_depot' || d.statut==='a_emettre_rappel') cat = 'emise_non_deposee';
     else if(!d.factureDeposee) cat = 'non_deposee';
     else if(d.enRetard) cat = 'retard';
     else if(d.dateEcheance && (d.dateEcheance-maintenant)<=TROIS_JOURS_MS) cat = 'proche_echeance';
@@ -10186,7 +10228,7 @@ function rendreQuatreTableauxParClient(dossiers, prefixeExpand, titreNonDeposee)
 
   var sections = [
     {key:'non_deposee',        titre:titreNonDeposee||'Factures non deposees', couleur:'#5a5956', bg:'#f5f4f1'},
-    {key:'emise_non_deposee',  titre:'Factures a deposer',           couleur:'#854F0B', bg:'#FDF3E3'},
+    {key:'emise_non_deposee',  titre:'Factures forfait a deposer',   couleur:'#854F0B', bg:'#FDF3E3'},
     {key:'retard',             titre:'Factures en retard',           couleur:'#A32D2D', bg:'#FCEBEB'},
     {key:'proche_echeance',    titre:'Arrivent a echeance (3 jours)', couleur:'#854F0B', bg:'#FDF3E3'},
     {key:'non_echue',          titre:'Non echues',                   couleur:'#185FA5', bg:'#EAF1FA'}
