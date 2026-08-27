@@ -10637,7 +10637,7 @@ function pageFacturationForfait(){
   // forfaitMensuelEffectifClient), au cas ou le montant aurait change.
   var clientsMap = {};
   var vehiculeParImmat = {}; // {client::immat: dossier le plus recent}
-  vehicles.filter(function(v){return v.typeClient==='forfait';}).forEach(function(v){
+  vehicles.filter(function(v){return v.typeClient==='forfait' && !estDossierAssurance(v);}).forEach(function(v){
     var key = v.client;
     if(!clientsMap[key]){
       clientsMap[key] = {
