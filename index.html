@@ -27702,9 +27702,14 @@ function pageCaisseAnalyse(){
         html += '<div style="padding:6px 16px 10px 28px">';
         html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>';
         parCategorie[cat].mouvements.forEach(function(m){
+          var infoVehicule = '';
+          if(m.vehiculeId){
+            var vCaisse = vehicles.find(function(x){return x.id===m.vehiculeId;});
+            if(vCaisse) infoVehicule = ' <span class="xs muted">— '+vCaisse.immat+' ('+vCaisse.client+')</span>';
+          }
           html += '<tr style="border-top:1px solid rgba(0,0,0,0.06)">';
           html += '<td style="padding:4px 8px;width:100px" class="xs">'+new Date(m.date).toLocaleDateString('fr-FR')+'</td>';
-          html += '<td style="padding:4px 8px" class="xs">'+(m.motif||'—')+'</td>';
+          html += '<td style="padding:4px 8px" class="xs">'+(m.motif||'—')+infoVehicule+'</td>';
           html += '<td style="padding:4px 8px;text-align:right;font-weight:700;font-family:monospace">'+(parseFloat(m.montant)||0).toLocaleString('fr-FR')+' FCFA</td>';
           html += '</tr>';
         });
