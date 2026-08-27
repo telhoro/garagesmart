@@ -8752,12 +8752,15 @@ function pageFacturationEcheances(){
     });
   });
 
+  var maintenantEch = Date.now();
   encaissements.forEach(function(it){
     var v = it.vid ? vehicles.find(function(x){return x.id===it.vid;}) : null;
+    var delaiJoursIt = it.dateDepot ? Math.floor((maintenantEch-it.dateDepot)/86400000) : null;
     dossiersUnifies.push({
       id: it.vid, client: it.nom, immat: it.immat||'', marque: it.marque||'', modele: it.modele||'',
       resteARecouvrir: it.montant, montantFacture: it.montant,
       factureDeposee: true, dateEcheance: it.dateEcheance, enRetard: it.enRetard,
+      dateDepot: it.dateDepot||null, delaiJours: delaiJoursIt,
       statut: it.enRetard ? 'retard' : 'en_attente',
       isForfaitFacture: it.categorieClient==='forfait', periodeKey: it.periodeKey,
       numeroFactureExterne: v ? (v.numeroFactureExterne||'') : '',
@@ -9740,6 +9743,9 @@ function htmlCellulesFactureDetail(d){
     else if(!d.factureDeposee) delaiTxtF = '<span class="xs muted">A emettre</span>';
     else if(d.dateEcheance) delaiTxtF = '<span class="xs" style="font-weight:600">'+new Date(d.dateEcheance).toLocaleDateString('fr-FR')+'</span>';
     else delaiTxtF = '<span class="xs muted">—</span>';
+    if(d.factureDeposee && d.delaiJours!==null && d.delaiJours!==undefined){
+      delaiTxtF += '<div class="xs muted" style="margin-top:2px">'+d.delaiJours+' j depuis depot</div>';
+    }
     h += '<td>'+delaiTxtF+'</td>';
 
     h += '<td><div class="flex gap6">';
@@ -9770,6 +9776,9 @@ function htmlCellulesFactureDetail(d){
   if(!d.factureDeposee) delaiTxt = '<span class="xs muted">En attente de depot</span>';
   else if(d.dateEcheance) delaiTxt = '<span class="xs" style="font-weight:600">'+new Date(d.dateEcheance).toLocaleDateString('fr-FR')+'</span>';
   else delaiTxt = '<span class="xs muted">—</span>';
+  if(d.factureDeposee && d.delaiJours!==null && d.delaiJours!==undefined){
+    delaiTxt += '<div class="xs muted" style="margin-top:2px">'+d.delaiJours+' j depuis depot</div>';
+  }
   h += '<td>'+delaiTxt+'</td>';
 
   h += '<td><div class="flex gap6">';
@@ -9942,7 +9951,8 @@ function ouvrirStatutFacturesClient(client){
   if(!factures.length){
     html += '<div class="empty">Aucune facture en cours pour ce client — tout est solde.</div>';
   } else {
-    html += '<div class="tw"><table><thead><tr><th>Type</th><th>Vehicule / Mois</th><th style="text-align:right">Reste</th><th>N&deg; Facture</th><th>Ref. interne</th><th>Depot</th><th>Echeance</th><th>Statut</th></tr></thead><tbody>';
+    html += '<div class="tw"><table><thead><tr><th>Type</th><th>Vehicule / Mois</th><th style="text-align:right">Reste</th><th>N&deg; Facture</th><th>Ref. interne</th><th>Depot</th><th style="text-align:center">Jours ecoules</th><th>Echeance</th><th>Statut</th></tr></thead><tbody>';
+    var maintenantJours = Date.now();
     factures.forEach(function(f){
       var libelle = f.type==='forfait' ? libelleMoisForfait(f.periodeKey) : (f.immat+' '+(f.marque||'')+' '+(f.modele||''));
       var statutBadge, statutLabel;
@@ -9952,6 +9962,9 @@ function ouvrirStatutFacturesClient(client){
       else { statutBadge='b-blue'; statutLabel='Non echue'; }
       var depotTxt = f.deposee && f.dateDepot ? new Date(f.dateDepot).toLocaleDateString('fr-FR') : '—';
       var echeanceTxt = f.deposee && f.dateEcheance ? new Date(f.dateEcheance).toLocaleDateString('fr-FR') : '—';
+      // Temps ecoule depuis le depot — uniquement pour une facture DEJA
+      // deposee (sinon aucun depart a compter).
+      var joursEcoules = (f.deposee && f.dateDepot) ? Math.floor((maintenantJours-f.dateDepot)/86400000) : null;
       html += '<tr>';
       html += '<td>'+(f.type==='forfait'?'<span class="badge b-purple">Forfait</span>':'<span class="badge b-blue">Devis</span>')+'</td>';
       html += '<td class="xs">'+libelle+'</td>';
@@ -9963,6 +9976,7 @@ function ouvrirStatutFacturesClient(client){
         return engLieF2 ? '<div style="margin-top:2px"><span class="badge b-amber" style="font-size:9px" title="Facture liee a une avance bancaire">&#x1F517; '+engLieF2.nom+'</span></div>' : '';
       })()+'</td>';
       html += '<td class="xs">'+depotTxt+'</td>';
+      html += '<td style="text-align:center" class="xs">'+(joursEcoules!==null ? joursEcoules+' j' : '—')+'</td>';
       html += '<td class="xs">'+echeanceTxt+'</td>';
       html += '<td><span class="badge '+statutBadge+'">'+statutLabel+'</span></td>';
       html += '</tr>';
@@ -9986,17 +10000,19 @@ function imprimerStatutFacturesClient(client){
   var totalReste = factures.reduce(function(s,f){return s+f.reste;},0);
 
   var rowsHtml = !factures.length
-    ? '<tr><td colspan="7" style="border:1px solid #bbb;padding:10px;text-align:center;color:#888;font-size:11px">Aucune facture deposee en attente pour ce client.</td></tr>'
+    ? '<tr><td colspan="8" style="border:1px solid #bbb;padding:10px;text-align:center;color:#888;font-size:11px">Aucune facture deposee en attente pour ce client.</td></tr>'
     : factures.map(function(f){
         var libelle = f.type==='forfait' ? libelleMoisForfait(f.periodeKey) : (f.immat+' '+(f.marque||'')+' '+(f.modele||''));
         var depotTxt = f.dateDepot ? new Date(f.dateDepot).toLocaleDateString('fr-FR') : '—';
         var echeanceTxt = f.dateEcheance ? new Date(f.dateEcheance).toLocaleDateString('fr-FR') : '—';
+        var joursEcoulesTxt = f.dateDepot ? Math.floor((Date.now()-f.dateDepot)/86400000)+' j' : '—';
         return '<tr>'
           +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+(f.type==='forfait'?'Forfait':'Devis')+'</td>'
           +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+libelle+'</td>'
           +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+(f.numeroFactureExterne||'—')+'</td>'
           +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+(f.numeroSecondaire||'—')+'</td>'
           +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+depotTxt+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px;text-align:center">'+joursEcoulesTxt+'</td>'
           +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+echeanceTxt+'</td>'
           +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px;text-align:right;font-weight:700">'+f.reste.toLocaleString('fr-FR')+'</td>'
           +'</tr>';
@@ -10005,10 +10021,12 @@ function imprimerStatutFacturesClient(client){
   var html = ''
     +'<style>'
     +'*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}'
+    +'*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}'
     +'@page{size:A4 portrait;margin:15mm}'
     +'html,body{width:210mm;background:#fff;font-size:11px;color:#1a1a1a}'
     +'table{width:100%;border-collapse:collapse}'
     +'.page{padding:8mm 10mm}'
+    +'@media print{*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}'
     +'</style>'
     +'<div class="page">'
     +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px">'
@@ -10023,6 +10041,7 @@ function imprimerStatutFacturesClient(client){
     +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:left">N&deg; Facture</th>'
     +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:left">Ref. interne</th>'
     +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:left">Depot</th>'
+    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:center">Jours ecoules</th>'
     +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:left">Echeance</th>'
     +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;text-align:right">Reste a payer</th>'
     +'</tr></thead><tbody>'+rowsHtml+'</tbody></table>'
@@ -10050,22 +10069,24 @@ function exporterStatutFacturesClientExcel(client){
   data.push(['CLIENT', client]);
   data.push(['Edite le', dateEdit]);
   data.push([]);
-  data.push(['Type', 'Vehicule / Mois', 'N° Facture', 'Ref. interne', 'Depot', 'Echeance', 'Reste a payer']);
+  data.push(['Type', 'Vehicule / Mois', 'N° Facture', 'Ref. interne', 'Depot', 'Jours ecoules', 'Echeance', 'Reste a payer']);
   if(!factures.length){
-    data.push(['Aucune facture deposee en attente pour ce client.', '', '', '', '', '', '']);
+    data.push(['Aucune facture deposee en attente pour ce client.', '', '', '', '', '', '', '']);
   } else {
+    var maintenantExcel = Date.now();
     factures.forEach(function(f){
       var libelle = f.type==='forfait' ? libelleMoisForfait(f.periodeKey) : (f.immat+' '+(f.marque||'')+' '+(f.modele||''));
       var depotTxt = f.dateDepot ? new Date(f.dateDepot).toLocaleDateString('fr-FR') : '';
+      var joursEcoules = f.dateDepot ? Math.floor((maintenantExcel-f.dateDepot)/86400000) : '';
       var echeanceTxt = f.dateEcheance ? new Date(f.dateEcheance).toLocaleDateString('fr-FR') : '';
-      data.push([f.type==='forfait'?'Forfait':'Devis', libelle, f.numeroFactureExterne||'', f.numeroSecondaire||'', depotTxt, echeanceTxt, f.reste]);
+      data.push([f.type==='forfait'?'Forfait':'Devis', libelle, f.numeroFactureExterne||'', f.numeroSecondaire||'', depotTxt, joursEcoules, echeanceTxt, f.reste]);
     });
   }
   data.push([]);
-  data.push(['Total restant du (factures deposees)', '', '', '', '', '', totalReste]);
+  data.push(['Total restant du (factures deposees)', '', '', '', '', '', '', totalReste]);
 
   var ws = XLSX.utils.aoa_to_sheet(data);
-  ws['!cols'] = [{wch:12},{wch:28},{wch:16},{wch:16},{wch:12},{wch:12},{wch:16}];
+  ws['!cols'] = [{wch:12},{wch:28},{wch:16},{wch:16},{wch:12},{wch:12},{wch:12},{wch:16}];
   var wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Statut factures');
   var cleanClient = client.replace(/[^\w\s\-]/g,'').trim().replace(/\s+/g,'_');
@@ -10829,12 +10850,15 @@ function pageFacturationForfait(){
     var reste = f.montant - montantPaye;
     if(reste<=0) return;
     var enRetard = dateEcheance < Date.now();
+    var dateDepotForfait = f.deposeeDate || f.emiseDate || null;
+    var delaiJoursForfait = dateDepotForfait ? Math.floor((Date.now()-dateDepotForfait)/86400000) : null;
     dossiersForfaitUnifies.push({
       id:null, client:f.client, immat:'', marque:'', modele:'',
       resteARecouvrir:reste, montantFacture:f.montant,
       factureDeposee:true, dateEcheance:dateEcheance, enRetard:enRetard,
       statut: enRetard?'retard':'en_attente',
       isForfaitFacture:true, periodeKey:f.periodeKey,
+      dateDepot:dateDepotForfait, delaiJours:delaiJoursForfait,
       numeroFactureExterne:f.numeroFactureExterne||'', numeroSecondaire:f.numeroSecondaire||''
     });
   });
@@ -12745,7 +12769,7 @@ function collecterEncaissementsAttendus(){
       nom:v.client, immat:v.immat, marque:v.marque, modele:v.modele,
       montant:reste, dateEcheance:dateEcheance,
       enRetard:(factureDeposee && dateEcheance>0 && dateEcheance<maintenant),
-      factureDeposee:factureDeposee,
+      factureDeposee:factureDeposee, dateDepot:dateFacture||null,
       categorieClient:'devis', vid:v.id, periodeKey:null
     });
   });
@@ -12760,6 +12784,7 @@ function collecterEncaissementsAttendus(){
     items.push({
       nom:f.client, immat:'Forfait '+(f.periodeKey||''), marque:'', modele:'',
       montant:reste, dateEcheance:dateEcheance, enRetard:(dateEcheance>0 && dateEcheance<maintenant),
+      factureDeposee:true, dateDepot:dateFacture||null,
       categorieClient:'forfait', vid:null, periodeKey:f.periodeKey
     });
   });
@@ -23891,12 +23916,14 @@ function exporterPDF(){
   var htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+nom+'</title>'
     +'<style>'
     +'*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}'
+    +'*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}'
     +'@page{size:A4 portrait;margin:15mm}'
     +'html,body{width:210mm;font-size:11px;color:#1a1a1a;background:#fff}'
     +'body{padding:10mm}'
     +'table{width:100%;border-collapse:collapse}'
     +'button{display:none!important}'
     +'footer{margin-top:20mm;border-top:2px solid #1a1a1a;padding-top:5px;text-align:center;font-size:9px;color:#555}'
+    +'@media print{*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}'
     +'</style></head><body>'
     +body.innerHTML
     +'</body></html>';
@@ -24394,6 +24421,7 @@ function imprimerDocument(vid, type){
   var html = ''
     +'<style>'
     +'*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}'
+    +'*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}'
     +'@page{size:A4 portrait;margin:15mm}'
     +'html,body{width:210mm;background:#fff;font-size:11px;color:#1a1a1a}'
     +'body{padding:0;margin:0}'
@@ -24405,6 +24433,7 @@ function imprimerDocument(vid, type){
     +'  html,body{width:210mm}'
     +'  .no-print{display:none!important}'
     +'  footer{position:fixed;bottom:0;left:0;right:0;padding:6mm 15mm 4mm;border-top:2px solid #1a1a1a;text-align:center;font-size:9px;color:#555;background:#fff}'
+    +'  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'
     +'}'
     +'footer{margin-top:auto;border-top:2px solid #1a1a1a;padding-top:8px;text-align:center;font-size:9px;color:#555}'
     +'</style>'
@@ -24541,6 +24570,7 @@ function imprimerBonLivraison(vid){
   var html = ''
     +'<style>'
     +'*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}'
+    +'*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}'
     +'@page{size:A4 portrait;margin:15mm}'
     +'html,body{width:210mm;background:#fff;font-size:11px;color:#1a1a1a}'
     +'body{padding:0;margin:0}'
@@ -24552,6 +24582,7 @@ function imprimerBonLivraison(vid){
     +'  html,body{width:210mm}'
     +'  .no-print{display:none!important}'
     +'  footer{position:fixed;bottom:0;left:0;right:0;padding:6mm 15mm 4mm;border-top:2px solid #1a1a1a;text-align:center;font-size:9px;color:#555;background:#fff}'
+    +'  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'
     +'}'
     +'footer{margin-top:auto;border-top:2px solid #1a1a1a;padding-top:8px;text-align:center;font-size:9px;color:#555}'
     +'</style>'
@@ -24749,6 +24780,7 @@ function imprimerFactureForfait(periodeKey){
   var html = ''
     +'<style>'
     +'*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}'
+    +'*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}'
     +'@page{size:A4 portrait;margin:15mm}'
     +'html,body{width:210mm;background:#fff;font-size:11px;color:#1a1a1a}'
     +'body{padding:0;margin:0}'
@@ -24760,6 +24792,7 @@ function imprimerFactureForfait(periodeKey){
     +'  html,body{width:210mm}'
     +'  .no-print{display:none!important}'
     +'  footer{position:fixed;bottom:0;left:0;right:0;padding:6mm 15mm 4mm;border-top:2px solid #1a1a1a;text-align:center;font-size:9px;color:#555;background:#fff}'
+    +'  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'
     +'}'
     +'footer{margin-top:auto;border-top:2px solid #1a1a1a;padding-top:8px;text-align:center;font-size:9px;color:#555}'
     +'</style>'
