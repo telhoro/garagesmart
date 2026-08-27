@@ -5192,7 +5192,25 @@ function resetNotifications(){
 }
 
 function uneModaleEstOuverte(){
-  var modals = ['modalRec','modalDet','modalCommentaires','modalDevisCompl','modalModifAttrib','modalModifClient','modalFusionClients','modalImmatDoublons','modalAttribTech','modalConfirm','modalModifStock'];
+  // Liste COMPLETE de toutes les modales de l'app (pas seulement
+  // quelques-unes) — une modale absente de cette liste se fait fermer a
+  // tort des qu'un rafraichissement en arriere-plan survient (ex :
+  // synchronisation Firebase), meme si l'utilisateur est en train de la
+  // consulter. Deja arrive avec "Statut des factures" : la fenetre se
+  // fermait toute seule apres quelques secondes.
+  var modals = [
+    'modalAjoutDetteManuelle','modalAjoutEmployePresence','modalArchive','modalAttribTech','modalBanque',
+    'modalCatPieces','modalChangeTech','modalChargeFixe','modalChiffrageCompl','modalCommentaires','modalCompte',
+    'modalConfirm','modalConfirmClose','modalCreationClientSansVehicule','modalCreationCompteClient','modalCtEcheance',
+    'modalDepartements','modalDet','modalDetailJourneeCaisse','modalDevisCompl','modalDevisProspect',
+    'modalEmissionForfait','modalEnTravaux','modalEngagement','modalEnrolementFacial','modalEquipe',
+    'modalFactureManuelle','modalFermetureCaisse','modalForfaitAnnuel','modalFourn','modalFournDet',
+    'modalFusionClients','modalHisto','modalHistoriqueVuePortail','modalImmatDoublons','modalImpression',
+    'modalJourDepot','modalLivraison','modalModifAttrib','modalModifClient','modalModifMouvementCaisse',
+    'modalModifStock','modalMoveTech','modalNumerosFacture','modalPaiement','modalPaiementChargeFixe',
+    'modalPaiementFournisseur','modalRapport','modalRec','modalRepriseChef','modalRepriseTest',
+    'modalStatutFacturesClient','modalSuppression','modalSuppressionEmiseForfait','modalTech'
+  ];
   for(var i=0;i<modals.length;i++){
     var el = document.getElementById(modals[i]);
     if(el && el.style.display && el.style.display!=='none') return true;
