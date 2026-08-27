@@ -5377,6 +5377,25 @@ function migrerValideDirFacturesManuelles(){
   return nbCorrige;
 }
 
+// Migration retroactive : avant cette correction, un dossier forfait
+// (hors assurance) livre restait bloque sur le statut "livre" en attente
+// d'un depot de facture qui n'a jamais lieu d'etre (le forfait fonctionne
+// par abonnement mensuel, pas par facture individuelle). Cloture
+// directement tous les dossiers forfait deja coinces dans cet etat.
+function migrerForfaitsLivresBloques(){
+  var nbCorrige = 0;
+  vehicles.forEach(function(v){
+    if(v.status==='livre' && v.typeClient==='forfait' && !estDossierAssurance(v)){
+      v.status = 'dossier_cloture';
+      v.stepStart = Date.now();
+      if(!v.archiveDate) v.archiveDate = Date.now();
+      nbCorrige++;
+    }
+  });
+  if(nbCorrige>0) saveV();
+  return nbCorrige;
+}
+
 // Migration retroactive : avant cette correction, un paiement client
 // (devis ou forfait) n'etait jamais trace individuellement — seul un
 // montant total et une date UNIQUE etaient conserves, et un versement en
@@ -5459,6 +5478,16 @@ function advance(id){
       // decompte du delai de paiement client.
       if(next==='facture_deposee' && !v.factureDeposeeLe){
         v.factureDeposeeLe = Date.now();
+      }
+      // Forfait (hors dossier assurance) : pas de circuit de facturation
+      // par dossier (le client paie un abonnement mensuel, pas de
+      // facture individuelle) — des que "livre" est atteint, on enchaine
+      // IMMEDIATEMENT sur "dossier_cloture", sans etape intermediaire
+      // visible ni depot de facture a confirmer manuellement.
+      if(next==='livre' && v.typeClient==='forfait' && !estDossierAssurance(v)){
+        v.status = 'dossier_cloture';
+        v.stepStart = Date.now();
+        marquerJalonsTemps(v, 'dossier_cloture');
       }
       break;
     }
@@ -15371,7 +15400,13 @@ function pageDashReception(){
   html += recTableau('Action requise — livraison et facturation', actionLivraison, 'b-red');
 
   // ── Tableau 5 : Livrés — en attente de dépôt facture ──────────────────
-  var livres = vehiclesActifs().filter(function(v){return v.status==='livre';});
+  // Un forfait (hors dossier assurance) n'a pas de circuit de facturation
+  // par dossier — il ne devrait jamais rester visible ici (il saute
+  // directement a "dossier_cloture" des la livraison). Filtre de securite
+  // en plus du saut automatique dans advance().
+  var livres = vehiclesActifs().filter(function(v){
+    return v.status==='livre' && !(v.typeClient==='forfait' && !estDossierAssurance(v));
+  });
   if(livres.length){
     var hLiv = '<div class="card" style="margin-bottom:16px">';
     hLiv += '<div class="card-head" style="background:#f5f4f1">&#x1F4C4; Vehicules livres — en attente depot facture <span class="badge b-amber">'+livres.length+'</span></div>';
@@ -28844,6 +28879,7 @@ function initFirebase(){
         vehicles = newVehicles;
         migrerFactureDeposeeLe(); // migration retroactive, aussi apres synchro Firebase
         migrerValideDirFacturesManuelles(); // idem, pour les factures manuelles/imports
+        migrerForfaitsLivresBloques(); // idem, pour les forfaits bloques sur "livre"
         lastLocalTs = data.ts || Date.now();
         // Sauvegarder sans photos en localStorage
         var sans = vehicles.map(function(v){
@@ -29012,6 +29048,7 @@ window.onload=function(){
   initData();vehicles=loadV();
   migrerFactureDeposeeLe(); // migration retroactive (voir commentaire de la fonction)
   migrerValideDirFacturesManuelles(); // idem, pour les factures manuelles/imports
+  migrerForfaitsLivresBloques(); // idem, pour les forfaits bloques sur "livre"
   migrerDateDebutChargesFixes(); // idem, pour le suivi de paiement des charges fixes
   // Firebase sera initialisé via onFirebaseDatabaseLoaded()
   // Vérifier s'il y a une session active (persiste après actualisation)
