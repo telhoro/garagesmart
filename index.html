@@ -15416,16 +15416,6 @@ function pageDashReception(){
   var enAttente = vehiclesActifs().filter(function(v){return v.status==='reception' && !v.aRecuperer;});
   html += recTableau('Vehicules recus — en attente attribution', enAttente, 'b-amber');
 
-  // ── Tableau 2 : Véhicules en cours de traitement (atelier + achats + direction) ──
-  var enCours = vehiclesActifs().filter(function(v){
-    return ['attente_diag','diag_en_cours','devis_atelier','attente_chiffrage',
-      'devis_prep','attente_fin','valide_fin',
-      'attente_appro','pieces_commande','appro_en_cours','pieces_partiel','pieces_livrees',
-      'travaux_attente','travaux_cours','travaux_termines','en_test',
-      'attente_valid_chef','reprise_demandee','vehicule_termine'].indexOf(v.status)>=0;
-  });
-  html += recTableau('Vehicules en cours de traitement', enCours, 'b-blue');
-
   // ── Tableau 3 : En attente de validation client (devis chiffre a envoyer/en attente accord) ──
   var attClient = vehiclesActifs().filter(function(v){
     return (v.status==='devis_termine' && (v.isDevisCompl || (v.typeClient!=='forfait' && v.typeClient!=='assurance')))
@@ -15465,9 +15455,17 @@ function pageDashReception(){
     html += hLiv;
   }
 
-  // ── Tableau 6 : Clôturés ─────────────────────────────────────────────────
-  var clotures = vehiclesActifs().filter(function(v){return LIV_ST.indexOf(v.status)>=0;});
-  html += recTableau('Dossiers clotures', clotures, 'b-gray');
+  // ── Tableau 6 : Clôturés — DU JOUR uniquement, pour garder ce rappel
+  // pertinent au quotidien plutot que d'accumuler tous les dossiers
+  // clotures depuis toujours (deja consultables via l'Historique).
+  var maintenantClotures = Date.now();
+  var clotures = vehiclesActifs().filter(function(v){
+    if(LIV_ST.indexOf(v.status)<0) return false;
+    if(!v.stepStart) return false;
+    var d1 = new Date(v.stepStart), d2 = new Date(maintenantClotures);
+    return d1.getFullYear()===d2.getFullYear() && d1.getMonth()===d2.getMonth() && d1.getDate()===d2.getDate();
+  });
+  html += recTableau('Dossiers clotures aujourd\'hui', clotures, 'b-gray');
 
   // ── Tableau filtré si KPI cliqué ────────────────────────────────────────
   if(dashFilter === 'over'){
@@ -19801,7 +19799,15 @@ function pageDashAchats(){
   var nbCommande  = vehiclesActifs().filter(function(v){return v.status==='pieces_commande';}).length;
   var nbLocal     = vehiclesActifs().filter(function(v){return v.status==='appro_en_cours';}).length;
   var nbPartiel   = vehiclesActifs().filter(function(v){return v.chiffrage&&v.chiffrage.livraisonComplete===false&&['travaux_attente','travaux_cours','travaux_termines','en_test','attente_valid_chef'].indexOf(v.status)>=0;}).length;
-  var nbLivrees   = vehiclesActifs().filter(function(v){return v.chiffrage&&v.chiffrage.livraisonComplete===true;}).length;
+  // Livraisons completes DU JOUR uniquement — un vehicule livre il y a
+  // plusieurs jours n'a plus de raison de rester visible ici au quotidien.
+  var estAujourdhuiAchats = function(timestamp, maintenant){
+    if(!timestamp) return false;
+    var d1 = new Date(timestamp), d2 = new Date(maintenant);
+    return d1.getFullYear()===d2.getFullYear() && d1.getMonth()===d2.getMonth() && d1.getDate()===d2.getDate();
+  };
+  var maintenantAchats = Date.now();
+  var nbLivrees   = vehiclesActifs().filter(function(v){return v.chiffrage&&v.chiffrage.livraisonComplete===true&&estAujourdhuiAchats(v.chiffrage.livreLe, maintenantAchats);}).length;
 
   // Tps moyen approvisionnement : de valide_fin a pieces_livrees (simule)
   var tpsMoyAppro = achatsVehs.length ? '4j 2h' : '—';
@@ -19934,8 +19940,8 @@ function pageDashAchats(){
   html += achatsTableau('Pieces en attente — livraison partielle', partielVehs, 'b-amber', 'partiel');
 
   // ── Tableau 5 : Pièces livrées (livraison complète) ──────────────────────────
-  var livreesVehs = vehiclesActifs().filter(function(v){return v.chiffrage && v.chiffrage.livraisonComplete===true;});
-  html += achatsTableau('Pieces totalement livrees', livreesVehs, 'b-green', 'livrees');
+  var livreesVehs = vehiclesActifs().filter(function(v){return v.chiffrage && v.chiffrage.livraisonComplete===true && estAujourdhuiAchats(v.chiffrage.livreLe, maintenantAchats);});
+  html += achatsTableau('Pieces totalement livrees aujourd\'hui', livreesVehs, 'b-green', 'livrees');
 
   return html;
 }
@@ -20108,7 +20114,14 @@ function getAchatsFiltered(){
   if(achatsFilter==='commande')  return vehicles.filter(function(v){return v.status==='pieces_commande';});
   if(achatsFilter==='local')     return vehicles.filter(function(v){return v.status==='appro_en_cours';});
   if(achatsFilter==='partiel')   return vehicles.filter(function(v){return v.chiffrage&&v.chiffrage.livraisonComplete===false&&['travaux_attente','travaux_cours','travaux_termines','en_test','attente_valid_chef'].indexOf(v.status)>=0;});
-  if(achatsFilter==='livrees')   return vehicles.filter(function(v){return v.chiffrage&&v.chiffrage.livraisonComplete===true;});
+  if(achatsFilter==='livrees'){
+    var maintenantF = Date.now();
+    return vehicles.filter(function(v){
+      if(!(v.chiffrage&&v.chiffrage.livraisonComplete===true&&v.chiffrage.livreLe)) return false;
+      var d1 = new Date(v.chiffrage.livreLe), d2 = new Date(maintenantF);
+      return d1.getFullYear()===d2.getFullYear() && d1.getMonth()===d2.getMonth() && d1.getDate()===d2.getDate();
+    });
+  }
   return [];
 }
 
@@ -24325,12 +24338,15 @@ function imprimerFicheEntree(vid, immatParam, vOverride){
 
   var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Fiche entree - '+v.immat+'</title>';
   html += '<style>';
-  html += 'body{font-family:Arial,sans-serif;margin:20px;font-size:12px;color:#222}';
+  html += '*{box-sizing:border-box}';
+  html += '*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}';
+  html += '@page{size:A4 portrait;margin:12mm}';
+  html += 'body{font-family:Arial,sans-serif;margin:0;width:186mm;font-size:12px;color:#222}';
   html += 'h1{font-size:16px;margin:0 0 2px}';
   html += 'h2{font-size:12px;color:#185FA5;border-bottom:1px solid #ddd;padding-bottom:3px;margin:12px 0 6px}';
   html += '.header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #185FA5;padding-bottom:8px;margin-bottom:12px}';
   html += '.logo{font-size:18px;font-weight:700;color:#185FA5}';
-  html += '.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}';
+  html += '.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:12px}';
   html += '.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px}';
   html += '.box{background:#f9f8f7;border:1px solid #e0ddd8;border-radius:6px;padding:8px 10px}';
   html += '.lbl{font-size:10px;color:#888;margin-bottom:2px}';
@@ -24341,7 +24357,7 @@ function imprimerFicheEntree(vid, immatParam, vOverride){
   html += '.photos-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}';
   html += '.photos-grid img{width:120px;height:90px;object-fit:cover;border-radius:4px;border:1px solid #ddd}';
   html += '.no-print{margin-bottom:12px;display:flex;gap:8px;align-items:center}';
-  html += '@media print{.no-print{display:none}}';
+  html += '@media print{.no-print{display:none}*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}';
   html += '</style></head><body>';
 
   // Contrôles impression
@@ -24378,20 +24394,23 @@ function imprimerFicheEntree(vid, immatParam, vOverride){
   html += '</div></div>';
   html += '</div>';
 
-  // Motif et symptômes
-  html += '<h2>Motif d entree</h2>';
-  html += '<div class="box" style="margin-bottom:12px">';
+  // Motif + Inventaire, cote a cote — mieux exploiter la largeur de page
+  // plutot que d'empiler des blocs etroits les uns sous les autres.
+  html += '<div class="grid2">';
+  html += '<div><h2>Motif d entree</h2>';
+  html += '<div class="box">';
   html += '<div class="lbl">Motif</div><div class="val" style="margin-bottom:6px">'+(v.motif||'—')+'</div>';
   if(v.symptomes){ html += '<div class="lbl">Symptomes</div><div style="font-size:11px">'+(v.symptomes||'—')+'</div>'; }
-  html += '</div>';
+  html += '</div></div>';
 
-  // Inventaire
-  html += '<h2>Inventaire</h2>';
+  html += '<div><h2>Inventaire</h2>';
   html += '<div class="inv-grid">'+invRows+'</div>';
   if(carburantBar) html += '<div style="margin-top:6px">'+carburantBar+'</div>';
   if(inv.controle_tech) html += '<div style="font-size:11px;margin-top:4px">Controle technique : <strong>'+inv.controle_tech+'</strong></div>';
   if(inv.assurance) html += '<div style="font-size:11px;margin-top:2px">Assurance : <strong>'+inv.assurance+'</strong></div>';
   if(inv.autres) html += '<div style="font-size:11px;margin-top:2px">Autres : '+inv.autres+'</div>';
+  html += '</div>';
+  html += '</div>';
 
   // Zones endommagées
   html += '<h2>Zones endommagees a l entree</h2>';
