@@ -15603,7 +15603,19 @@ function recRenvoyerAchats(btn){
   if(!v) return;
   v.status = 'attente_chiffrage'; // retourne aux achats pour rechiffrage
   v.stepStart = Date.now();
-  if(v.chiffrage) v.chiffrage.valide = false;
+  if(v.chiffrage){
+    v.chiffrage.valide = false;
+    // Meme raison que rejeterFinancier() : le chiffrage repart pour
+    // rechiffrage, l'etat d'achat/livraison precedent n'a plus lieu
+    // d'etre tant qu'il n'a pas repasse par la validation et les achats.
+    (v.chiffrage.lignes||[]).forEach(function(cl){
+      cl.livree = false;
+      cl.valideDir = false;
+    });
+    v.chiffrage.localLancee = null;
+    v.chiffrage.cmdLancee = null;
+    v.chiffrage.livraisonComplete = null;
+  }
   saveV(); renderPage();
 }
 
@@ -17991,7 +18003,23 @@ function rejeterFinancier(){
   // Renvoyer vers achats pour revoir le chiffrage
   v.status = 'attente_chiffrage';
   v.stepStart = Date.now();
-  if(v.chiffrage){ v.chiffrage.valide = false; v.chiffrage.devisValideDir = false; v.chiffrage.rejetDir = raison || true; }
+  if(v.chiffrage){
+    v.chiffrage.valide = false; v.chiffrage.devisValideDir = false; v.chiffrage.rejetDir = raison || true;
+    // IMPORTANT : reinitialiser les indicateurs d'achat/livraison — le
+    // chiffrage va etre revu, donc l'etat d'achat precedent (pieces deja
+    // marquees "livrees", achats deja "lances") n'a plus lieu d'etre tant
+    // que le nouveau chiffrage n'a pas ete revalide et repasse par les
+    // achats. Sans cette reinitialisation, un dossier rejete puis
+    // revalide se retrouve avec des pieces "livrees" alors qu'il n'a
+    // jamais reellement repasse par l'achat/la reception.
+    (v.chiffrage.lignes||[]).forEach(function(cl){
+      cl.livree = false;
+      cl.valideDir = false;
+    });
+    v.chiffrage.localLancee = null;
+    v.chiffrage.cmdLancee = null;
+    v.chiffrage.livraisonComplete = null;
+  }
   saveV();
   closeDet();
   renderPage();
@@ -20299,7 +20327,7 @@ function achatsTableauAppro(title, list, badgeClass, type, bgColor){
       h += '<button class="btn btn-sm" data-vid="'+v.id+'" onclick="imprimerDocById(this)" title="Imprimer" style="color:#185FA5">&#x1F5A8;</button> ';
     }
     h += '<button class="btn btn-sm" onclick="openDetById(this)" data-vid="'+v.id+'">&#x1F441;</button>';
-    h += '</div></div>';
+    h += '</div></div></div>';
 
     if(lignesFiltrees.length){
       // Total a decaisser pour ce vehicule (prix d'ACHAT des pieces)
