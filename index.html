@@ -24336,7 +24336,11 @@ function imprimerFicheEntree(vid, immatParam, vOverride){
     carburantBar = '<span style="font-size:11px">Carburant : <strong>'+inv.carburant+'</strong> ('+pct+')</span>';
   }
 
-  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Fiche entree - '+v.immat+'</title>';
+  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Fiche entree - '+v.immat+'</title></head><body>';
+  // IMPORTANT : le style est place ICI, DANS le body (et non dans le
+  // head) car openPrintWindow() n'extrait que le contenu situe entre
+  // <body> et </body> — un style place dans le head serait silencieusement
+  // ignore et aucune des regles ci-dessous ne s'appliquerait jamais.
   html += '<style>';
   html += '*{box-sizing:border-box}';
   html += '*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}';
@@ -24358,7 +24362,7 @@ function imprimerFicheEntree(vid, immatParam, vOverride){
   html += '.photos-grid img{width:120px;height:90px;object-fit:cover;border-radius:4px;border:1px solid #ddd}';
   html += '.no-print{margin-bottom:12px;display:flex;gap:8px;align-items:center}';
   html += '@media print{.no-print{display:none}*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}';
-  html += '</style></head><body>';
+  html += '</style>';
 
   // Contrôles impression
   html += '<div class="no-print">';
