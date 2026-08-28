@@ -8379,19 +8379,39 @@ function rentaForfaitAnalysePieces(borneDebut, borneFin){
   return html;
 }
 
-function rentaForfaitClients(dossiers){
+function rentaForfaitClients(dossiersBruts){
+  // Cumule par vehicule (immat) : un vehicule ayant eu plusieurs visites
+  // (dossiers) sur la periode selectionnee doit apparaitre en UNE seule
+  // ligne avec la depense totale cumulee et ses pieces regroupees dans un
+  // seul tableau, pas une ligne/tableau par visite. Exclut aussi les
+  // vehicules sans aucune depense sur la periode.
+  var parImmat = {};
+  dossiersBruts.forEach(function(d){
+    if(d.depPeriode<=0) return;
+    var key = d.client+'||'+d.immat;
+    if(!parImmat[key]){
+      parImmat[key] = {client:d.client, immat:d.immat, marque:d.marque, modele:d.modele, entite:d.entite, tel:d.tel, forfaitPeriode:0, depPeriode:0, lignes:[]};
+    }
+    parImmat[key].forfaitPeriode = d.forfaitPeriode;
+    parImmat[key].depPeriode += d.depPeriode;
+    parImmat[key].lignes = parImmat[key].lignes.concat(d.lignes);
+  });
+  var dossiers = Object.keys(parImmat).map(function(k){return parImmat[k];});
+
   // Agréger par client/entité
   var clients = {};
   dossiers.forEach(function(d){
     var key = d.client+'||'+d.entite;
     if(!clients[key]) clients[key]={client:d.client,entite:d.entite,tel:d.tel,nb:0,forfaitPeriode:0,depPeriode:0,vehicules:[]};
     var c=clients[key];
-    c.nb++; c.forfaitPeriode+=d.forfaitPeriode; c.depPeriode+=d.depPeriode; c.vehicules.push(d.immat);
+    c.nb++; c.forfaitPeriode+=d.forfaitPeriode; c.depPeriode+=d.depPeriode; c.vehicules.push(d);
   });
   var liste = Object.keys(clients).map(function(k){
     var c=clients[k];
     c.marge=c.forfaitPeriode-c.depPeriode;
     c.tauxCouv=c.forfaitPeriode>0?(c.depPeriode/c.forfaitPeriode*100):0;
+    // Vehicules du client tries du plus depense au moins depense.
+    c.vehicules.sort(function(a,b){return b.depPeriode-a.depPeriode;});
     return c;
   }).sort(function(a,b){return b.tauxCouv-a.tauxCouv;});
 
@@ -8404,8 +8424,10 @@ function rentaForfaitClients(dossiers){
     var mc=c.marge>0?'#3B6D11':c.marge<0?'#A32D2D':'#888';
     var tc=c.tauxCouv;
     var alerteBadge=tc>=100?'b-red':tc>=80?'b-amber':'b-green';
-    html += '<tr style="'+(c.marge<0?'background:#FFF5F5':tc>=80&&tc<100?'background:#FFFBF0':'')+'">';
-    html += '<td class="fw7">'+c.client+'<div class="xs muted">'+c.tel+'</div></td>';
+    var expandKeyClient = 'rentaForfaitClientLigne::'+c.client+'::'+c.entite;
+    var expandedClient = !!creancesClientExpand[expandKeyClient];
+    html += '<tr style="cursor:pointer;'+(c.marge<0?'background:#FFF5F5':tc>=80&&tc<100?'background:#FFFBF0':'')+'" data-ccexp="'+encodeURIComponent(expandKeyClient)+'" onclick="toggleCreancesClientExpandByEl(this)">';
+    html += '<td class="fw7">'+(expandedClient?'&#9662; ':'&#9656; ')+c.client+'<div class="xs muted">'+c.tel+'</div></td>';
     html += '<td class="xs">'+c.entite+'</td>';
     html += '<td style="text-align:center">'+c.nb+'</td>';
     html += '<td style="font-family:monospace;color:#185FA5">'+c.forfaitPeriode.toLocaleString('fr-FR')+'</td>';
@@ -8413,6 +8435,47 @@ function rentaForfaitClients(dossiers){
     html += '<td style="font-family:monospace;font-weight:700;color:'+mc+'">'+(c.marge>0?'+':'')+c.marge.toLocaleString('fr-FR')+'</td>';
     html += '<td><span class="badge '+alerteBadge+'">'+tc.toFixed(1)+'%</span></td>';
     html += '</tr>';
+    if(expandedClient){
+      html += '<tr><td colspan="7" style="padding:0;background:#faf9f7">';
+      html += '<div style="padding:8px 16px 12px 28px">';
+      html += '<table style="width:100%;border-collapse:collapse"><tbody>';
+      c.vehicules.forEach(function(d){
+        var expandKeyVeh = 'rentaForfaitClientVeh::'+c.client+'::'+d.immat;
+        var expandedVeh = !!creancesClientExpand[expandKeyVeh];
+        html += '<tr style="cursor:pointer;border-top:1px solid rgba(0,0,0,0.06)" data-ccexp="'+encodeURIComponent(expandKeyVeh)+'" onclick="event.stopPropagation();toggleCreancesClientExpandByEl(this)">';
+        html += '<td style="padding:6px 8px;width:60%"><div class="fw7">'+(expandedVeh?'&#9662; ':'&#9656; ')+d.immat+'</div><div class="xs muted">'+d.marque+' '+d.modele+'</div></td>';
+        html += '<td style="padding:6px 8px;text-align:right;font-family:monospace;color:#A32D2D;font-weight:700">'+d.depPeriode.toLocaleString('fr-FR')+' FCFA</td>';
+        html += '</tr>';
+        if(expandedVeh){
+          html += '<tr><td colspan="2" style="padding:0 8px 10px 16px;background:#fff">';
+          if(!d.lignes.length){
+            html += '<div class="xs muted" style="padding:6px 0">Aucune piece enregistree sur ce vehicule pour cette periode.</div>';
+          } else {
+            // Pieces achetees, du montant le plus eleve au plus bas.
+            var lignesTri = d.lignes.slice().sort(function(a,b){
+              var montA = (parseFloat(a.prixAchat)||0)*(parseInt(a.qte)||1);
+              var montB = (parseFloat(b.prixAchat)||0)*(parseInt(b.qte)||1);
+              return montB-montA;
+            });
+            html += '<table style="width:100%;font-size:12px"><thead><tr style="color:#888">';
+            html += '<th style="text-align:left;padding:4px 8px;font-size:11px">Piece</th><th style="text-align:center;padding:4px 8px;font-size:11px">Qte</th><th style="text-align:right;padding:4px 8px;font-size:11px">Prix unitaire</th><th style="text-align:right;padding:4px 8px;font-size:11px">Total</th>';
+            html += '</tr></thead><tbody>';
+            lignesTri.forEach(function(l){
+              var montant = (parseFloat(l.prixAchat)||0)*(parseInt(l.qte)||1);
+              html += '<tr style="border-top:1px solid rgba(0,0,0,0.06)">';
+              html += '<td style="padding:4px 8px">'+l.piece+'</td>';
+              html += '<td style="padding:4px 8px;text-align:center">'+(parseInt(l.qte)||1)+'</td>';
+              html += '<td style="padding:4px 8px;text-align:right;font-family:monospace">'+(parseFloat(l.prixAchat)||0).toLocaleString('fr-FR')+'</td>';
+              html += '<td style="padding:4px 8px;text-align:right;font-family:monospace;font-weight:700">'+montant.toLocaleString('fr-FR')+'</td>';
+              html += '</tr>';
+            });
+            html += '</tbody></table>';
+          }
+          html += '</td></tr>';
+        }
+      });
+      html += '</tbody></table></div></td></tr>';
+    }
   });
   html += '</tbody></table></div></div>';
   return html;
