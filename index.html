@@ -5765,17 +5765,29 @@ function blocALivrer(vehicleList){
         if(diffH >= 24) chronoColor = '#A32D2D'; // rouge après 24h
         else if(diffH >= 4) chronoColor = '#854F0B'; // orange après 4h
       }
+      // Pour un forfait (hors dossier assurance), pas de facture individuelle
+      // par dossier — la 3e etape devient "editer le bon de livraison" a la
+      // place, avec le meme document que le bouton "Bon de livraison" de la
+      // fiche detail.
+      var estForfaitLiv = v.typeClient==='forfait' && !estDossierAssurance(v);
       // Etapes cochées
       var etapes = '';
       etapes += '<span class="badge '+(fl.lavage?'b-green':'b-gray')+'" style="margin-right:4px">'+(fl.lavage?'✔':'')+' Lavage</span>';
       etapes += '<span class="badge '+(fl.clientContacte?'b-green':'b-gray')+'" style="margin-right:4px">'+(fl.clientContacte?'✔':'')+' Client contacte</span>';
-      etapes += '<span class="badge '+(fl.factureEditee?'b-green':'b-gray')+'">'+(fl.factureEditee?'✔':'')+' Facture editee</span>';
+      etapes += '<span class="badge '+(fl.factureEditee?'b-green':'b-gray')+'">'+(fl.factureEditee?'✔':'')+' '+(estForfaitLiv?'Bon de livraison':'Facture editee')+'</span>';
 
       // Boutons — tous visibles, toggle indépendant
       var acts = '';
       acts += '<button class="btn btn-sm'+(fl.lavage?' btn-success':'')+'" onclick="toggleLivraisonFlag(this)" data-vid="'+v.id+'" data-flag="lavage">&#x1F6BF; '+(fl.lavage?'Lave':'Au lavage')+'</button> ';
       acts += '<button class="btn btn-sm'+(fl.clientContacte?' btn-success':'')+'" onclick="toggleLivraisonFlag(this)" data-vid="'+v.id+'" data-flag="clientContacte">&#x1F4DE; '+(fl.clientContacte?'Contacte':'Contacter client')+'</button> ';
-      acts += '<button class="btn btn-sm'+(fl.factureEditee?' btn-success':'')+'" onclick="toggleLivraisonFlag(this)" data-vid="'+v.id+'" data-flag="factureEditee">&#x1F4CB; '+(fl.factureEditee?'Facture OK':'Editer facture')+'</button> ';
+      if(estForfaitLiv){
+        acts += '<button class="btn btn-sm'+(fl.factureEditee?' btn-success':'')+'" onclick="toggleLivraisonFlagAvecBonLivraison(this)" data-vid="'+v.id+'" data-flag="factureEditee">&#x1F4E6; '+(fl.factureEditee?'Bon livraison OK':'Editer bon de livraison')+'</button> ';
+      } else {
+        acts += '<button class="btn btn-sm'+(fl.factureEditee?' btn-success':'')+'" onclick="toggleLivraisonFlag(this)" data-vid="'+v.id+'" data-flag="factureEditee">&#x1F4CB; '+(fl.factureEditee?'Facture OK':'Editer facture')+'</button> ';
+        // En plus des autres actions : possibilite d'editer aussi le bon
+        // de livraison sur un devis classique (independant du flag facture).
+        acts += '<button class="btn btn-sm" onclick="imprimerBonLivraisonById(this)" data-vid="'+v.id+'">&#x1F4E6; Editer bon de livraison</button> ';
+      }
       var fl = v.livraisonFlags || {};
       var toutFait = fl.lavage && fl.clientContacte && fl.factureEditee;
       if(toutFait){
@@ -5815,6 +5827,22 @@ function toggleLivraisonFlag(btn){
   if(!v.livraisonFlags) v.livraisonFlags = {};
   v.livraisonFlags[flag] = !v.livraisonFlags[flag];
   saveV(); renderPage();
+}
+
+// Meme mecanique que toggleLivraisonFlag, mais pour un forfait : au lieu
+// d'une simple case a cocher, le clic ouvre EGALEMENT le bon de livraison
+// (meme document que le bouton "Bon de livraison" de la fiche detail),
+// puisqu'un forfait n'a pas de facture individuelle a editer.
+function toggleLivraisonFlagAvecBonLivraison(btn){
+  var id = btn.getAttribute('data-vid');
+  var flag = btn.getAttribute('data-flag');
+  var v = vehicles.find(function(x){return x.id===id;});
+  if(!v) return;
+  if(!v.livraisonFlags) v.livraisonFlags = {};
+  var activerMaintenant = !v.livraisonFlags[flag];
+  v.livraisonFlags[flag] = activerMaintenant;
+  saveV(); renderPage();
+  if(activerMaintenant) imprimerBonLivraison(id);
 }
 
 function livraisonStep(btn){
