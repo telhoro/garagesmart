@@ -7514,11 +7514,21 @@ function pageRentabiliteForfait(){
 
   var labelsPeriode = {mois:'Ce mois', trimestre:'Ce trimestre', annee:'Cette annee', tous:'Tout', custom:'Personnalise'};
 
-  // Nombre de vehicules forfait par client, pour repartir le forfait
-  // annuel client (s'il est configure) proportionnellement entre eux.
-  var nbVehiculesParClient = {};
+  // Nombre de vehicules forfait UNIQUES par client (par immatriculation),
+  // pour repartir le forfait annuel client (s'il est configure)
+  // proportionnellement entre eux. IMPORTANT : un meme vehicule peut avoir
+  // plusieurs dossiers (visites/passages) sur la periode — il ne doit
+  // compter qu'UNE SEULE FOIS, sinon le forfait mensuel du client se
+  // retrouve divise a tort par son nombre de visites au lieu de son
+  // nombre de vehicules.
+  var immatsParClient = {};
   vehicles.filter(function(v){return v.typeClient==='forfait';}).forEach(function(v){
-    nbVehiculesParClient[v.client] = (nbVehiculesParClient[v.client]||0)+1;
+    if(!immatsParClient[v.client]) immatsParClient[v.client] = {};
+    immatsParClient[v.client][v.immat] = true;
+  });
+  var nbVehiculesParClient = {};
+  Object.keys(immatsParClient).forEach(function(client){
+    nbVehiculesParClient[client] = Object.keys(immatsParClient[client]).length;
   });
 
   // Calculer les données par véhicule forfait
@@ -8380,31 +8390,49 @@ function rentaForfaitAnalysePieces(borneDebut, borneFin){
 }
 
 function rentaForfaitClients(dossiersBruts){
-  // Cumule par vehicule (immat) : un vehicule ayant eu plusieurs visites
-  // (dossiers) sur la periode selectionnee doit apparaitre en UNE seule
-  // ligne avec la depense totale cumulee et ses pieces regroupees dans un
-  // seul tableau, pas une ligne/tableau par visite. Exclut aussi les
-  // vehicules sans aucune depense sur la periode.
+  // ETAPE 1 : forfait de periode par vehicule UNIQUE (une seule fois par
+  // immat, quelle que soit la depense) — le forfait contractuel est du
+  // que le vehicule ait eu des travaux ou non durant la periode. Calcule
+  // AVANT tout filtrage, pour ne jamais sous-compter le forfait total
+  // d'un client dont certains vehicules n'ont pas eu de depense.
+  var forfaitParVehiculeUnique = {};
+  dossiersBruts.forEach(function(d){
+    var key = d.client+'||'+d.immat;
+    forfaitParVehiculeUnique[key] = {client:d.client, entite:d.entite, forfaitPeriode:d.forfaitPeriode};
+  });
+  var forfaitParClient = {};
+  Object.keys(forfaitParVehiculeUnique).forEach(function(k){
+    var vu = forfaitParVehiculeUnique[k];
+    var ck = vu.client+'||'+vu.entite;
+    forfaitParClient[ck] = (forfaitParClient[ck]||0) + vu.forfaitPeriode;
+  });
+
+  // ETAPE 2 : cumule par vehicule (immat) POUR L'AFFICHAGE : un vehicule
+  // ayant eu plusieurs visites (dossiers) sur la periode selectionnee
+  // doit apparaitre en UNE seule ligne avec la depense totale cumulee et
+  // ses pieces regroupees dans un seul tableau, pas une ligne/tableau par
+  // visite. Exclut aussi les vehicules sans aucune depense sur la
+  // periode (mais leur forfait reste compte cote client, voir etape 1).
   var parImmat = {};
   dossiersBruts.forEach(function(d){
     if(d.depPeriode<=0) return;
     var key = d.client+'||'+d.immat;
     if(!parImmat[key]){
-      parImmat[key] = {client:d.client, immat:d.immat, marque:d.marque, modele:d.modele, entite:d.entite, tel:d.tel, forfaitPeriode:0, depPeriode:0, lignes:[]};
+      parImmat[key] = {client:d.client, immat:d.immat, marque:d.marque, modele:d.modele, entite:d.entite, tel:d.tel, depPeriode:0, lignes:[]};
     }
-    parImmat[key].forfaitPeriode = d.forfaitPeriode;
     parImmat[key].depPeriode += d.depPeriode;
     parImmat[key].lignes = parImmat[key].lignes.concat(d.lignes);
   });
   var dossiers = Object.keys(parImmat).map(function(k){return parImmat[k];});
 
-  // Agréger par client/entité
+  // Agréger par client/entité — forfaitPeriode vient de l'etape 1 (TOUS
+  // les vehicules), depPeriode/vehicules viennent de l'etape 2 (filtres).
   var clients = {};
   dossiers.forEach(function(d){
     var key = d.client+'||'+d.entite;
-    if(!clients[key]) clients[key]={client:d.client,entite:d.entite,tel:d.tel,nb:0,forfaitPeriode:0,depPeriode:0,vehicules:[]};
+    if(!clients[key]) clients[key]={client:d.client,entite:d.entite,tel:d.tel,nb:0,forfaitPeriode:(forfaitParClient[key]||0),depPeriode:0,vehicules:[]};
     var c=clients[key];
-    c.nb++; c.forfaitPeriode+=d.forfaitPeriode; c.depPeriode+=d.depPeriode; c.vehicules.push(d);
+    c.nb++; c.depPeriode+=d.depPeriode; c.vehicules.push(d);
   });
   var liste = Object.keys(clients).map(function(k){
     var c=clients[k];
