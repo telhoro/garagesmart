@@ -1052,6 +1052,21 @@ tr:hover td{background:#faf9f7}
 </div>
 </div>
 
+<div class="overlay" id="modalPaiementEcheance" style="display:none" onclick="if(event.target===this)fermerModalPaiementEcheance()">
+<div class="modal" style="max-width:400px">
+  <div class="mhead"><h2 id="peModalTitre">Paiement echeance</h2><button class="btn btn-sm" onclick="fermerModalPaiementEcheance()">X</button></div>
+  <div class="mbody">
+    <div class="xs muted" style="margin-bottom:10px">Reste a payer sur cette echeance : <strong id="peModalReste" style="color:#A32D2D"></strong></div>
+    <div class="fr"><label class="fl">Montant paye (FCFA) <span style="color:red">*</span></label><input type="number" class="inp" id="peModalMontant" min="1"></div>
+    <div class="xs muted" style="margin-top:6px">Un montant inferieur au reste du enregistre un paiement PARTIEL — l'echeance reste active pour le solde restant.</div>
+  </div>
+  <div class="mfoot">
+    <button class="btn" onclick="fermerModalPaiementEcheance()">Annuler</button>
+    <button class="btn btn-primary" onclick="confirmerPaiementEcheance()">Enregistrer le paiement</button>
+  </div>
+</div>
+</div>
+
 
 <div class="overlay" id="modalPaiement" style="display:none" onclick="if(event.target===this)closePaiementModal()">
 <div class="modal" style="max-width:460px">
@@ -5209,7 +5224,7 @@ function uneModaleEstOuverte(){
     'modalJourDepot','modalLivraison','modalModifAttrib','modalModifClient','modalModifMouvementCaisse',
     'modalModifStock','modalMoveTech','modalNumerosFacture','modalPaiement','modalPaiementChargeFixe',
     'modalPaiementFournisseur','modalRapport','modalRec','modalRepriseChef','modalRepriseTest',
-    'modalStatutFacturesClient','modalSuppression','modalSuppressionEmiseForfait','modalTech'
+    'modalStatutFacturesClient','modalSuppression','modalSuppressionEmiseForfait','modalTech','modalPaiementEcheance'
   ];
   for(var i=0;i<modals.length;i++){
     var el = document.getElementById(modals[i]);
@@ -14466,11 +14481,40 @@ function marquerEcheancePayeeByEl(btn){
   var impayees = echeancesImpayees(e).sort(function(a,b){return a-b;});
   if(!impayees.length){ alert('Aucune echeance impayee pour cet engagement.'); return; }
   var prochaine = impayees[0];
-  var montant = parseFloat(e.montant)||0;
-  if(!confirm('Marquer l\'echeance du '+new Date(prochaine).toLocaleDateString('fr-FR')+' ('+montant.toLocaleString('fr-FR')+' FCFA) comme payee ?')) return;
-  if(!e.echeancesPayees) e.echeancesPayees = [];
-  e.echeancesPayees.push(prochaine);
+  ouvrirPaiementEcheance(e.id, prochaine);
+}
+
+var paiementEcheanceEgId = null;
+var paiementEcheanceDate = null;
+
+// Ouvre la modale de paiement d'une echeance precise — prerempli avec le
+// reste du (pas forcement le montant nominal complet, si un paiement
+// partiel a deja ete fait auparavant), mais reste modifiable pour
+// permettre un reglement partiel ou differencie.
+function ouvrirPaiementEcheance(egId, dateEcheance){
+  var e = ENGAGEMENTS_BANCAIRES.find(function(x){return x.id===egId;});
+  if(!e) return;
+  paiementEcheanceEgId = egId;
+  paiementEcheanceDate = dateEcheance;
+  var reste = resteDuEcheance(e, dateEcheance);
+  document.getElementById('peModalTitre').textContent = e.nom+' — echeance du '+new Date(dateEcheance).toLocaleDateString('fr-FR');
+  document.getElementById('peModalReste').textContent = reste.toLocaleString('fr-FR')+' FCFA';
+  document.getElementById('peModalMontant').value = reste;
+  document.getElementById('modalPaiementEcheance').style.display = 'flex';
+}
+function fermerModalPaiementEcheance(){
+  document.getElementById('modalPaiementEcheance').style.display = 'none';
+}
+function confirmerPaiementEcheance(){
+  var e = ENGAGEMENTS_BANCAIRES.find(function(x){return x.id===paiementEcheanceEgId;});
+  if(!e) return;
+  var montant = parseFloat(document.getElementById('peModalMontant').value);
+  if(isNaN(montant) || montant<=0){ alert('Montant invalide.'); return; }
+  var reste = resteDuEcheance(e, paiementEcheanceDate);
+  if(montant>reste+0.01 && !confirm('Le montant saisi ('+montant.toLocaleString('fr-FR')+' FCFA) depasse le reste du ('+reste.toLocaleString('fr-FR')+' FCFA). Continuer quand meme ?')) return;
+  enregistrerPaiementEcheance(e, paiementEcheanceDate, montant);
   saveEngagementsBancaires();
+  fermerModalPaiementEcheance();
   renderPage();
 }
 
@@ -14660,7 +14704,7 @@ function pageEngagementsBancaires(){
       html += '<td class="xs muted">'+(item.engagement.organisme||'—')+'</td>';
       html += '<td class="xs" style="color:#A32D2D">'+new Date(item.dateEcheance).toLocaleDateString('fr-FR')+' <span class="xs muted">('+jours+' j)</span></td>';
       html += '<td class="xs">'+htmlResumeFacturesLiees(item.engagement)+'</td>';
-      html += '<td style="text-align:right;font-family:monospace;font-weight:700">'+(parseFloat(item.engagement.montant)||0).toLocaleString('fr-FR')+' FCFA</td>';
+      html += '<td style="text-align:right;font-family:monospace;font-weight:700">'+resteDuEcheance(item.engagement, item.dateEcheance).toLocaleString('fr-FR')+' FCFA</td>';
       html += '<td><button class="btn btn-success btn-sm" data-egid="'+item.engagement.id+'" onclick="marquerEcheancePayeeByEl(this)">&#x2714; Marquer payee</button></td>';
       html += '</tr>';
     });
@@ -14689,7 +14733,7 @@ function pageEngagementsBancaires(){
       html += '<td class="xs muted">'+(item.engagement.organisme||'—')+'</td>';
       html += '<td class="xs">'+new Date(item.dateEcheance).toLocaleDateString('fr-FR')+' <span class="xs muted">(dans '+joursRestants+' j)</span></td>';
       html += '<td class="xs">'+htmlResumeFacturesLiees(item.engagement)+'</td>';
-      html += '<td style="text-align:right;font-family:monospace;font-weight:700">'+(parseFloat(item.engagement.montant)||0).toLocaleString('fr-FR')+' FCFA</td>';
+      html += '<td style="text-align:right;font-family:monospace;font-weight:700">'+resteDuEcheance(item.engagement, item.dateEcheance).toLocaleString('fr-FR')+' FCFA</td>';
       html += '<td><button class="btn btn-success btn-sm" data-egid="'+item.engagement.id+'" onclick="marquerEcheancePayeeByEl(this)">&#x2714; Marquer payee</button></td>';
       html += '</tr>';
     });
