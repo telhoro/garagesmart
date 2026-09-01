@@ -6632,10 +6632,14 @@ function collecterCATotalParMois(){
     data[moisKey] = (data[moisKey]||0) + vente;
   });
   FORFAIT_FACTURES.forEach(function(f){
-    var dateFacture = f.deposeeDate || f.emiseDate || 0;
-    if(!dateFacture) return;
-    var dt = new Date(dateFacture);
-    var moisKey = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+    // Le CA d'une facture forfait est rattache au MOIS QUE LE FORFAIT
+    // COUVRE (periodeKey), pas a sa date de depot/emission — une facture
+    // de septembre deposee en aout reste du CA de septembre. Ne compte
+    // qu'une fois DEPOSEE (ou payee) — une facture simplement "emise"
+    // n'est pas encore un CA acquis.
+    if(f.statut!=='deposee' && f.statut!=='payee') return;
+    if(!f.periodeKey) return;
+    var moisKey = f.periodeKey.split('-').slice(0,2).join('-');
     data[moisKey] = (data[moisKey]||0) + (f.montant||0);
   });
   return data;
@@ -8001,10 +8005,14 @@ function collecterDepensesParClientMoisForfait(){
 function collecterCATotalForfaitParMois(){
   var data = {};
   FORFAIT_FACTURES.forEach(function(f){
-    var dateFacture = f.deposeeDate || f.emiseDate || 0;
-    if(!dateFacture) return;
-    var dt = new Date(dateFacture);
-    var moisKey = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+    // Le CA d'une facture forfait est rattache au MOIS QUE LE FORFAIT
+    // COUVRE (periodeKey), pas a sa date de depot/emission — une facture
+    // de septembre deposee en aout reste du CA de septembre. Ne compte
+    // qu'une fois DEPOSEE (ou payee) — une facture simplement "emise"
+    // n'est pas encore un CA acquis.
+    if(f.statut!=='deposee' && f.statut!=='payee') return;
+    if(!f.periodeKey) return;
+    var moisKey = f.periodeKey.split('-').slice(0,2).join('-');
     data[moisKey] = (data[moisKey]||0) + (f.montant||0);
   });
   return data;
