@@ -11943,8 +11943,15 @@ function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
     else { caDevis+=vente; achatDevis+=achat; }
   });
   FORFAIT_FACTURES.forEach(function(f){
-    var dateFacture = f.deposeeDate || f.emiseDate || 0;
-    if(dateFacture<bornesActivite.deb || dateFacture>bornesActivite.fin) return;
+    // Le CA d'une facture forfait est rattache au MOIS QUE LE FORFAIT
+    // COUVRE (periodeKey), pas a sa date de depot/emission — une facture
+    // de septembre deposee en aout reste du CA de septembre. Ne compte
+    // qu'une fois DEPOSEE (ou payee).
+    if(f.statut!=='deposee' && f.statut!=='payee') return;
+    if(!f.periodeKey) return;
+    var parts = f.periodeKey.split('-');
+    var dateRepresentative = new Date(parseInt(parts[0],10), parseInt(parts[1],10)-1, 15).getTime();
+    if(dateRepresentative<bornesActivite.deb || dateRepresentative>bornesActivite.fin) return;
     caForfait += f.montant||0;
   });
 
