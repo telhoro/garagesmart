@@ -14269,6 +14269,59 @@ function prochainEcheanceEngagement(e){
   return candidat.getTime();
 }
 
+// Valeur de tri pour la "prochaine echeance" — reprend EXACTEMENT la
+// meme logique d'affichage que htmlLigneEngagement (echeance impayee la
+// plus ancienne en priorite, sinon prochaine echeance programmee), pour
+// que le tri corresponde a ce qui est visuellement affiche.
+function valeurTriProchaineEcheance(e){
+  var impayees = e.actif ? echeancesImpayees(e).sort(function(a,b){return a-b;}) : [];
+  if(impayees.length) return impayees[0];
+  var prog = e.actif ? prochainEcheanceEngagement(e) : null;
+  return prog!==null ? prog : Infinity; // pas d'echeance -> toujours en dernier
+}
+
+var engBanqueDetailSortCol = null; // colonne de tri actuelle (null = ordre naturel)
+var engBanqueDetailSortDir = 'asc';
+
+function setEngBanqueDetailSortByEl(el){
+  var col = el.getAttribute('data-sortcol');
+  if(engBanqueDetailSortCol===col){
+    engBanqueDetailSortDir = (engBanqueDetailSortDir==='asc') ? 'desc' : 'asc';
+  } else {
+    engBanqueDetailSortCol = col;
+    engBanqueDetailSortDir = 'asc';
+  }
+  renderPage();
+}
+
+// Trie une liste d'engagements selon la colonne/sens courants. Numerique
+// pour montant/periode/prochaine echeance, alphabetique pour le reste.
+function trierEngagementsParColonne(liste){
+  if(!engBanqueDetailSortCol) return liste;
+  var col = engBanqueDetailSortCol, dir = engBanqueDetailSortDir;
+  var numerique = ['montant','periode','prochaine'].indexOf(col)>=0;
+  var copie = liste.slice();
+  copie.sort(function(a,b){
+    var va, vb;
+    if(col==='nom'){ va=a.nom||''; vb=b.nom||''; }
+    else if(col==='banque'){ va=a.organisme||''; vb=b.organisme||''; }
+    else if(col==='montant'){ va=parseFloat(a.montant)||0; vb=parseFloat(b.montant)||0; }
+    else if(col==='periodicite'){ va=a.periodicite||''; vb=b.periodicite||''; }
+    else if(col==='periode'){ va=a.dateDebut||0; vb=b.dateDebut||0; }
+    else if(col==='prochaine'){ va=valeurTriProchaineEcheance(a); vb=valeurTriProchaineEcheance(b); }
+    else { return 0; }
+    var cmp = numerique ? (va-vb) : String(va).localeCompare(String(vb));
+    return dir==='desc' ? -cmp : cmp;
+  });
+  return copie;
+}
+// Petite fleche indiquant la colonne et le sens de tri actifs, a placer
+// dans chaque en-tete triable.
+function iconeTriColonne(col){
+  if(engBanqueDetailSortCol!==col) return '';
+  return engBanqueDetailSortDir==='asc' ? ' &#9650;' : ' &#9660;';
+}
+
 // Compte le nombre d'echeances MENSUELLES restantes entre maintenant et
 // la date de fin (incluses), en respectant le jour d'echeance configure —
 // utilise pour le "total restant du" qui tient compte des differentes
@@ -14774,9 +14827,15 @@ function pageEngagementsBancaires(){
       if(expanded){
         html += '<tr><td colspan="6" style="padding:0;background:#faf9f7"><div style="padding:8px 16px 12px 16px">';
         html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:#888">';
-        html += '<th style="text-align:left;padding:4px 8px;font-size:11px">Engagement</th><th style="text-align:left;padding:4px 8px;font-size:11px">Banque</th><th style="text-align:left;padding:4px 8px;font-size:11px">Montant</th><th style="text-align:left;padding:4px 8px;font-size:11px">Periodicite</th><th style="text-align:left;padding:4px 8px;font-size:11px">Periode</th><th style="text-align:left;padding:4px 8px;font-size:11px">Prochaine echeance</th><th style="text-align:left;padding:4px 8px;font-size:11px">Facture</th><th style="text-align:left;padding:4px 8px;font-size:11px">Statut</th><th></th>';
+        html += '<th style="text-align:left;padding:4px 8px;font-size:11px;cursor:pointer" data-sortcol="nom" onclick="setEngBanqueDetailSortByEl(this)">Engagement'+iconeTriColonne('nom')+'</th>'
+          +'<th style="text-align:left;padding:4px 8px;font-size:11px;cursor:pointer" data-sortcol="banque" onclick="setEngBanqueDetailSortByEl(this)">Banque'+iconeTriColonne('banque')+'</th>'
+          +'<th style="text-align:left;padding:4px 8px;font-size:11px;cursor:pointer" data-sortcol="montant" onclick="setEngBanqueDetailSortByEl(this)">Montant'+iconeTriColonne('montant')+'</th>'
+          +'<th style="text-align:left;padding:4px 8px;font-size:11px;cursor:pointer" data-sortcol="periodicite" onclick="setEngBanqueDetailSortByEl(this)">Periodicite'+iconeTriColonne('periodicite')+'</th>'
+          +'<th style="text-align:left;padding:4px 8px;font-size:11px;cursor:pointer" data-sortcol="periode" onclick="setEngBanqueDetailSortByEl(this)">Periode'+iconeTriColonne('periode')+'</th>'
+          +'<th style="text-align:left;padding:4px 8px;font-size:11px;cursor:pointer" data-sortcol="prochaine" onclick="setEngBanqueDetailSortByEl(this)">Prochaine echeance'+iconeTriColonne('prochaine')+'</th>'
+          +'<th style="text-align:left;padding:4px 8px;font-size:11px">Facture</th><th style="text-align:left;padding:4px 8px;font-size:11px">Statut</th><th></th>';
         html += '</tr></thead><tbody>';
-        b.engagements.forEach(function(e){ html += htmlLigneEngagement(e, maintenant); });
+        trierEngagementsParColonne(b.engagements).forEach(function(e){ html += htmlLigneEngagement(e, maintenant); });
         html += '</tbody></table></div></td></tr>';
       }
     });
