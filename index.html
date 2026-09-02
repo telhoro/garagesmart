@@ -14448,7 +14448,11 @@ function exporterEngagementsExcel(titre, liste){
 // toutes les fonctions d'impression/export, pour ne jamais faire figurer
 // un engagement/echeance deja regle integralement.
 function engagementsBancairesPourExport(){
-  return ENGAGEMENTS_BANCAIRES.filter(function(e){return e.actif && !estEngagementSolde(e);});
+  var liste = ENGAGEMENTS_BANCAIRES.filter(function(e){return e.actif && !estEngagementSolde(e);});
+  // Respecte le meme tri que celui actuellement applique a l'ecran (voir
+  // trierEngagementsParColonne) — l'impression/export doit correspondre
+  // exactement a ce que l'utilisateur voit au moment ou il clique.
+  return trierEngagementsParColonne(liste);
 }
 
 function exporterNiveauParBanqueExcel(){ exporterEngagementsExcel('Niveau d engagement par banque', engagementsBancairesPourExport()); }
