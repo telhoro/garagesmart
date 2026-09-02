@@ -14322,6 +14322,269 @@ function iconeTriColonne(col){
   return engBanqueDetailSortDir==='asc' ? ' &#9650;' : ' &#9660;';
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// IMPRESSION / EXPORT EXCEL des tableaux d'engagements bancaires —
+// reutilisables pour "Echeances en retard", "Mois en cours", "Niveau
+// d'engagement par banque" (global ET filtre sur une seule banque).
+// ══════════════════════════════════════════════════════════════════════
+function collecterEcheancesEnRetard(){
+  var maintenant = Date.now();
+  var actifs = ENGAGEMENTS_BANCAIRES.filter(function(e){return e.actif;});
+  var liste = [];
+  actifs.forEach(function(e){
+    echeancesImpayees(e).filter(function(d){return d<maintenant;}).forEach(function(d){
+      liste.push({engagement:e, dateEcheance:d});
+    });
+  });
+  liste.sort(function(a,b){return a.dateEcheance-b.dateEcheance;});
+  return liste;
+}
+function collecterMoisEnCours(){
+  var maintenant = Date.now();
+  var actifs = ENGAGEMENTS_BANCAIRES.filter(function(e){return e.actif;});
+  var liste = [];
+  actifs.forEach(function(e){
+    echeancesImpayees(e).forEach(function(d){
+      var dt = new Date(d), now = new Date(maintenant);
+      if(dt.getFullYear()===now.getFullYear() && dt.getMonth()===now.getMonth() && d>=maintenant){
+        liste.push({engagement:e, dateEcheance:d});
+      }
+    });
+  });
+  liste.sort(function(a,b){return a.dateEcheance-b.dateEcheance;});
+  return liste;
+}
+
+function exporterEcheancesExcel(titre, liste){
+  var data = [];
+  data.push([titre.toUpperCase()]);
+  data.push(['Edite le', new Date().toLocaleDateString('fr-FR')]);
+  data.push([]);
+  data.push(['Engagement', 'Banque', 'Date echeance', 'Montant restant du']);
+  if(!liste.length){
+    data.push(['Aucune echeance.', '', '', '']);
+  } else {
+    liste.forEach(function(item){
+      data.push([item.engagement.nom, item.engagement.organisme||'—', new Date(item.dateEcheance).toLocaleDateString('fr-FR'), resteDuEcheance(item.engagement, item.dateEcheance)]);
+    });
+    var total = liste.reduce(function(s,item){return s+resteDuEcheance(item.engagement, item.dateEcheance);},0);
+    data.push([]);
+    data.push(['Total', '', '', total]);
+  }
+  var ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:24},{wch:20},{wch:14},{wch:16}];
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, titre.substring(0,31));
+  var nomFichier = titre.replace(/[^\w\s\-]/g,'').trim().replace(/\s+/g,'_');
+  XLSX.writeFile(wb, nomFichier+'_'+new Date().toISOString().split('T')[0]+'.xlsx');
+}
+function exporterEcheancesEnRetardExcel(){ exporterEcheancesExcel('Echeances en retard', collecterEcheancesEnRetard()); }
+function exporterMoisEnCoursExcel(){ exporterEcheancesExcel('Engagements mois en cours', collecterMoisEnCours()); }
+
+function imprimerEcheancesListe(titre, liste){
+  var maintenant = Date.now();
+  var rows = !liste.length
+    ? '<tr><td colspan="4" style="border:1px solid #bbb;padding:10px;text-align:center;color:#888;font-size:11px">Aucune echeance.</td></tr>'
+    : liste.map(function(item){
+        return '<tr>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+item.engagement.nom+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+(item.engagement.organisme||'—')+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+new Date(item.dateEcheance).toLocaleDateString('fr-FR')+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px;text-align:right;font-weight:700">'+resteDuEcheance(item.engagement, item.dateEcheance).toLocaleString('fr-FR')+' FCFA</td>'
+          +'</tr>';
+      }).join('');
+  var total = liste.reduce(function(s,item){return s+resteDuEcheance(item.engagement, item.dateEcheance);},0);
+  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+titre+'</title></head><body>'
+    +'<style>'
+    +'*{box-sizing:border-box}'
+    +'*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}'
+    +'@page{size:A4 portrait;margin:15mm}'
+    +'body{font-family:Arial,sans-serif;margin:0;font-size:12px;color:#222}'
+    +'table{width:100%;border-collapse:collapse;margin-top:10px}'
+    +'th{border:1px solid #bbb;padding:6px 10px;font-size:11px;background:#f5f4f1;text-align:left}'
+    +'@media print{*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}'
+    +'</style>'
+    +'<h2 style="margin:0 0 4px">'+titre+'</h2>'
+    +'<div style="font-size:11px;color:#666;margin-bottom:6px">Edite le '+new Date().toLocaleDateString('fr-FR')+'</div>'
+    +'<table><thead><tr><th>Engagement</th><th>Banque</th><th>Date echeance</th><th style="text-align:right">Montant restant du</th></tr></thead><tbody>'
+    +rows
+    +'</tbody><tfoot><tr><td colspan="3" style="border:1px solid #bbb;padding:6px 10px;font-weight:700;text-align:right">Total</td><td style="border:1px solid #bbb;padding:6px 10px;font-weight:700;text-align:right">'+total.toLocaleString('fr-FR')+' FCFA</td></tr></tfoot></table>'
+    +'</body></html>';
+  var w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+  setTimeout(function(){ w.print(); }, 300);
+}
+function imprimerEcheancesEnRetard(){ imprimerEcheancesListe('Echeances en retard', collecterEcheancesEnRetard()); }
+function imprimerMoisEnCours(){ imprimerEcheancesListe('Engagements mois en cours', collecterMoisEnCours()); }
+
+function exporterEngagementsExcel(titre, liste){
+  var data = [];
+  data.push([titre.toUpperCase()]);
+  data.push(['Edite le', new Date().toLocaleDateString('fr-FR')]);
+  data.push([]);
+  data.push(['Engagement', 'Banque', 'Montant', 'Periodicite', 'Prochaine echeance', 'Statut']);
+  if(!liste.length){
+    data.push(['Aucun engagement.', '', '', '', '', '']);
+  } else {
+    liste.forEach(function(e){
+      var prochaine = valeurTriProchaineEcheance(e);
+      var prochaineTxt = (prochaine && isFinite(prochaine)) ? new Date(prochaine).toLocaleDateString('fr-FR') : '—';
+      data.push([e.nom, e.organisme||'—', parseFloat(e.montant)||0, e.periodicite, prochaineTxt, e.actif?'Actif':'Inactif']);
+    });
+    var total = liste.reduce(function(s,e){return s+(parseFloat(e.montant)||0);},0);
+    data.push([]);
+    data.push(['Total', '', total, '', '', '']);
+  }
+  var ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:24},{wch:20},{wch:14},{wch:14},{wch:16},{wch:10}];
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, titre.substring(0,31));
+  var nomFichier = titre.replace(/[^\w\s\-]/g,'').trim().replace(/\s+/g,'_');
+  XLSX.writeFile(wb, nomFichier+'_'+new Date().toISOString().split('T')[0]+'.xlsx');
+}
+function exporterNiveauParBanqueExcel(){ exporterEngagementsExcel('Niveau d engagement par banque', ENGAGEMENTS_BANCAIRES); }
+function exporterEngagementsBanqueExcelByEl(btn){
+  var banque = decodeURIComponent(btn.getAttribute('data-banque'));
+  var liste = ENGAGEMENTS_BANCAIRES.filter(function(e){return (e.organisme||'—')===banque;});
+  exporterEngagementsExcel('Engagements '+banque, liste);
+}
+
+function imprimerEngagementsListe(titre, liste){
+  var rows = !liste.length
+    ? '<tr><td colspan="5" style="border:1px solid #bbb;padding:10px;text-align:center;color:#888;font-size:11px">Aucun engagement.</td></tr>'
+    : liste.map(function(e){
+        var prochaine = valeurTriProchaineEcheance(e);
+        var prochaineTxt = (prochaine && isFinite(prochaine)) ? new Date(prochaine).toLocaleDateString('fr-FR') : '—';
+        return '<tr>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+e.nom+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+(e.organisme||'—')+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px;text-align:right">'+(parseFloat(e.montant)||0).toLocaleString('fr-FR')+' FCFA</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+e.periodicite+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+prochaineTxt+'</td>'
+          +'</tr>';
+      }).join('');
+  var total = liste.reduce(function(s,e){return s+(parseFloat(e.montant)||0);},0);
+  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+titre+'</title></head><body>'
+    +'<style>'
+    +'*{box-sizing:border-box}'
+    +'*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}'
+    +'@page{size:A4 portrait;margin:15mm}'
+    +'body{font-family:Arial,sans-serif;margin:0;font-size:12px;color:#222}'
+    +'table{width:100%;border-collapse:collapse;margin-top:10px}'
+    +'th{border:1px solid #bbb;padding:6px 10px;font-size:11px;background:#f5f4f1;text-align:left}'
+    +'@media print{*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}'
+    +'</style>'
+    +'<h2 style="margin:0 0 4px">'+titre+'</h2>'
+    +'<div style="font-size:11px;color:#666;margin-bottom:6px">Edite le '+new Date().toLocaleDateString('fr-FR')+'</div>'
+    +'<table><thead><tr><th>Engagement</th><th>Banque</th><th style="text-align:right">Montant</th><th>Periodicite</th><th>Prochaine echeance</th></tr></thead><tbody>'
+    +rows
+    +'</tbody><tfoot><tr><td colspan="2" style="border:1px solid #bbb;padding:6px 10px;font-weight:700;text-align:right">Total</td><td style="border:1px solid #bbb;padding:6px 10px;font-weight:700;text-align:right">'+total.toLocaleString('fr-FR')+' FCFA</td><td colspan="2" style="border:1px solid #bbb"></td></tr></tfoot></table>'
+    +'</body></html>';
+  var w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+  setTimeout(function(){ w.print(); }, 300);
+}
+function imprimerNiveauParBanque(){ imprimerEngagementsListe('Niveau d engagement par banque', ENGAGEMENTS_BANCAIRES); }
+function imprimerEngagementsBanqueByEl(btn){
+  var banque = decodeURIComponent(btn.getAttribute('data-banque'));
+  var liste = ENGAGEMENTS_BANCAIRES.filter(function(e){return (e.organisme||'—')===banque;});
+  imprimerEngagementsListe('Engagements '+banque, liste);
+}
+
+// Variante d'impression AVEC le detail des factures liees a chaque
+// engagement — vient EN PLUS des options d'impression/export deja
+// existantes (celles-ci restent inchangees), pour les cas ou ce detail
+// est necessaire (ex : justifier une avance ASBC/ASF aupres de la banque).
+function imprimerEngagementsListeAvecFactures(titre, liste){
+  var rows = !liste.length
+    ? '<tr><td colspan="6" style="border:1px solid #bbb;padding:10px;text-align:center;color:#888;font-size:11px">Aucun engagement.</td></tr>'
+    : liste.map(function(e){
+        var prochaine = valeurTriProchaineEcheance(e);
+        var prochaineTxt = (prochaine && isFinite(prochaine)) ? new Date(prochaine).toLocaleDateString('fr-FR') : '—';
+        var facturesTxt = (!e.facturesLiees || !e.facturesLiees.length)
+          ? '—'
+          : e.facturesLiees.map(function(f){
+              return (f.numFacture||'(sans numero)')+' — '+f.client+' ('+(parseFloat(f.montant)||0).toLocaleString('fr-FR')+' FCFA)';
+            }).join('<br>');
+        return '<tr>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+e.nom+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+(e.organisme||'—')+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px;text-align:right">'+(parseFloat(e.montant)||0).toLocaleString('fr-FR')+' FCFA</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+e.periodicite+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+prochaineTxt+'</td>'
+          +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+facturesTxt+'</td>'
+          +'</tr>';
+      }).join('');
+  var total = liste.reduce(function(s,e){return s+(parseFloat(e.montant)||0);},0);
+  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+titre+'</title></head><body>'
+    +'<style>'
+    +'*{box-sizing:border-box}'
+    +'*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}'
+    +'@page{size:A4 landscape;margin:15mm}'
+    +'body{font-family:Arial,sans-serif;margin:0;font-size:12px;color:#222}'
+    +'table{width:100%;border-collapse:collapse;margin-top:10px}'
+    +'th{border:1px solid #bbb;padding:6px 10px;font-size:11px;background:#f5f4f1;text-align:left}'
+    +'@media print{*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}'
+    +'</style>'
+    +'<h2 style="margin:0 0 4px">'+titre+' — avec factures liees</h2>'
+    +'<div style="font-size:11px;color:#666;margin-bottom:6px">Edite le '+new Date().toLocaleDateString('fr-FR')+'</div>'
+    +'<table><thead><tr><th>Engagement</th><th>Banque</th><th style="text-align:right">Montant</th><th>Periodicite</th><th>Prochaine echeance</th><th>Factures liees</th></tr></thead><tbody>'
+    +rows
+    +'</tbody><tfoot><tr><td colspan="2" style="border:1px solid #bbb;padding:6px 10px;font-weight:700;text-align:right">Total</td><td style="border:1px solid #bbb;padding:6px 10px;font-weight:700;text-align:right">'+total.toLocaleString('fr-FR')+' FCFA</td><td colspan="3" style="border:1px solid #bbb"></td></tr></tfoot></table>'
+    +'</body></html>';
+  var w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+  setTimeout(function(){ w.print(); }, 300);
+}
+function imprimerNiveauParBanqueAvecFactures(){ imprimerEngagementsListeAvecFactures('Niveau d engagement par banque', ENGAGEMENTS_BANCAIRES); }
+function imprimerEngagementsBanqueAvecFacturesByEl(btn){
+  var banque = decodeURIComponent(btn.getAttribute('data-banque'));
+  var liste = ENGAGEMENTS_BANCAIRES.filter(function(e){return (e.organisme||'—')===banque;});
+  imprimerEngagementsListeAvecFactures('Engagements '+banque, liste);
+}
+
+// Export Excel AVEC le detail des factures liees a chaque engagement —
+// vient EN PLUS de exporterEngagementsExcel (celui-ci reste inchange).
+function exporterEngagementsAvecFacturesExcel(titre, liste){
+  var data = [];
+  data.push([titre.toUpperCase()+' — AVEC FACTURES LIEES']);
+  data.push(['Edite le', new Date().toLocaleDateString('fr-FR')]);
+  data.push([]);
+  data.push(['Engagement', 'Banque', 'Montant', 'Periodicite', 'Prochaine echeance', 'Statut', 'Factures liees']);
+  if(!liste.length){
+    data.push(['Aucun engagement.', '', '', '', '', '', '']);
+  } else {
+    liste.forEach(function(e){
+      var prochaine = valeurTriProchaineEcheance(e);
+      var prochaineTxt = (prochaine && isFinite(prochaine)) ? new Date(prochaine).toLocaleDateString('fr-FR') : '—';
+      var facturesTxt = (!e.facturesLiees || !e.facturesLiees.length)
+        ? '—'
+        : e.facturesLiees.map(function(f){
+            return (f.numFacture||'(sans numero)')+' - '+f.client+' ('+(parseFloat(f.montant)||0).toLocaleString('fr-FR')+' FCFA)';
+          }).join(' | ');
+      data.push([e.nom, e.organisme||'—', parseFloat(e.montant)||0, e.periodicite, prochaineTxt, e.actif?'Actif':'Inactif', facturesTxt]);
+    });
+    var total = liste.reduce(function(s,e){return s+(parseFloat(e.montant)||0);},0);
+    data.push([]);
+    data.push(['Total', '', total, '', '', '', '']);
+  }
+  var ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:24},{wch:20},{wch:14},{wch:14},{wch:16},{wch:10},{wch:50}];
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, titre.substring(0,31));
+  var nomFichier = (titre+'_avec_factures').replace(/[^\w\s\-]/g,'').trim().replace(/\s+/g,'_');
+  XLSX.writeFile(wb, nomFichier+'_'+new Date().toISOString().split('T')[0]+'.xlsx');
+}
+function exporterNiveauParBanqueAvecFacturesExcel(){ exporterEngagementsAvecFacturesExcel('Niveau d engagement par banque', ENGAGEMENTS_BANCAIRES); }
+function exporterEngagementsBanqueAvecFacturesExcelByEl(btn){
+  var banque = decodeURIComponent(btn.getAttribute('data-banque'));
+  var liste = ENGAGEMENTS_BANCAIRES.filter(function(e){return (e.organisme||'—')===banque;});
+  exporterEngagementsAvecFacturesExcel('Engagements '+banque, liste);
+}
+
 // Compte le nombre d'echeances MENSUELLES restantes entre maintenant et
 // la date de fin (incluses), en respectant le jour d'echeance configure —
 // utilise pour le "total restant du" qui tient compte des differentes
@@ -14763,7 +15026,7 @@ function pageEngagementsBancaires(){
   echeancesEnRetardListe.sort(function(a,b){return a.dateEcheance-b.dateEcheance;});
   if(echeancesEnRetardListe.length){
     html += '<div class="card" style="margin-bottom:16px;border:1px solid #E0A0A0">';
-    html += '<div class="card-head" style="color:#A32D2D">&#x26A0; Echeances en retard ('+echeancesEnRetardListe.length+')</div>';
+    html += '<div class="card-head" style="color:#A32D2D"><span>&#x26A0; Echeances en retard ('+echeancesEnRetardListe.length+')</span><span><button class="btn btn-sm" onclick="imprimerEcheancesEnRetard()" title="Imprimer">&#x1F5A8;</button> <button class="btn btn-sm" onclick="exporterEcheancesEnRetardExcel()" title="Exporter Excel">&#128202;</button></span></div>';
     html += '<div class="tw"><table><thead><tr><th>Engagement</th><th>Banque</th><th>Date d\'echeance</th><th>Facture</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
     echeancesEnRetardListe.forEach(function(item){
       var jours = Math.floor((maintenant-item.dateEcheance)/86400000);
@@ -14792,7 +15055,7 @@ function pageEngagementsBancaires(){
   moisEnCoursListe.sort(function(a,b){return a.dateEcheance-b.dateEcheance;});
   if(moisEnCoursListe.length){
     html += '<div class="card" style="margin-bottom:16px;border:1px solid #d0cec9">';
-    html += '<div class="card-head">&#x1F4C5; Engagements mois en cours ('+moisEnCoursListe.length+')</div>';
+    html += '<div class="card-head"><span>&#x1F4C5; Engagements mois en cours ('+moisEnCoursListe.length+')</span><span><button class="btn btn-sm" onclick="imprimerMoisEnCours()" title="Imprimer">&#x1F5A8;</button> <button class="btn btn-sm" onclick="exporterMoisEnCoursExcel()" title="Exporter Excel">&#128202;</button></span></div>';
     html += '<div class="tw"><table><thead><tr><th>Engagement</th><th>Banque</th><th>Date d\'echeance</th><th>Facture</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
     moisEnCoursListe.forEach(function(item){
       var joursRestants = Math.ceil((item.dateEcheance-maintenant)/86400000);
@@ -14811,8 +15074,8 @@ function pageEngagementsBancaires(){
   // ── Niveau d'engagement par banque ──
   var parBanque = regrouperEngagementsParBanque();
   if(parBanque.length){
-    html += '<div class="card" style="margin-bottom:16px"><div class="card-head">Niveau d\'engagement par banque</div>';
-    html += '<div class="tw"><table><thead><tr><th>Banque / organisme</th><th style="text-align:center">Nb engagements</th><th style="text-align:right">Echeances unique</th><th style="text-align:right">Echeances mensuelle</th><th style="text-align:right">Restant CCT</th><th style="text-align:right">En retard</th></tr></thead><tbody>';
+    html += '<div class="card" style="margin-bottom:16px"><div class="card-head"><span>Niveau d\'engagement par banque</span><span><button class="btn btn-sm" onclick="imprimerNiveauParBanque()" title="Imprimer tout">&#x1F5A8;</button> <button class="btn btn-sm" onclick="exporterNiveauParBanqueExcel()" title="Exporter tout en Excel">&#128202;</button> <button class="btn btn-sm" onclick="imprimerNiveauParBanqueAvecFactures()" title="Imprimer tout, avec le detail des factures liees">&#x1F5A8;+&#x1F4C4;</button> <button class="btn btn-sm" onclick="exporterNiveauParBanqueAvecFacturesExcel()" title="Exporter tout en Excel, avec le detail des factures liees">&#128202;+&#x1F4C4;</button></span></div>';
+    html += '<div class="tw"><table><thead><tr><th>Banque / organisme</th><th style="text-align:center">Nb engagements</th><th style="text-align:right">Echeances unique</th><th style="text-align:right">Echeances mensuelle</th><th style="text-align:right">Restant CCT</th><th style="text-align:right">En retard</th><th></th></tr></thead><tbody>';
     parBanque.forEach(function(b){
       var expandKey = 'engBanque::'+b.banque;
       var expanded = !!creancesClientExpand[expandKey];
@@ -14823,9 +15086,10 @@ function pageEngagementsBancaires(){
       html += '<td style="text-align:right;font-family:monospace">'+(b.totalEcheancesMensuelle?b.totalEcheancesMensuelle.toLocaleString('fr-FR')+' FCFA':'—')+'</td>';
       html += '<td style="text-align:right;font-family:monospace;font-weight:700;color:'+(b.totalRestantCCT>0?'#A32D2D':'#999')+'">'+(b.totalRestantCCT?b.totalRestantCCT.toLocaleString('fr-FR')+' FCFA':'—')+'</td>';
       html += '<td style="text-align:right;font-family:monospace;'+(b.totalRetard>0?'font-weight:700;color:#A32D2D':'color:#999')+'">'+(b.totalRetard?b.totalRetard.toLocaleString('fr-FR')+' FCFA':'—')+'</td>';
+      html += '<td><button class="btn btn-sm" data-banque="'+encodeURIComponent(b.banque)+'" onclick="event.stopPropagation();imprimerEngagementsBanqueByEl(this)" title="Imprimer '+b.banque+'">&#x1F5A8;</button> <button class="btn btn-sm" data-banque="'+encodeURIComponent(b.banque)+'" onclick="event.stopPropagation();exporterEngagementsBanqueExcelByEl(this)" title="Exporter '+b.banque+' en Excel">&#128202;</button> <button class="btn btn-sm" data-banque="'+encodeURIComponent(b.banque)+'" onclick="event.stopPropagation();imprimerEngagementsBanqueAvecFacturesByEl(this)" title="Imprimer '+b.banque+', avec le detail des factures liees">&#x1F5A8;+&#x1F4C4;</button> <button class="btn btn-sm" data-banque="'+encodeURIComponent(b.banque)+'" onclick="event.stopPropagation();exporterEngagementsBanqueAvecFacturesExcelByEl(this)" title="Exporter '+b.banque+' en Excel, avec le detail des factures liees">&#128202;+&#x1F4C4;</button></td>';
       html += '</tr>';
       if(expanded){
-        html += '<tr><td colspan="6" style="padding:0;background:#faf9f7"><div style="padding:8px 16px 12px 16px">';
+        html += '<tr><td colspan="7" style="padding:0;background:#faf9f7"><div style="padding:8px 16px 12px 16px">';
         html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:#888">';
         html += '<th style="text-align:left;padding:4px 8px;font-size:11px;cursor:pointer" data-sortcol="nom" onclick="setEngBanqueDetailSortByEl(this)">Engagement'+iconeTriColonne('nom')+'</th>'
           +'<th style="text-align:left;padding:4px 8px;font-size:11px;cursor:pointer" data-sortcol="banque" onclick="setEngBanqueDetailSortByEl(this)">Banque'+iconeTriColonne('banque')+'</th>'
