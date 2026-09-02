@@ -14280,7 +14280,7 @@ function valeurTriProchaineEcheance(e){
   return prog!==null ? prog : Infinity; // pas d'echeance -> toujours en dernier
 }
 
-var engBanqueDetailSortCol = null; // colonne de tri actuelle (null = ordre naturel)
+var engBanqueDetailSortCol = 'prochaine'; // tri par defaut : prochaine echeance, du plus proche au plus eloigne
 var engBanqueDetailSortDir = 'asc';
 
 function setEngBanqueDetailSortByEl(el){
