@@ -14443,10 +14443,18 @@ function exporterEngagementsExcel(titre, liste){
   var nomFichier = titre.replace(/[^\w\s\-]/g,'').trim().replace(/\s+/g,'_');
   XLSX.writeFile(wb, nomFichier+'_'+new Date().toISOString().split('T')[0]+'.xlsx');
 }
-function exporterNiveauParBanqueExcel(){ exporterEngagementsExcel('Niveau d engagement par banque', ENGAGEMENTS_BANCAIRES); }
+// Engagements actifs et PAS ENCORE soldes — meme filtre que celui utilise
+// par l'affichage a l'ecran (regrouperEngagementsParBanque). Reutilise par
+// toutes les fonctions d'impression/export, pour ne jamais faire figurer
+// un engagement/echeance deja regle integralement.
+function engagementsBancairesPourExport(){
+  return ENGAGEMENTS_BANCAIRES.filter(function(e){return e.actif && !estEngagementSolde(e);});
+}
+
+function exporterNiveauParBanqueExcel(){ exporterEngagementsExcel('Niveau d engagement par banque', engagementsBancairesPourExport()); }
 function exporterEngagementsBanqueExcelByEl(btn){
   var banque = decodeURIComponent(btn.getAttribute('data-banque'));
-  var liste = ENGAGEMENTS_BANCAIRES.filter(function(e){return (e.organisme||'—')===banque;});
+  var liste = engagementsBancairesPourExport().filter(function(e){return (e.organisme||'—')===banque;});
   exporterEngagementsExcel('Engagements '+banque, liste);
 }
 
@@ -14486,10 +14494,10 @@ function imprimerEngagementsListe(titre, liste){
   w.document.close();
   setTimeout(function(){ w.print(); }, 300);
 }
-function imprimerNiveauParBanque(){ imprimerEngagementsListe('Niveau d engagement par banque', ENGAGEMENTS_BANCAIRES); }
+function imprimerNiveauParBanque(){ imprimerEngagementsListe('Niveau d engagement par banque', engagementsBancairesPourExport()); }
 function imprimerEngagementsBanqueByEl(btn){
   var banque = decodeURIComponent(btn.getAttribute('data-banque'));
-  var liste = ENGAGEMENTS_BANCAIRES.filter(function(e){return (e.organisme||'—')===banque;});
+  var liste = engagementsBancairesPourExport().filter(function(e){return (e.organisme||'—')===banque;});
   imprimerEngagementsListe('Engagements '+banque, liste);
 }
 
@@ -14539,10 +14547,10 @@ function imprimerEngagementsListeAvecFactures(titre, liste){
   w.document.close();
   setTimeout(function(){ w.print(); }, 300);
 }
-function imprimerNiveauParBanqueAvecFactures(){ imprimerEngagementsListeAvecFactures('Niveau d engagement par banque', ENGAGEMENTS_BANCAIRES); }
+function imprimerNiveauParBanqueAvecFactures(){ imprimerEngagementsListeAvecFactures('Niveau d engagement par banque', engagementsBancairesPourExport()); }
 function imprimerEngagementsBanqueAvecFacturesByEl(btn){
   var banque = decodeURIComponent(btn.getAttribute('data-banque'));
-  var liste = ENGAGEMENTS_BANCAIRES.filter(function(e){return (e.organisme||'—')===banque;});
+  var liste = engagementsBancairesPourExport().filter(function(e){return (e.organisme||'—')===banque;});
   imprimerEngagementsListeAvecFactures('Engagements '+banque, liste);
 }
 
@@ -14578,10 +14586,10 @@ function exporterEngagementsAvecFacturesExcel(titre, liste){
   var nomFichier = (titre+'_avec_factures').replace(/[^\w\s\-]/g,'').trim().replace(/\s+/g,'_');
   XLSX.writeFile(wb, nomFichier+'_'+new Date().toISOString().split('T')[0]+'.xlsx');
 }
-function exporterNiveauParBanqueAvecFacturesExcel(){ exporterEngagementsAvecFacturesExcel('Niveau d engagement par banque', ENGAGEMENTS_BANCAIRES); }
+function exporterNiveauParBanqueAvecFacturesExcel(){ exporterEngagementsAvecFacturesExcel('Niveau d engagement par banque', engagementsBancairesPourExport()); }
 function exporterEngagementsBanqueAvecFacturesExcelByEl(btn){
   var banque = decodeURIComponent(btn.getAttribute('data-banque'));
-  var liste = ENGAGEMENTS_BANCAIRES.filter(function(e){return (e.organisme||'—')===banque;});
+  var liste = engagementsBancairesPourExport().filter(function(e){return (e.organisme||'—')===banque;});
   exporterEngagementsAvecFacturesExcel('Engagements '+banque, liste);
 }
 
