@@ -97,7 +97,7 @@ tr:hover td{background:#faf9f7}
 #_printContent{display:none;position:fixed;inset:0;background:#fff;z-index:99999;overflow:auto;padding:20px}
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:1000;padding:16px}
 .modal{background:#fff;border-radius:13px;width:660px;max-width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2)}
-.modal-lg{width:800px}.modal-xl{width:960px}
+.modal-lg{width:800px}.modal-xl{width:1140px}
 .mhead{padding:14px 18px;border-bottom:1px solid #e8e6e1;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:#fff;z-index:1}
 .mhead h2{font-size:14px;font-weight:700}
 .mbody{padding:18px}
@@ -17813,7 +17813,7 @@ function renderChiffrageSection(v){
         prixVente: ref ? (ref.prixVente||'') : '',
         fournisseurId: ref ? (ref.fournisseurId||'') : '',
         fournisseur: '',
-        source: ref ? (ref.source||'commande') : 'commande',
+        source: ref ? (ref.source||'local') : 'local',
         paiement: 'cash',
         prixReporte: ref ? true : false,
         dateOrigine: ref ? ref.dateOrigine : null
@@ -18077,7 +18077,7 @@ function renderChiffrageProspect(v){
   if(!v.chiffrage) v.chiffrage = {lignes:[], valide:false, soumisLe:null};
   if(!v.chiffrage.lignes) v.chiffrage.lignes = [];
   if(!v.chiffrage.lignes.length){
-    v.chiffrage.lignes.push({libreId:'lib_'+Date.now(), piece:'', qte:1, prixAchat:'', prixVente:'', fournisseurId:'', source:'commande', paiement:'cash'});
+    v.chiffrage.lignes.push({libreId:'lib_'+Date.now(), piece:'', qte:1, prixAchat:'', prixVente:'', fournisseurId:'', source:'local', paiement:'cash'});
     saveV();
   }
 
@@ -18212,7 +18212,7 @@ function addLigneProspect(){
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v) return;
   if(!v.chiffrage) v.chiffrage = {lignes:[], valide:false};
-  v.chiffrage.lignes.push({libreId:'lib_'+Date.now()+'_'+Math.random().toString(36).substr(2,4), piece:'', qte:1, prixAchat:'', prixVente:'', fournisseurId:'', source:'commande', paiement:'cash'});
+  v.chiffrage.lignes.push({libreId:'lib_'+Date.now()+'_'+Math.random().toString(36).substr(2,4), piece:'', qte:1, prixAchat:'', prixVente:'', fournisseurId:'', source:'local', paiement:'cash'});
   saveV();
   openDetKeepEdit(detCurrentVid);
 }
@@ -18363,7 +18363,7 @@ function addChiffrageLigne(){
   if(!v.chiffrage) v.chiffrage = {lignes:[], valide:false, soumisLe:null};
   v.chiffrage.lignes.push({
     libreId: 'cl'+Date.now()+Math.floor(Math.random()*1000),
-    piece:'', qte:1, prixUnitaire:'', total:'', fournisseur:''
+    piece:'', qte:1, prixUnitaire:'', total:'', fournisseur:'', source:'local'
   });
   saveV();
   openDetKeepEdit(detCurrentVid);
@@ -18719,7 +18719,7 @@ function repondreDevisCompl(accepte){
         libreId:'compl'+Date.now()+Math.floor(Math.random()*1000),
         piece:l.piece, qte:l.qte||1,
         prixAchat:l.prixAchat||'', prixVente:l.prixVente||'',
-        source:l.source||'commande', paiement:l.paiement||'cash',
+        source:l.source||'local', paiement:l.paiement||'cash',
         fournisseurId:l.fournisseurId||'', isCompl:true
       });
     });
@@ -29473,8 +29473,13 @@ function initFirebase(){
         return;
       }
       // Ignorer seulement si c'est ce même appareil qui vient de sauvegarder
+      // DANS CETTE SESSION (lastLocalTs>0 obligatoire) — sinon, juste apres
+      // un rechargement de page, lastLocalTs vaut 0 et cette condition
+      // ignorerait a tort la toute premiere synchro Firebase recue,
+      // laissant l'app se fier uniquement au localStorage sans jamais
+      // fusionner avec l'etat reellement present sur le serveur.
       if(data.deviceId && data.deviceId === deviceId
-         && data.ts && data.ts >= lastLocalTs - 2000) return;
+         && data.ts && lastLocalTs > 0 && data.ts >= lastLocalTs - 2000) return;
       try{
         var newVehicles = JSON.parse(data.vehicles);
         // Préserver les photos en mémoire qui ne sont pas dans Firebase
