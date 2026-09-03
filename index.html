@@ -22869,6 +22869,13 @@ function showTab(id){
 
 function resetForm(){
   ['f_immat','f_modele','f_vin','f_km','f_mec','f_livraison','f_client','f_tel','f_email','f_motif','f_symp','f_sin','f_assureur','f_contact_ass','f_expert','f_contact_exp','f_date_sin'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
+  // Reinitialiser l'etat "reprise des travaux a prevoir" — sans cela, une
+  // reprise selectionnee puis abandonnee (fenetre fermee sans valider)
+  // restait affichee tel quel a la prochaine ouverture du formulaire,
+  // meme pour un vehicule totalement different (aucune immat saisie).
+  _tapRepris = null;
+  var tapZone = document.getElementById('tapRecZone');
+  if(tapZone) tapZone.innerHTML = '';
   var feEl2=document.getElementById('f_entree'); if(feEl2) feEl2.value=new Date().toISOString().split('T')[0];
   var ar=document.getElementById('f_arecup');if(ar)ar.checked=false;
   var dr=document.getElementById('div_recup');if(dr)dr.style.display='none';
@@ -23095,6 +23102,7 @@ function submitRec(){
       if(vehicles[i].id===editingId){
         Object.keys(data).forEach(function(k){vehicles[i][k]=data[k];});
         if(equipeChoisie) vehicles[i].equipe_affectee = equipeChoisie;
+        marquerVehiculeModifie(editingId);
         break;
       }
     }
@@ -23115,10 +23123,18 @@ function submitRec(){
       if(srcTap && srcTap.travauxAPrevoir && srcTap.travauxAPrevoir.length){
         nv.tapReprisDe = srcTap.travauxAPrevoir.map(function(t){ return {
           piece:t.piece, qte:t.qte, prixAchat:t.prixAchat||'', prixVente:t.prixVente||'',
-          source:t.source||'commande', fournisseurId:t.fournisseurId||'', dateOrigine:t.dateOrigine
+          source:t.source||'local', fournisseurId:t.fournisseurId||'', dateOrigine:t.dateOrigine
         };});
         // Retirer de l'ancien dossier : les travaux sont maintenant pris en charge
         srcTap.travauxAPrevoir = [];
+        // IMPORTANT pour la synchronisation : cette action modifie DEUX
+        // vehicules a la fois (le nouveau ET l'ancien dont la liste est
+        // videe), en dehors du contexte habituel de la fiche detail
+        // (detCurrentVid n'est pas concerne ici) — sans ce marquage
+        // explicite, une synchronisation perimee venant d'un autre
+        // appareil pourrait restaurer a tort les travaux deja repris sur
+        // l'ancien dossier, causant une reprise en double.
+        marquerVehiculeModifie(srcTap.id);
       }
     }
     _tapRepris = null;
@@ -23136,6 +23152,10 @@ function submitRec(){
       }
     }
     vehicles.unshift(nv);
+    // Marquer explicitement CE nouveau vehicule — ce flux de creation ne
+    // passe pas par detCurrentVid (contrairement a la fiche detail), donc
+    // le marquage automatique de saveV() ne le couvrirait pas.
+    marquerVehiculeModifie(nv.id);
   }
   // Sauvegarder immédiatement sur Firebase (sans debounce) pour les photos
   if(fbDb && fbConnected){
