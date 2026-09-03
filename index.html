@@ -11879,6 +11879,7 @@ function pageArchives(){
 // existante n'est modifiee ni renommee, donc les dossiers deja crees
 // restent compatibles (fournPaye absent = considere non paye).
 var dettesFournExpand = {}; // {fournisseurId: true/false}
+var dettesFournSelection = {}; // {cleLigne: true/false} — lignes cochees pour paiement groupe
 var dettesFournFiltre = 'toutes'; // 'toutes','retard','a_echoir','planifie'
 var dettesFournVue = 'encours'; // 'encours','historique'
 var chargesFixesVue = 'liste'; // 'liste','paiement','historique'
@@ -12584,6 +12585,7 @@ function pageDettesFournisseurs(){
     });
     g.statutGlobal = pire;
     g.joursRestantsMin = g.lignes.reduce(function(m,l){return Math.min(m,l.joursRestants);}, Infinity);
+    g.nbLignesRetard = g.lignes.filter(function(l){return l.statut==='retard';}).length;
   });
 
   // Filtre
@@ -12639,19 +12641,43 @@ function pageDettesFournisseurs(){
     if(g.statutGlobal==='retard'){ echLabel = 'il y a '+Math.abs(g.joursRestantsMin)+'j &#9888;'; echColor='#A32D2D'; }
     else if(g.statutGlobal==='a_echoir'){ echLabel = g.joursRestantsMin===0?'aujourd\'hui':'dans '+g.joursRestantsMin+'j'; echColor='#854F0B'; }
     else { echLabel = 'dans '+g.joursRestantsMin+'j'; echColor='#3B6D11'; }
+    // Precise combien de lignes sont EN RETARD quand il y en a plusieurs
+    // (le chiffre principal ne montre que la plus ancienne) — sans cela,
+    // impossible de savoir d'un coup d'oeil s'il y en a une seule ou
+    // plusieurs sans deplier le detail du fournisseur.
+    var nbRetardLabel = g.nbLignesRetard>1 ? '<div class="xs" style="color:#A32D2D;font-weight:600">'+g.nbLignesRetard+' lignes en retard</div>' : '';
 
     html += '<tr style="'+rowBg+';cursor:pointer" data-fexp="'+g.fournisseur.id+'" onclick="toggleDettesFournExpandByEl(this)">';
     html += '<td><strong>'+(expanded?'&#9662; ':'&#9656; ')+g.fournisseur.nom+'</strong> <span class="xs muted">'+g.lignes.length+' achat'+(g.lignes.length>1?'s':'')+' &middot; '+condLabel+'</span></td>';
     html += '<td style="font-family:monospace">'+g.total.toLocaleString('fr-FR')+'</td>';
     html += '<td style="font-family:monospace;font-weight:700;color:#A32D2D">'+g.total.toLocaleString('fr-FR')+'</td>';
-    html += '<td style="color:'+echColor+';font-weight:600">'+echLabel+'</td>';
+    html += '<td style="color:'+echColor+';font-weight:600">'+echLabel+nbRetardLabel+'</td>';
     html += '<td></td>';
     html += '</tr>';
 
     if(expanded){
       html += '<tr><td colspan="5" style="padding:0;background:#faf9f7"><div style="padding:8px 16px 12px 28px">';
+      // Barre d'actions de selection multiple — permet de payer plusieurs
+      // lignes de ce fournisseur en une seule fois, avec la possibilite
+      // de choisir precisement lesquelles (raccourcis + case a case).
+      var cleLigneFn = function(l){ return l.manuel ? 'm:'+l.detteId : 'v:'+l.vehId+':'+l.ligneId; };
+      var nbSelectionne = g.lignes.filter(function(l){return dettesFournSelection[cleLigneFn(l)];}).length;
+      var totalSelectionne = g.lignes.filter(function(l){return dettesFournSelection[cleLigneFn(l)];}).reduce(function(s,l){return s+l.montant;},0);
+      html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;padding:8px;background:#fff;border:1px solid #e8e5e0;border-radius:6px">';
+      html += '<button class="btn btn-sm" data-fid="'+g.fournisseur.id+'" onclick="event.stopPropagation();selectionnerLignesDette(this,\'toutes\')">Tout selectionner</button>';
+      html += '<button class="btn btn-sm" style="color:#A32D2D" data-fid="'+g.fournisseur.id+'" onclick="event.stopPropagation();selectionnerLignesDette(this,\'retard\')">Selectionner les en retard</button>';
+      html += '<button class="btn btn-sm" data-fid="'+g.fournisseur.id+'" onclick="event.stopPropagation();selectionnerLignesDette(this,\'aucune\')">Tout deselectionner</button>';
+      html += '<span style="flex:1"></span>';
+      if(nbSelectionne>0){
+        html += '<span class="xs" style="font-weight:600">'+nbSelectionne+' ligne'+(nbSelectionne>1?'s':'')+' selectionnee'+(nbSelectionne>1?'s':'')+' — <span style="font-family:monospace;color:#A32D2D">'+totalSelectionne.toLocaleString('fr-FR')+' FCFA</span></span>';
+        html += '<button class="btn btn-success btn-sm" data-fid="'+g.fournisseur.id+'" onclick="event.stopPropagation();ouvrirPaiementSelectionDette(this)">&#x2714; Payer la selection</button>';
+      } else {
+        html += '<span class="xs muted">Aucune ligne selectionnee</span>';
+      }
+      html += '<button class="btn btn-sm" style="border-color:#3B6D11;color:#3B6D11" data-fid="'+g.fournisseur.id+'" onclick="event.stopPropagation();marquerFournisseurPayeByEl(this)">&#x1F4B0; Payer tout ce fournisseur</button>';
+      html += '</div>';
       html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:#888">';
-      html += '<th style="text-align:left;padding:4px 8px;font-size:11px">Libelle</th><th style="text-align:center;padding:4px 8px;font-size:11px">Quantite</th><th style="text-align:right;padding:4px 8px;font-size:11px">Prix unitaire</th><th style="text-align:right;padding:4px 8px;font-size:11px">Prix total</th><th style="text-align:right;padding:4px 8px;font-size:11px">Reste a payer</th><th style="text-align:left;padding:4px 8px;font-size:11px">Echeance</th><th style="text-align:left;padding:4px 8px;font-size:11px">Statut</th><th></th>';
+      html += '<th style="padding:4px 8px"></th><th style="text-align:left;padding:4px 8px;font-size:11px">Libelle</th><th style="text-align:center;padding:4px 8px;font-size:11px">Quantite</th><th style="text-align:right;padding:4px 8px;font-size:11px">Prix unitaire</th><th style="text-align:right;padding:4px 8px;font-size:11px">Prix total</th><th style="text-align:right;padding:4px 8px;font-size:11px">Reste a payer</th><th style="text-align:left;padding:4px 8px;font-size:11px">Echeance</th><th style="text-align:left;padding:4px 8px;font-size:11px">Statut</th><th></th>';
       html += '</tr></thead><tbody>';
       // Du plus ANCIEN au plus RECENT — pour suivre l'historique des
       // achats dans l'ordre ou ils ont ete engages.
@@ -12664,7 +12690,10 @@ function pageDettesFournisseurs(){
         var libelle = l.manuel
           ? '<strong>'+l.piece+'</strong> <span class="badge b-gray" style="font-size:9px">Saisie manuelle</span>'
           : '<strong>'+l.immat+'</strong> '+(l.marque||'')+' '+(l.modele||'')+' — <span class="muted">client '+l.client+'</span>'+(l.piece?' <span class="muted">('+l.piece+')</span>':'');
-        html += '<tr style="border-top:1px solid rgba(0,0,0,0.06)">';
+        var cleL = cleLigneFn(l);
+        var cochee = !!dettesFournSelection[cleL];
+        html += '<tr style="border-top:1px solid rgba(0,0,0,0.06)'+(cochee?';background:#EAF3DE':'')+'">';
+        html += '<td style="padding:4px 8px"><input type="checkbox" data-cle-ligne="'+encodeURIComponent(cleL)+'" data-fid="'+g.fournisseur.id+'"'+(cochee?' checked':'')+' onclick="event.stopPropagation();toggleLigneDetteSelectionByEl(this)"></td>';
         html += '<td style="padding:4px 8px">'+libelle+'</td>';
         html += '<td style="padding:4px 8px;text-align:center">'+(l.qte||1)+'</td>';
         html += '<td style="padding:4px 8px;text-align:right;font-family:monospace">'+(l.prixUnitaire||0).toLocaleString('fr-FR')+'</td>';
@@ -12701,8 +12730,8 @@ function pageDettesFournisseurs(){
   html += '<div class="fr"><label class="fl">Quantite</label><input class="inp" type="number" min="1" id="dm_qte" value="1"></div>';
   html += '<div class="fr"><label class="fl">Prix d\'achat unitaire (FCFA) <span style="color:red">*</span></label><input class="inp" type="number" min="0" id="dm_prixAchat" placeholder="0"></div>';
   html += '</div>';
-  html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Date d\'achat / debut de livraison <span class="xs muted">(repere pour compter les jours)</span></label><input class="inp" type="date" id="dm_dateAchat"></div>';
-  html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Date d\'echeance <span style="color:red">*</span></label><input class="inp" type="date" id="dm_dateEcheance"></div>';
+  html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Date d\'achat / debut de livraison <span class="xs muted">(repere pour compter les jours)</span></label><input class="inp" type="date" id="dm_dateAchat" oninput="majApercuEcheanceDette()"></div>';
+  html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Delai avant echeance (jours) <span style="color:red">*</span></label><input class="inp" type="number" min="0" id="dm_delaiJours" placeholder="Ex: 30" oninput="majApercuEcheanceDette()"><div class="xs muted" style="margin-top:3px" id="dm_echeance_apercu"></div></div>';
   html += '</div>';
   html += '<div class="mfoot"><button class="btn" onclick="document.getElementById(\'modalAjoutDetteManuelle\').style.display=\'none\'">Annuler</button><button class="btn btn-primary" onclick="confirmerAjoutDetteManuelle()">Enregistrer</button></div>';
   html += '</div></div>';
@@ -12758,6 +12787,53 @@ function marquerLigneFournPayeeByEl(el){
 // fournisseur — prerempli avec le total restant du (toutes ses dettes,
 // vehicule + manuelles confondues). Un paiement partiel eponge les plus
 // anciennes dettes en premier (FIFO).
+// Cle unique identifiant une ligne de dette (manuelle ou liee a un
+// vehicule), utilisee pour suivre la selection multiple independamment
+// du type d'origine de la ligne.
+function cleLigneDette(l){ return l.manuel ? 'm:'+l.detteId : 'v:'+l.vehId+':'+l.ligneId; }
+
+function toggleLigneDetteSelectionByEl(cb){
+  var cle = decodeURIComponent(cb.getAttribute('data-cle-ligne'));
+  dettesFournSelection[cle] = cb.checked;
+  renderPage();
+}
+
+// Raccourcis de selection pour un fournisseur precis : toutes ses lignes,
+// uniquement celles en retard, ou tout deselectionner.
+function selectionnerLignesDette(el, mode){
+  var fid = el.getAttribute('data-fid');
+  var groupes = collecterDettesFournisseurs();
+  var g = groupes.find(function(x){return x.fournisseur.id===fid;});
+  if(!g) return;
+  g.lignes.forEach(function(l){
+    var cle = cleLigneDette(l);
+    if(mode==='toutes') dettesFournSelection[cle] = true;
+    else if(mode==='retard') dettesFournSelection[cle] = (l.statut==='retard');
+    else dettesFournSelection[cle] = false;
+  });
+  renderPage();
+}
+
+// Ouvre la modale de paiement pour EXACTEMENT les lignes cochees de ce
+// fournisseur (mix dettes manuelles + dettes vehicule possible) — le
+// montant est reparti sur la selection uniquement, dans l'ordre du plus
+// ancien au plus recent si le montant saisi est inferieur au total
+// selectionne.
+function ouvrirPaiementSelectionDette(el){
+  var fid = el.getAttribute('data-fid');
+  var groupes = collecterDettesFournisseurs();
+  var g = groupes.find(function(x){return x.fournisseur.id===fid;});
+  if(!g) return;
+  var lignesSelectionnees = g.lignes.filter(function(l){return dettesFournSelection[cleLigneDette(l)];});
+  if(!lignesSelectionnees.length){ alert('Aucune ligne selectionnee.'); return; }
+  var total = lignesSelectionnees.reduce(function(s,l){return s+l.montant;},0);
+  ouvrirModalPaiementFournisseur({
+    titre: 'Paiement de la selection — '+g.fournisseur.nom+' ('+lignesSelectionnees.length+' ligne'+(lignesSelectionnees.length>1?'s':'')+')',
+    resteDu: total,
+    mode: 'selection', fid: fid
+  });
+}
+
 function marquerFournisseurPayeByEl(el){
   var fid = el.getAttribute('data-fid');
   var f = FOURNISSEURS.find(function(x){return x.id===fid;});
@@ -12824,6 +12900,41 @@ function confirmerPaiementFournisseur(){
     if(montantSaisi>resteM){ alert('Le montant saisi depasse le reste du ('+resteM.toLocaleString('fr-FR')+' FCFA).'); return; }
     appliquerAllocationsPaiementFournisseur(allouerPaiementFournisseur([dm], montantSaisi), modePaiementChoisi, noteChoisie);
     saveDettesManuelles();
+  } else if(mode==='selection'){
+    var fid = document.getElementById('pfModalFid').value;
+    // Reconstruit les objets REELS (cl ou dm) correspondant aux lignes
+    // cochees pour ce fournisseur — dettesFournSelection ne stocke que
+    // des cles, pas les objets eux-memes (qui peuvent changer entre
+    // deux rendus).
+    var items = [];
+    vehicles.forEach(function(v){
+      if(!v.chiffrage || !v.chiffrage.lignes) return;
+      v.chiffrage.lignes.forEach(function(cl){
+        if(cl.fournisseurId!==fid || cl.paiement!=='credit' || resteDuDette(cl)<=0) return;
+        var lid = cl.devisId || cl.libreId || cl.id || null;
+        var cle = 'v:'+v.id+':'+lid;
+        if(dettesFournSelection[cle]){
+          items.push({ref:cl, dateAchat: v.chiffrage.valideDirLe||v.chiffrage.soumisLe||v.entree||0});
+        }
+      });
+    });
+    DETTES_MANUELLES.forEach(function(dm){
+      if(dm.fournisseurId!==fid || resteDuDette(dm)<=0) return;
+      if(dettesFournSelection['m:'+dm.id]){
+        items.push({ref:dm, dateAchat: dm.dateAchat||0});
+      }
+    });
+    if(!items.length){ alert('Aucune ligne selectionnee.'); return; }
+    items.sort(function(a,b){return a.dateAchat-b.dateAchat;});
+    var totalSel = items.reduce(function(s,it){return s+resteDuDette(it.ref);},0);
+    if(montantSaisi>totalSel){ alert('Le montant saisi depasse le total de la selection ('+totalSel.toLocaleString('fr-FR')+' FCFA).'); return; }
+    var itemsReelsSel = items.map(function(it){return it.ref;});
+    appliquerAllocationsPaiementFournisseur(allouerPaiementFournisseur(itemsReelsSel, montantSaisi), modePaiementChoisi, noteChoisie);
+    saveV();
+    saveDettesManuelles();
+    // Nettoie la selection : une ligne soldee n'a plus de raison de
+    // rester cochee au prochain affichage.
+    dettesFournSelection = {};
   } else if(mode==='fournisseur'){
     var fid = document.getElementById('pfModalFid').value;
     // Recolte FRAICHE de toutes les dettes non soldees de ce fournisseur,
@@ -12858,13 +12969,28 @@ function confirmerPaiementFournisseur(){
 }
 
 // ── Dettes fournisseurs manuelles : ajout, paiement, suppression ────────
+// Affiche en direct la date d'echeance calculee (date d'achat + delai en
+// jours saisi), pour que l'utilisateur voie immediatement le resultat
+// sans avoir a choisir une date dans un calendrier.
+function majApercuEcheanceDette(){
+  var apercu = document.getElementById('dm_echeance_apercu');
+  if(!apercu) return;
+  var dateAchatStr = (document.getElementById('dm_dateAchat')||{value:''}).value;
+  var delaiJours = parseInt((document.getElementById('dm_delaiJours')||{value:''}).value, 10);
+  if(isNaN(delaiJours)){ apercu.textContent = ''; return; }
+  var dateAchat = dateAchatStr ? new Date(dateAchatStr).getTime() : Date.now();
+  var echeance = dateAchat + delaiJours*86400000;
+  apercu.textContent = 'Echeance : '+new Date(echeance).toLocaleDateString('fr-FR');
+}
 function ouvrirAjoutDetteManuelle(){
   document.getElementById('dm_edit_id').value = '';
   document.getElementById('dm_fournisseur').value = '';
   document.getElementById('dm_piece').value = '';
   document.getElementById('dm_qte').value = 1;
   document.getElementById('dm_prixAchat').value = '';
-  document.getElementById('dm_dateEcheance').value = '';
+  document.getElementById('dm_dateAchat').value = '';
+  document.getElementById('dm_delaiJours').value = '';
+  document.getElementById('dm_echeance_apercu').textContent = '';
   document.getElementById('modalAjoutDetteManuelleTitre').textContent = '+ Ajouter une dette fournisseur';
   document.getElementById('modalAjoutDetteManuelle').style.display = 'flex';
 }
@@ -12882,9 +13008,11 @@ function ouvrirModifDetteManuelleByEl(btn){
   document.getElementById('dm_qte').value = dm.qte||1;
   document.getElementById('dm_prixAchat').value = dm.prixAchat||'';
   document.getElementById('dm_dateAchat').value = dm.dateAchat ? new Date(dm.dateAchat).toISOString().slice(0,10) : '';
-  document.getElementById('dm_dateEcheance').value = dm.dateEcheance ? new Date(dm.dateEcheance).toISOString().slice(0,10) : '';
+  var delaiExistant = (dm.dateAchat && dm.dateEcheance) ? Math.round((dm.dateEcheance-dm.dateAchat)/86400000) : '';
+  document.getElementById('dm_delaiJours').value = delaiExistant;
   document.getElementById('modalAjoutDetteManuelleTitre').textContent = '&#x270F; Modifier la dette'+(dm.paye?' (deja payee)':'');
   document.getElementById('modalAjoutDetteManuelle').style.display = 'flex';
+  majApercuEcheanceDette();
 }
 
 function confirmerAjoutDetteManuelle(){
@@ -12894,12 +13022,17 @@ function confirmerAjoutDetteManuelle(){
   var qte = parseInt(document.getElementById('dm_qte').value,10) || 1;
   var prixAchat = parseFloat(document.getElementById('dm_prixAchat').value);
   var dateAchatStr = (document.getElementById('dm_dateAchat')||{value:''}).value;
-  var dateEcheanceStr = document.getElementById('dm_dateEcheance').value;
+  var delaiJours = parseInt(document.getElementById('dm_delaiJours').value, 10);
 
   if(!fournisseurId){ alert('Choisissez un fournisseur.'); return; }
   if(!piece){ alert('Indiquez le nom de la piece ou de l\'article.'); return; }
   if(!prixAchat || prixAchat<=0){ alert('Indiquez un prix d\'achat valide.'); return; }
-  if(!dateEcheanceStr){ alert('Indiquez une date d\'echeance.'); return; }
+  if(isNaN(delaiJours) || delaiJours<0){ alert('Indiquez le delai avant echeance, en jours.'); return; }
+
+  // La date d'achat sert de repere pour compter les jours — si non
+  // renseignee, on prend aujourd'hui (comportement precedent conserve).
+  var dateAchatMs = dateAchatStr ? new Date(dateAchatStr).getTime() : Date.now();
+  var dateEcheanceMs = dateAchatMs + delaiJours*86400000;
 
   if(editId){
     // Modification d'une dette existante (payee ou non) — corrige une
@@ -12907,14 +13040,13 @@ function confirmerAjoutDetteManuelle(){
     var dm = DETTES_MANUELLES.find(function(x){return x.id===editId;});
     if(!dm){ alert('Dette introuvable.'); return; }
     dm.fournisseurId = fournisseurId; dm.piece = piece; dm.qte = qte;
-    dm.prixAchat = prixAchat; dm.dateEcheance = new Date(dateEcheanceStr).getTime();
-    if(dateAchatStr) dm.dateAchat = new Date(dateAchatStr).getTime();
+    dm.prixAchat = prixAchat; dm.dateAchat = dateAchatMs; dm.dateEcheance = dateEcheanceMs;
   } else {
     var auteur = currentUser ? (currentUser.login||currentUser.nom) : currentRole;
     DETTES_MANUELLES.push({
       id: 'dm_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),
       fournisseurId: fournisseurId, piece: piece, qte: qte, prixAchat: prixAchat,
-      dateAchat: dateAchatStr ? new Date(dateAchatStr).getTime() : Date.now(), dateEcheance: new Date(dateEcheanceStr).getTime(),
+      dateAchat: dateAchatMs, dateEcheance: dateEcheanceMs,
       paye: false, payeLe: null, auteur: auteur
     });
   }
