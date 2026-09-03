@@ -12184,7 +12184,15 @@ function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
       });
     }
   });
-  var tauxEncaissement = factureSurPeriode>0 ? Math.min(100, encaisseRealise/factureSurPeriode*100) : null;
+  // Taux d'encaissement : compare ce qui est REELLEMENT encaisse contre le
+  // total a encaisser (encaisse + reste attendu) — coherent avec les deux
+  // montants affiches juste a cote ("Encaissements attendus" et
+  // "Encaissements realises"). L'ancien calcul comparait a tort au
+  // montant facture sur la SEULE periode en cours (une population
+  // totalement differente), ce qui produisait un pourcentage incoherent
+  // avec les deux chiffres affiches (ex: 54% alors que 3M encaisses sur
+  // 53M au total ne fait que ~5.7%).
+  var tauxEncaissement = (encaisseRealise+totalAttendu)>0 ? (encaisseRealise/(encaisseRealise+totalAttendu)*100) : null;
 
   var expositionTotale = 0;
   (function(){
@@ -12665,7 +12673,7 @@ function pageDettesFournisseurs(){
         html += '<td style="padding:4px 8px">'+(l.dateEcheance?new Date(l.dateEcheance).toLocaleDateString('fr-FR'):'—')+'</td>';
         html += '<td style="padding:4px 8px"><span class="badge '+badgeCls+'">'+badgeLabel+'</span></td>';
         if(l.manuel){
-          html += '<td style="padding:4px 8px"><button class="btn btn-success btn-sm" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();marquerDetteManuelleByEl(this)">Payer</button> <button class="btn btn-sm" style="color:#A32D2D" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();supprimerDetteManuelleByEl(this)">&#x1F5D1;</button></td>';
+          html += '<td style="padding:4px 8px"><button class="btn btn-sm" style="color:#185FA5;border-color:#B5D4F4" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();ouvrirModifDetteManuelleByEl(this)" title="Modifier cette dette">&#x270F;</button> <button class="btn btn-success btn-sm" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();marquerDetteManuelleByEl(this)">Payer</button> <button class="btn btn-sm" style="color:#A32D2D" data-dette-id="'+l.detteId+'" onclick="event.stopPropagation();supprimerDetteManuelleByEl(this)">&#x1F5D1;</button></td>';
         } else {
           html += '<td style="padding:4px 8px"><button class="btn btn-success btn-sm" data-vid="'+l.vehId+'" data-lid="'+(l.ligneId||'')+'" onclick="event.stopPropagation();marquerLigneFournPayeeByEl(this)">Payer cette ligne</button></td>';
         }
@@ -12693,6 +12701,7 @@ function pageDettesFournisseurs(){
   html += '<div class="fr"><label class="fl">Quantite</label><input class="inp" type="number" min="1" id="dm_qte" value="1"></div>';
   html += '<div class="fr"><label class="fl">Prix d\'achat unitaire (FCFA) <span style="color:red">*</span></label><input class="inp" type="number" min="0" id="dm_prixAchat" placeholder="0"></div>';
   html += '</div>';
+  html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Date d\'achat / debut de livraison <span class="xs muted">(repere pour compter les jours)</span></label><input class="inp" type="date" id="dm_dateAchat"></div>';
   html += '<div class="fr" style="margin-bottom:10px"><label class="fl">Date d\'echeance <span style="color:red">*</span></label><input class="inp" type="date" id="dm_dateEcheance"></div>';
   html += '</div>';
   html += '<div class="mfoot"><button class="btn" onclick="document.getElementById(\'modalAjoutDetteManuelle\').style.display=\'none\'">Annuler</button><button class="btn btn-primary" onclick="confirmerAjoutDetteManuelle()">Enregistrer</button></div>';
@@ -12872,6 +12881,7 @@ function ouvrirModifDetteManuelleByEl(btn){
   document.getElementById('dm_piece').value = dm.piece||'';
   document.getElementById('dm_qte').value = dm.qte||1;
   document.getElementById('dm_prixAchat').value = dm.prixAchat||'';
+  document.getElementById('dm_dateAchat').value = dm.dateAchat ? new Date(dm.dateAchat).toISOString().slice(0,10) : '';
   document.getElementById('dm_dateEcheance').value = dm.dateEcheance ? new Date(dm.dateEcheance).toISOString().slice(0,10) : '';
   document.getElementById('modalAjoutDetteManuelleTitre').textContent = '&#x270F; Modifier la dette'+(dm.paye?' (deja payee)':'');
   document.getElementById('modalAjoutDetteManuelle').style.display = 'flex';
@@ -12883,6 +12893,7 @@ function confirmerAjoutDetteManuelle(){
   var piece = document.getElementById('dm_piece').value.trim();
   var qte = parseInt(document.getElementById('dm_qte').value,10) || 1;
   var prixAchat = parseFloat(document.getElementById('dm_prixAchat').value);
+  var dateAchatStr = (document.getElementById('dm_dateAchat')||{value:''}).value;
   var dateEcheanceStr = document.getElementById('dm_dateEcheance').value;
 
   if(!fournisseurId){ alert('Choisissez un fournisseur.'); return; }
@@ -12897,12 +12908,13 @@ function confirmerAjoutDetteManuelle(){
     if(!dm){ alert('Dette introuvable.'); return; }
     dm.fournisseurId = fournisseurId; dm.piece = piece; dm.qte = qte;
     dm.prixAchat = prixAchat; dm.dateEcheance = new Date(dateEcheanceStr).getTime();
+    if(dateAchatStr) dm.dateAchat = new Date(dateAchatStr).getTime();
   } else {
     var auteur = currentUser ? (currentUser.login||currentUser.nom) : currentRole;
     DETTES_MANUELLES.push({
       id: 'dm_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),
       fournisseurId: fournisseurId, piece: piece, qte: qte, prixAchat: prixAchat,
-      dateAchat: Date.now(), dateEcheance: new Date(dateEcheanceStr).getTime(),
+      dateAchat: dateAchatStr ? new Date(dateAchatStr).getTime() : Date.now(), dateEcheance: new Date(dateEcheanceStr).getTime(),
       paye: false, payeLe: null, auteur: auteur
     });
   }
