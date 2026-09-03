@@ -2071,7 +2071,23 @@ function loadV(){
   }
   return [];
 }
+// Marque un vehicule precis comme modifie A L'INSTANT — utilise par la
+// fusion lors de la synchronisation Firebase (voir onFirebaseDatabaseLoaded)
+// pour ne jamais laisser une version perimee ecraser une modification
+// locale recente, meme si un autre appareil sauvegarde entre-temps une
+// copie plus ancienne de ce meme vehicule.
+function marquerVehiculeModifie(id){
+  if(!id) return;
+  var v = vehicles.find(function(x){return x.id===id;});
+  if(v) v.lastModified = Date.now();
+}
+
 function saveV(){
+  // Marque automatiquement le vehicule actuellement ouvert dans la fiche
+  // detail comme modifie — couvre la grande majorite des actions (valider
+  // financierement, cocher une piece, changer de statut, etc.) qui
+  // passent par cette fiche.
+  if(typeof detCurrentVid !== 'undefined' && detCurrentVid) marquerVehiculeModifie(detCurrentVid);
   // Exclure les photos du localStorage (trop lourdes) mais garder en mémoire et Firebase
   try {
     var vehiclesSansPhotos = vehicles.map(function(v){
@@ -5445,6 +5461,7 @@ function migrerPaiementsClients(){
 }
 
 function advance(id){
+  marquerVehiculeModifie(id);
   for(var i=0;i<vehicles.length;i++){
     if(vehicles[i].id===id){
       var v=vehicles[i];
@@ -15116,20 +15133,10 @@ function pageEngagementsBancaires(){
       }
     });
     html += '</tbody></table></div></div>';
+  } else if(!ENGAGEMENTS_BANCAIRES.length){
+    html += '<div class="card"><div class="empty">Aucun engagement bancaire enregistre.</div></div>';
   }
 
-  html += '<div class="card"><div class="tw"><table><thead><tr>';
-  html += '<th>Engagement</th><th>Banque / organisme</th><th>Montant</th><th>Periodicite</th><th>Periode</th><th>Prochaine echeance</th><th>Facture</th><th>Statut</th><th></th>';
-  html += '</tr></thead><tbody>';
-
-  if(!ENGAGEMENTS_BANCAIRES.length){
-    html += '<tr><td colspan="9"><div class="empty">Aucun engagement bancaire enregistre.</div></td></tr>';
-  }
-
-  ENGAGEMENTS_BANCAIRES.forEach(function(e){
-    html += htmlLigneEngagement(e, maintenant);
-  });
-  html += '</tbody></table></div></div>';
   return html;
 }
 
@@ -29482,7 +29489,40 @@ function initFirebase(){
           } catch(e) {}
           return nv;
         });
-        vehicles = newVehicles;
+        // Fusion VEHICULE PAR VEHICULE (et non un remplacement en bloc) —
+        // pour chaque vehicule, on garde la version la plus recente entre
+        // la copie locale et celle qui arrive de Firebase, en comparant
+        // leur lastModified. Sans cela, un autre appareil ayant une copie
+        // locale perimee (n'ayant pas encore recu une modification recente
+        // faite ailleurs) peut, en sauvegardant quoi que ce soit d'autre,
+        // ecraser cette modification recente avec une version obsolete.
+        var localById = {};
+        vehicles.forEach(function(v){ localById[v.id] = v; });
+        var newById = {};
+        newVehicles.forEach(function(v){ newById[v.id] = v; });
+        var tousLesIds = {};
+        vehicles.forEach(function(v){ tousLesIds[v.id] = true; });
+        newVehicles.forEach(function(v){ tousLesIds[v.id] = true; });
+        var merged = [];
+        Object.keys(tousLesIds).forEach(function(id){
+          var l = localById[id], n = newById[id];
+          if(!l){ merged.push(n); return; }
+          if(!n){
+            // Present localement, absent de la version recue de Firebase.
+            // Si notre dernier envoi a Firebase a eu lieu APRES la
+            // derniere modification connue de ce vehicule, cela signifie
+            // qu'il a ete supprime par un autre appareil entre-temps — ne
+            // pas le ressusciter. Sinon (creation/modif locale tres
+            // recente, pas encore propagee), on le garde en attendant.
+            var lTsAbsent = l.lastModified||0;
+            if(lTsAbsent && lTsAbsent < lastLocalTs) return;
+            merged.push(l);
+            return;
+          }
+          var lTs = l.lastModified||0, nTs = n.lastModified||0;
+          merged.push(nTs > lTs ? n : l);
+        });
+        vehicles = merged;
         migrerFactureDeposeeLe(); // migration retroactive, aussi apres synchro Firebase
         migrerValideDirFacturesManuelles(); // idem, pour les factures manuelles/imports
         migrerForfaitsLivresBloques(); // idem, pour les forfaits bloques sur "livre"
