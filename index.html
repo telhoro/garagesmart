@@ -5565,6 +5565,24 @@ function migrerPaiementsClients(){
   return nbMigres;
 }
 
+// Repare retroactivement les dettes fournisseur liees a un article de
+// stock dont le fournisseur a ete change APRES l'achat a credit — avant
+// la correction du bug, ce changement ne se repercutait jamais sur la
+// dette, qui restait associee a l'ancien fournisseur.
+function migrerFournisseursDettesStock(){
+  var nbCorriges = 0;
+  STOCK.forEach(function(a){
+    if(!a.detteManuelleId) return;
+    var dette = DETTES_MANUELLES.find(function(d){ return d.id===a.detteManuelleId; });
+    if(dette && dette.fournisseurId !== a.fournisseurId){
+      dette.fournisseurId = a.fournisseurId;
+      nbCorriges++;
+    }
+  });
+  if(nbCorriges>0) saveDettesManuelles();
+  return nbCorriges;
+}
+
 function advance(id){
   marquerVehiculeModifie(id);
   for(var i=0;i<vehicles.length;i++){
@@ -9491,6 +9509,13 @@ function validerPaiement(){
   v.paiementDate   = date ? new Date(date).getTime() : Date.now(); // conserve pour retro-compat des lectures existantes
   v.paiementNote   = note;
   v.paiementStatut = v.montantPaye>=total ? 'paye' : 'partiel';
+  // Marquage explicite : ce paiement est souvent declenche depuis une
+  // liste (creances clients...) SANS que la fiche detail de CE vehicule
+  // soit ouverte — saveV() ne marquerait alors PAS ce vehicule comme
+  // modifie (il ne marque que detCurrentVid), le laissant vulnerable a
+  // un ecrasement par une synchronisation perimee venant d'un autre
+  // appareil, qui effacerait ce paiement fraichement enregistre.
+  marquerVehiculeModifie(paiementVid);
   saveV();
   closePaiementModal();
   renderPage();
@@ -29930,6 +29955,7 @@ function tryInitFirebase(){
         // donnees necessaires au calcul (vehicules, dettes, fournisseurs)
         // soient chargees et synchronisees.
         capturerSnapshotExpositionDuJour();
+        migrerFournisseursDettesStock();
       });
       syncClientDelaisPaiementFromFirebase(function(){
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
