@@ -674,13 +674,69 @@ tr:hover td{background:#faf9f7}
       <div class="fr"><label class="fl">Seuil d alerte</label>
         <input type="number" min="0" class="inp" id="mstk_seuil">
       </div>
-      <div></div><div></div>
+      <div class="fr"><label class="fl">Reference</label>
+        <input class="inp" id="mstk_reference" placeholder="Ex: REF-4521-A">
+      </div>
+      <div></div>
     </div>
   </div>
   <div class="mfoot">
     <button class="btn" onclick="fermerModifStock()">Annuler</button>
     <button class="btn btn-primary" onclick="validerModifStock()">&#x2714; Enregistrer les modifications</button>
   </div>
+</div>
+</div>
+
+<!-- MODAL PIECES A COMMANDER (stock a zero) -->
+<div class="overlay" id="modalPiecesACommander" style="display:none" onclick="if(event.target===this)fermerPiecesACommander()">
+<div class="modal modal-lg">
+  <div class="mhead"><h2>&#x1F6D2; Pieces a commander</h2><button class="btn btn-sm" onclick="fermerPiecesACommander()">X</button></div>
+  <div class="mbody">
+    <div class="xs muted" style="margin-bottom:10px">Articles dont le stock disponible est tombe a zero — a reapprovisionner en priorite.</div>
+    <input class="inp" id="pacRecherche" placeholder="Rechercher un article, une marque, un modele ou un fournisseur..." oninput="rechercherPiecesACommander(this.value)" autocomplete="off" style="margin-bottom:10px">
+    <div id="pacTableWrap"></div>
+  </div>
+  <div class="mfoot"><button class="btn" onclick="fermerPiecesACommander()">Fermer</button></div>
+</div>
+</div>
+
+<!-- MODAL NOUVELLE COMMANDE SPECIALE -->
+<div class="overlay" id="modalNouvelleCS" style="display:none" onclick="if(event.target===this)fermerNouvelleCS()">
+<div class="modal" style="max-width:560px">
+  <div class="mhead"><h2>&#x1F4E6; Demande de commande speciale</h2><button class="btn btn-sm" onclick="fermerNouvelleCS()">X</button></div>
+  <div class="mbody">
+    <div class="g3" style="margin-bottom:10px">
+      <div class="fr" style="grid-column:span 2"><label class="fl">Designation de la piece *</label><input class="inp" id="cs_piece" placeholder="Ex: Turbo compresseur"></div>
+      <div class="fr"><label class="fl">Quantite *</label><input type="number" min="1" class="inp" id="cs_qte" value="1"></div>
+    </div>
+    <div class="g3" style="margin-bottom:10px">
+      <div class="fr"><label class="fl">Marque <span class="xs muted">(vide = universel)</span></label><input class="inp" id="cs_marque" placeholder="Ex: Toyota"></div>
+      <div class="fr"><label class="fl">Modele</label><input class="inp" id="cs_modele" placeholder="Ex: Hilux"></div>
+      <div class="fr"><label class="fl">Prix estime</label><input type="number" min="0" class="inp" id="cs_prix" placeholder="0"></div>
+    </div>
+    <div class="fr" style="margin-bottom:10px"><label class="fl">Fournisseur envisage</label><select class="inp" id="cs_fourn"><option value="">-- Aucun / a determiner</option></select></div>
+    <div class="fr"><label class="fl">Note / precisions</label><textarea class="inp" id="cs_note" rows="2" placeholder="Reference constructeur, urgence, vehicule concerne..."></textarea></div>
+  </div>
+  <div class="mfoot">
+    <button class="btn" onclick="fermerNouvelleCS()">Annuler</button>
+    <button class="btn btn-primary" onclick="enregistrerCommandeSpeciale()">&#x2714; Enregistrer la demande</button>
+  </div>
+</div>
+</div>
+
+<!-- MODAL COMMANDES SPECIALES (liste) -->
+<div class="overlay" id="modalCommandesSpeciales" style="display:none" onclick="if(event.target===this)fermerCommandesSpeciales()">
+<div class="modal modal-lg">
+  <div class="mhead"><h2>&#x1F4E6; Commandes speciales</h2><div class="flex gap6"><button class="btn btn-sm btn-primary" onclick="ouvrirNouvelleCS()">&#x2795; Nouvelle demande</button><button class="btn btn-sm" onclick="fermerCommandesSpeciales()">X</button></div></div>
+  <div class="mbody">
+    <div class="tabs" style="display:flex;gap:8px;margin-bottom:12px;border-bottom:1px solid #e8e6e1;padding-bottom:8px">
+      <button class="btn btn-sm" id="csOngletBtnEnCours" onclick="setCsOnglet('encours')">&#x23F3; Commandes en cours</button>
+      <button class="btn btn-sm" id="csOngletBtnHistorique" onclick="setCsOnglet('historique')">&#x1F4CA; Historique</button>
+    </div>
+    <input class="inp" id="csRecherche" placeholder="Rechercher une piece, une marque, un modele..." oninput="rechercherCommandesSpeciales(this.value)" autocomplete="off" style="margin-bottom:10px">
+    <div id="csTableWrap"></div>
+  </div>
+  <div class="mfoot"><button class="btn" onclick="fermerCommandesSpeciales()">Fermer</button></div>
 </div>
 </div>
 
@@ -1860,6 +1916,39 @@ function syncFournisseursFromFirebase(callback){
 // ══════════════════════════════════════════════════════════════
 var STOCK = [];
 
+// Commandes speciales : demandes de pieces qui ne sont pas encore au
+// catalogue de stock (piece rare, non standard). Cycle de vie : demande
+// -> commande (achats a lance la commande) -> livree (la piece entre
+// automatiquement en stock a ce moment-la).
+var COMMANDES_SPECIALES = [];
+function loadCommandesSpeciales(){
+  try{ COMMANDES_SPECIALES = JSON.parse(localStorage.getItem('gos_commandes_speciales')) || []; }
+  catch(e){ COMMANDES_SPECIALES = []; }
+}
+function saveCommandesSpeciales(){
+  localStorage.setItem('gos_commandes_speciales', JSON.stringify(COMMANDES_SPECIALES));
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_commandes_speciales').set(JSON.stringify(COMMANDES_SPECIALES)).catch(function(e){
+      console.error('Firebase commandes speciales save error:', e);
+    });
+  }
+}
+function syncCommandesSpecialesFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_commandes_speciales').once('value').then(function(snap){
+    var val = snap.val();
+    if(val){
+      try{
+        COMMANDES_SPECIALES = JSON.parse(val) || [];
+        localStorage.setItem('gos_commandes_speciales', val);
+      }catch(e){}
+    } else if(COMMANDES_SPECIALES.length && fbConnected){
+      fbDb.ref('gos_commandes_speciales').set(JSON.stringify(COMMANDES_SPECIALES));
+    }
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
+}
+
 function loadStock(){
   try{ STOCK = JSON.parse(localStorage.getItem('gos_stock')) || []; }
   catch(e){ STOCK = []; }
@@ -1980,6 +2069,7 @@ var NAV = {
   chef_atelier:[
     {l:'Atelier',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'testeur',e:'Ts',l:'Testeur'}]},
     {l:'Equipes',items:[{id:'equipes',e:'E',l:'Equipes et techniciens'}]},
+    {l:'Stock',items:[{id:'commandes_speciales_ca',e:'CS',l:'Commandes speciales'}]},
     {l:'Clients',items:[{id:'messages_clients',e:'MC',l:'Messages clients'}]}
   ],
   chef_equipe:[
@@ -3221,7 +3311,7 @@ function renderNav(){var cfg=NAV[currentRole]||NAV.direction,h='';cfg.forEach(fu
   h += '<button class="btn btn-sm" onclick="doLogout()" style="width:100%;color:#A32D2D;border-color:#A32D2D;font-size:12px">&#x2192; D&#xe9;connexion</button>';
   h += '</div>';
   document.getElementById('nav').innerHTML=h;}
-function navigate(page){currentPage=page;dashFilter='all';document.getElementById('pageTitle').textContent=TITLES[page]||'Tableau de bord';renderNav();renderPage();closeMobileMenu();}
+function navigate(page){if(page==='commandes_speciales_ca'){ouvrirCommandesSpeciales();closeMobileMenu();return;}currentPage=page;dashFilter='all';document.getElementById('pageTitle').textContent=TITLES[page]||'Tableau de bord';renderNav();renderPage();closeMobileMenu();}
 function changeRole(role){
   resetNotifications();
   currentRole=role;currentPage='dashboard';dashFilter='all';caFilter={equipe:null,mode:null};
@@ -5240,7 +5330,8 @@ function uneModaleEstOuverte(){
     'modalJourDepot','modalLivraison','modalModifAttrib','modalModifClient','modalModifMouvementCaisse',
     'modalModifStock','modalMoveTech','modalNumerosFacture','modalPaiement','modalPaiementChargeFixe',
     'modalPaiementFournisseur','modalRapport','modalRec','modalRepriseChef','modalRepriseTest',
-    'modalStatutFacturesClient','modalSuppression','modalSuppressionEmiseForfait','modalTech','modalPaiementEcheance'
+    'modalStatutFacturesClient','modalSuppression','modalSuppressionEmiseForfait','modalTech','modalPaiementEcheance',
+    'modalPiecesACommander','modalNouvelleCS','modalCommandesSpeciales'
   ];
   for(var i=0;i<modals.length;i++){
     var el = document.getElementById(modals[i]);
@@ -19623,6 +19714,7 @@ function onChangeModeStockPaiement(){
 function ajouterEntreeStock(){
   var fournId = (document.getElementById('stk_fourn')||{}).value || '';
   var nom     = ((document.getElementById('stk_nom')||{}).value || '').trim();
+  var reference = ((document.getElementById('stk_reference')||{}).value || '').trim();
   var marque  = ((document.getElementById('stk_marque')||{}).value || '').trim();
   var modele  = ((document.getElementById('stk_modele')||{}).value || '').trim();
   var qte     = parseInt((document.getElementById('stk_qte')||{}).value, 10);
@@ -19671,11 +19763,13 @@ function ajouterEntreeStock(){
     existant.dateEntree = Date.now();
     existant.modePaiement = modePaiement;
     existant.detteManuelleId = detteManuelleId;
+    if(reference) existant.reference = reference;
     afficherToastNotif('Stock reapprovisionne', nom+' : +'+qte+' (total '+existant.qte+')', 'ok');
   } else {
     STOCK.push({
       id: 'stk_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
       nom: nom,
+      reference: reference,
       marque: marque,
       modele: modele,
       fournisseurId: fournId,
@@ -19691,7 +19785,7 @@ function ajouterEntreeStock(){
   }
   saveStock();
   // Vider le formulaire (garder le fournisseur pour enchainer les saisies)
-  ['stk_nom','stk_marque','stk_modele','stk_prix','stk_dateEcheance'].forEach(function(id){
+  ['stk_nom','stk_reference','stk_marque','stk_modele','stk_prix','stk_dateEcheance'].forEach(function(id){
     var e = document.getElementById(id); if(e) e.value = '';
   });
   var eq = document.getElementById('stk_qte'); if(eq) eq.value = '1';
@@ -19725,6 +19819,7 @@ function ouvrirModifStock(btn){
 
   var set = function(id2, val){ var e = document.getElementById(id2); if(e) e.value = val; };
   set('mstk_nom', a.nom||'');
+  set('mstk_reference', a.reference||'');
   set('mstk_marque', a.marque||'');
   set('mstk_modele', a.modele||'');
   set('mstk_qte', parseInt(a.qte,10)||0);
@@ -19767,6 +19862,7 @@ function validerModifStock(){
   var g = function(id){ var e = document.getElementById(id); return e ? e.value : ''; };
   var fournId = g('mstk_fourn');
   var nom     = (g('mstk_nom')||'').trim();
+  var reference = (g('mstk_reference')||'').trim();
   var marque  = (g('mstk_marque')||'').trim();
   var modele  = (g('mstk_modele')||'').trim();
   var qte     = parseInt(g('mstk_qte'), 10);
@@ -19807,6 +19903,7 @@ function validerModifStock(){
 
   a.fournisseurId = fournId;
   a.nom = nom;
+  a.reference = reference;
   a.marque = marque;
   a.modele = modele;
   a.qte = qte;
@@ -19839,13 +19936,330 @@ function supprimerArticleStock(btn){
   );
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// PIECES A COMMANDER — articles du catalogue de stock dont la quantite
+// disponible est tombee a zero (rupture), a reapprovisionner en priorite.
+// ══════════════════════════════════════════════════════════════════════
+function piecesACommanderListe(){
+  return STOCK.filter(function(a){ return stockDispo(a)===0; });
+}
+function ouvrirPiecesACommander(){
+  var m = document.getElementById('modalPiecesACommander');
+  if(!m) return;
+  var q = document.getElementById('pacRecherche'); if(q) q.value = '';
+  document.getElementById('pacTableWrap').innerHTML = htmlTableauPiecesACommander(piecesACommanderListe());
+  m.style.display = 'flex';
+}
+function fermerPiecesACommander(){
+  var m = document.getElementById('modalPiecesACommander');
+  if(m) m.style.display = 'none';
+}
+function rechercherPiecesACommander(texte){
+  var wrap = document.getElementById('pacTableWrap');
+  if(!wrap) return;
+  var q = texte.trim().toLowerCase();
+  var liste = piecesACommanderListe();
+  if(q.length>=2){
+    liste = liste.filter(function(a){
+      var f = FOURNISSEURS.find(function(x){return x.id===a.fournisseurId;});
+      return (a.nom||'').toLowerCase().indexOf(q)>=0 ||
+        (a.marque||'').toLowerCase().indexOf(q)>=0 ||
+        (a.modele||'').toLowerCase().indexOf(q)>=0 ||
+        (f && f.nom.toLowerCase().indexOf(q)>=0);
+    });
+  }
+  wrap.innerHTML = htmlTableauPiecesACommander(liste);
+}
+function htmlTableauPiecesACommander(liste){
+  if(!liste.length) return '<div class="empty">Aucune piece a zero en stock actuellement.</div>';
+  liste = liste.slice().sort(function(a,b){ return (a.nom||'').localeCompare(b.nom||''); });
+  var html = '<div class="tw"><table><thead><tr><th>Article</th><th>Destination</th><th>Fournisseur</th><th></th></tr></thead><tbody>';
+  liste.forEach(function(a){
+    var f = FOURNISSEURS.find(function(x){ return x.id===a.fournisseurId; });
+    html += '<tr>';
+    html += '<td><div class="fw7">'+(a.nom||'')+'</div>'+(a.reference?'<div class="xs muted">ref. '+a.reference+'</div>':'')+'</td>';
+    html += '<td>'+(stockEstUniversel(a)?'<span class="badge b-blue" style="font-size:9px">Universel</span>':'<span class="xs">'+stockDestination(a)+'</span>')+'</td>';
+    html += '<td class="xs">'+(f?f.nom:'<span class="muted">—</span>')+'</td>';
+    html += '<td style="white-space:nowrap">';
+    html += '<button class="btn btn-sm btn-success" data-said="'+a.id+'" onclick="reapprovisionnerArticleByEl(this)">&#x2795; Enregistrer une entree</button> ';
+    html += '<button class="btn btn-sm" data-said="'+a.id+'" onclick="supprimerArticleACommanderByEl(this)" title="Supprimer cet article" style="color:#A32D2D">&#x2715;</button>';
+    html += '</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+  return html;
+}
+function supprimerArticleACommanderByEl(btn){
+  var id = btn.getAttribute('data-said');
+  var a = stockArticleById(id);
+  if(!a) return;
+  if((parseInt(a.reserve,10)||0) > 0){
+    afficherToastNotif('Suppression impossible', a.nom+' : '+a.reserve+' unite(s) reservees sur des chiffrages valides.', 'alerte');
+    return;
+  }
+  demanderConfirmation(
+    'Supprimer cet article ?',
+    '"'+a.nom+'" sera definitivement retire du catalogue de stock.',
+    function(){
+      STOCK = STOCK.filter(function(x){ return x.id!==id; });
+      saveStock();
+      afficherToastNotif('Article supprime', a.nom+' retire du catalogue.', 'info');
+      rechercherPiecesACommander((document.getElementById('pacRecherche')||{value:''}).value);
+      renderPage();
+    },
+    { icone:'&#x2715;', libelleOk:'Supprimer', danger:true }
+  );
+}
+// Pre-remplit le formulaire "Entree en stock" avec cet article et ferme
+// la modale, pour enchainer directement sur l'enregistrement de l'entree.
+function reapprovisionnerArticleByEl(btn){
+  var id = btn.getAttribute('data-said');
+  var a = stockArticleById(id);
+  if(!a) return;
+  fermerPiecesACommander();
+  var set = function(fid, val){ var e = document.getElementById(fid); if(e) e.value = val; };
+  set('stk_fourn', a.fournisseurId||'');
+  set('stk_nom', a.nom||'');
+  set('stk_reference', a.reference||'');
+  set('stk_marque', a.marque||'');
+  set('stk_modele', a.modele||'');
+  set('stk_prix', parseFloat(a.prixAchat)||'');
+  set('stk_seuil', parseInt(a.seuil,10)||2);
+  var qteEl = document.getElementById('stk_qte');
+  if(qteEl){ qteEl.value = 1; qteEl.focus(); }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// COMMANDES SPECIALES — demande de piece qui n'est pas encore au
+// catalogue de stock. Cycle : demande -> commande -> livree (entree
+// automatique en stock a la livraison).
+// ══════════════════════════════════════════════════════════════════════
+function ouvrirNouvelleCS(){
+  var sel = document.getElementById('cs_fourn');
+  if(sel){
+    var opts = '<option value="">-- Aucun / a determiner</option>';
+    FOURNISSEURS.filter(function(f){return f.actif;}).forEach(function(f){
+      opts += '<option value="'+f.id+'">'+f.nom+'</option>';
+    });
+    sel.innerHTML = opts;
+  }
+  ['cs_piece','cs_marque','cs_modele','cs_prix','cs_note'].forEach(function(id){
+    var e = document.getElementById(id); if(e) e.value = '';
+  });
+  var qteEl = document.getElementById('cs_qte'); if(qteEl) qteEl.value = 1;
+  var m = document.getElementById('modalNouvelleCS');
+  if(m) m.style.display = 'flex';
+}
+function fermerNouvelleCS(){
+  var m = document.getElementById('modalNouvelleCS');
+  if(m) m.style.display = 'none';
+}
+function enregistrerCommandeSpeciale(){
+  var g = function(id){ var e = document.getElementById(id); return e ? e.value : ''; };
+  var piece = (g('cs_piece')||'').trim();
+  var qte = parseInt(g('cs_qte'),10);
+  var marque = (g('cs_marque')||'').trim();
+  var modele = (g('cs_modele')||'').trim();
+  var prix = parseFloat(g('cs_prix'));
+  var fournisseurId = g('cs_fourn');
+  var note = (g('cs_note')||'').trim();
+
+  if(!piece){ afficherToastNotif('Designation manquante', 'Saisissez le nom de la piece.', 'alerte'); return; }
+  if(isNaN(qte) || qte<1){ afficherToastNotif('Quantite invalide', 'La quantite doit etre au moins 1.', 'alerte'); return; }
+
+  COMMANDES_SPECIALES.push({
+    id: 'cs_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+    piece: piece, marque: marque, modele: modele, qte: qte,
+    fournisseurId: fournisseurId, prixAchatEstime: isNaN(prix)?'':prix, note: note,
+    demandeur: currentUser ? (currentUser.login||currentUser.nom) : currentRole,
+    dateDemande: Date.now(), statut: 'demande', dateCommande: null, dateLivraison: null
+  });
+  saveCommandesSpeciales();
+  afficherToastNotif('Demande enregistree', piece+' — en attente de lancement de commande.', 'ok');
+  fermerNouvelleCS();
+  ouvrirCommandesSpeciales();
+}
+
+var csOnglet = 'encours'; // 'encours' | 'historique' — onglet actif de la modale Commandes speciales
+
+function ouvrirCommandesSpeciales(){
+  var m = document.getElementById('modalCommandesSpeciales');
+  if(!m) return;
+  var q = document.getElementById('csRecherche'); if(q) q.value = '';
+  csOnglet = 'encours';
+  majOngletsCsUI();
+  document.getElementById('csTableWrap').innerHTML = htmlTableauCommandesSpeciales(filtrerCsParOnglet(COMMANDES_SPECIALES.slice()));
+  m.style.display = 'flex';
+}
+function fermerCommandesSpeciales(){
+  var m = document.getElementById('modalCommandesSpeciales');
+  if(m) m.style.display = 'none';
+}
+// Separe commandes "en cours" (demande + commande) et "historique" (livree).
+function filtrerCsParOnglet(liste){
+  if(csOnglet==='historique') return liste.filter(function(c){return c.statut==='livree';});
+  return liste.filter(function(c){return c.statut!=='livree';});
+}
+function majOngletsCsUI(){
+  var bEnCours = document.getElementById('csOngletBtnEnCours');
+  var bHisto = document.getElementById('csOngletBtnHistorique');
+  if(bEnCours) bEnCours.className = 'btn btn-sm'+(csOnglet==='encours'?' btn-primary':'');
+  if(bHisto) bHisto.className = 'btn btn-sm'+(csOnglet==='historique'?' btn-primary':'');
+}
+function setCsOnglet(onglet){
+  csOnglet = onglet;
+  majOngletsCsUI();
+  rechercherCommandesSpeciales((document.getElementById('csRecherche')||{value:''}).value);
+}
+function rechercherCommandesSpeciales(texte){
+  var wrap = document.getElementById('csTableWrap');
+  if(!wrap) return;
+  var q = texte.trim().toLowerCase();
+  var liste = filtrerCsParOnglet(COMMANDES_SPECIALES);
+  if(q.length>=2){
+    liste = liste.filter(function(c){
+      var f = FOURNISSEURS.find(function(x){return x.id===c.fournisseurId;});
+      return (c.piece||'').toLowerCase().indexOf(q)>=0 ||
+        (c.marque||'').toLowerCase().indexOf(q)>=0 ||
+        (c.modele||'').toLowerCase().indexOf(q)>=0 ||
+        (f && f.nom.toLowerCase().indexOf(q)>=0);
+    });
+  }
+  wrap.innerHTML = htmlTableauCommandesSpeciales(liste);
+}
+// Duree ecoulee entre la demande et la livraison (ou jusqu'a maintenant
+// si pas encore livree) — format lisible "Xj Yh".
+function tempsEcouleCS(c){
+  var fin = c.dateLivraison || Date.now();
+  var ms = Math.max(0, fin - (c.dateDemande||fin));
+  var jours = Math.floor(ms/86400000), heures = Math.floor((ms%86400000)/3600000);
+  return jours+'j '+heures+'h';
+}
+function htmlTableauCommandesSpeciales(liste){
+  if(!liste.length) return '<div class="empty">Aucune commande speciale enregistree.</div>';
+  // Tri : en cours d'abord (demande puis commande), livrees en dernier, plus recentes en premier dans chaque groupe
+  var ordreStatut = {demande:0, commande:1, livree:2};
+  liste = liste.slice().sort(function(a,b){
+    var oa = ordreStatut[a.statut]||0, ob = ordreStatut[b.statut]||0;
+    if(oa!==ob) return oa-ob;
+    return (b.dateDemande||0)-(a.dateDemande||0);
+  });
+  var html = '<div class="tw"><table><thead><tr>'
+    +'<th>Piece</th><th>Destination</th><th>Qte</th><th>Fournisseur</th>'
+    +'<th>Statut</th><th>Temps ecoule</th><th></th>'
+    +'</tr></thead><tbody>';
+  liste.forEach(function(c){
+    var f = FOURNISSEURS.find(function(x){return x.id===c.fournisseurId;});
+    var badgeStatut = c.statut==='demande' ? '<span class="badge b-amber">Demandee</span>'
+      : c.statut==='commande' ? '<span class="badge b-blue">Commandee</span>'
+      : '<span class="badge b-green">Livree</span>';
+    html += '<tr>';
+    html += '<td><div class="fw7">'+(c.piece||'')+'</div>'+(c.note?'<div class="xs muted">'+c.note+'</div>':'')+'</td>';
+    html += '<td class="xs">'+((c.marque||c.modele)?((c.marque||'')+' '+(c.modele||'')).trim():'<span class="badge b-blue" style="font-size:9px">Universel</span>')+'</td>';
+    html += '<td style="text-align:center">'+(c.qte||1)+'</td>';
+    html += '<td class="xs">'+(f?f.nom:'<span class="muted">—</span>')+'</td>';
+    html += '<td>'+badgeStatut+'</td>';
+    html += '<td class="xs" style="font-family:monospace">'+tempsEcouleCS(c)+(c.statut==='livree'?'':' <span class="muted">(en cours)</span>')+'</td>';
+    html += '<td style="white-space:nowrap">';
+    // Seul le profil Achats peut lancer/receptionner une commande — les
+    // autres roles (ex: chef d'atelier, qui peut faire la demande) n'ont
+    // qu'une vue en lecture seule du statut de leur demande.
+    if(currentRole==='achats'){
+      if(c.statut==='demande'){
+        html += '<button class="btn btn-sm btn-primary" data-csid="'+c.id+'" onclick="lancerCommandeSpecialeByEl(this)">&#x1F6D2; Lancer commande</button> ';
+        html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="supprimerCommandeSpecialeByEl(this)" title="Annuler la demande" style="color:#A32D2D">&#x2715;</button>';
+      } else if(c.statut==='commande'){
+        html += '<button class="btn btn-sm btn-success" data-csid="'+c.id+'" onclick="livrerCommandeSpecialeByEl(this)">&#x2714; Piece livree</button>';
+      } else {
+        html += '<span class="xs muted">Entree en stock le '+new Date(c.dateLivraison).toLocaleDateString('fr-FR')+'</span>';
+      }
+    } else {
+      var suiviTxt = c.statut==='demande' ? 'En attente de lancement'
+        : c.statut==='commande' ? 'Commande en cours — livraison a venir'
+        : 'Livree — entree en stock le '+new Date(c.dateLivraison).toLocaleDateString('fr-FR');
+      html += '<span class="xs muted">'+suiviTxt+'</span>';
+    }
+    html += '</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+  return html;
+}
+function lancerCommandeSpecialeByEl(btn){
+  var id = btn.getAttribute('data-csid');
+  var c = COMMANDES_SPECIALES.find(function(x){return x.id===id;});
+  if(!c) return;
+  c.statut = 'commande';
+  c.dateCommande = Date.now();
+  saveCommandesSpeciales();
+  afficherToastNotif('Commande lancee', c.piece+' — en attente de livraison.', 'ok');
+  rechercherCommandesSpeciales((document.getElementById('csRecherche')||{value:''}).value);
+  renderPage();
+}
+function supprimerCommandeSpecialeByEl(btn){
+  var id = btn.getAttribute('data-csid');
+  var c = COMMANDES_SPECIALES.find(function(x){return x.id===id;});
+  if(!c) return;
+  demanderConfirmation(
+    'Annuler cette demande ?',
+    '"'+c.piece+'" sera retiree de la liste des commandes speciales.',
+    function(){
+      COMMANDES_SPECIALES = COMMANDES_SPECIALES.filter(function(x){return x.id!==id;});
+      saveCommandesSpeciales();
+      afficherToastNotif('Demande annulee', c.piece+' retiree.', 'info');
+      rechercherCommandesSpeciales((document.getElementById('csRecherche')||{value:''}).value);
+      renderPage();
+    },
+    { icone:'&#x2715;', libelleOk:'Annuler la demande', danger:true }
+  );
+}
+// Marque la commande speciale comme livree ET fait entrer la piece en
+// stock automatiquement (cumulee sur un article existant identique, sinon
+// nouvel article cree avec le prix estime comme prix d'achat).
+function livrerCommandeSpecialeByEl(btn){
+  var id = btn.getAttribute('data-csid');
+  var c = COMMANDES_SPECIALES.find(function(x){return x.id===id;});
+  if(!c) return;
+  c.statut = 'livree';
+  c.dateLivraison = Date.now();
+
+  var existant = STOCK.find(function(a){
+    return _normStk(a.nom)===_normStk(c.piece)
+      && _normStk(a.marque)===_normStk(c.marque)
+      && _normStk(a.modele)===_normStk(c.modele);
+  });
+  if(existant){
+    existant.qte = (parseInt(existant.qte,10)||0) + (parseInt(c.qte,10)||1);
+    existant.dateEntree = Date.now();
+  } else {
+    STOCK.push({
+      id: 'stk_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+      nom: c.piece, marque: c.marque, modele: c.modele,
+      fournisseurId: c.fournisseurId||'', qte: parseInt(c.qte,10)||1, reserve: 0,
+      prixAchat: parseFloat(c.prixAchatEstime)||0, seuil: 2,
+      dateEntree: Date.now(), commandeSpecialeId: c.id
+    });
+  }
+  saveCommandesSpeciales();
+  saveStock();
+  afficherToastNotif('Piece livree', c.piece+' — entree automatiquement en stock.', 'ok');
+  rechercherCommandesSpeciales((document.getElementById('csRecherche')||{value:''}).value);
+  renderPage();
+}
+
 function pageStock(){
   var totalArticles = STOCK.length;
   var valeur = STOCK.reduce(function(s,a){ return s + (parseFloat(a.prixAchat)||0)*(parseInt(a.qte,10)||0); },0);
   var sousSeuil = STOCK.filter(stockSousSeuil).length;
   var totalReserve = STOCK.reduce(function(s,a){ return s + (parseInt(a.reserve,10)||0); },0);
+  var aCommander = STOCK.filter(function(a){ return stockDispo(a)===0; }).length;
+  var csEnCours = COMMANDES_SPECIALES.filter(function(c){ return c.statut!=='livree'; }).length;
 
   var html = '';
+  html += '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">';
+  html += '<button class="btn'+(aCommander?' btn-danger':'')+'" onclick="ouvrirPiecesACommander()">&#x1F6D2; Pieces a commander'+(aCommander?' <span class="badge" style="background:rgba(255,255,255,.3)">'+aCommander+'</span>':'')+'</button>';
+  html += '<button class="btn" onclick="ouvrirCommandesSpeciales()">&#x1F4E6; Commandes speciales'+(csEnCours?' <span class="badge b-amber">'+csEnCours+'</span>':'')+'</button>';
+  html += '</div>';
   html += '<div class="kgrid k4" style="margin-bottom:16px">';
   html += kpi('Articles en stock', totalArticles, 'blue');
   html += kpi('Valeur du stock', valeur?valeur.toLocaleString('fr-FR')+' FCFA':'—', 'green');
@@ -19873,13 +20287,13 @@ function pageStock(){
   html += '</div>';
   html += '<div class="g3">';
   html += '<div class="fr"><label class="fl">Seuil d alerte</label><input type="number" min="0" class="inp" id="stk_seuil" value="2" title="Alerte quand la quantite disponible passe sous ce seuil"></div>';
+  html += '<div class="fr"><label class="fl">Reference</label><input class="inp" id="stk_reference" placeholder="Ex: REF-4521-A"></div>';
   html += '<div class="fr"><label class="fl">Mode de paiement *</label><select class="inp" id="stk_mode_paiement" onchange="onChangeModeStockPaiement()"><option value="cash">Cash</option><option value="credit">Credit</option></select></div>';
-  html += '<div class="fr" id="stk_dateEcheance_wrap" style="display:none"><label class="fl">Date d echeance</label><input type="date" class="inp" id="stk_dateEcheance"></div>';
   html += '</div>';
   html += '<div class="g3" style="margin-top:10px">';
+  html += '<div class="fr" id="stk_dateEcheance_wrap" style="display:none"><label class="fl">Date d echeance</label><input type="date" class="inp" id="stk_dateEcheance"></div>';
   html += '<div></div>';
   html += '<div class="fr" style="display:flex;align-items:flex-end"><button class="btn btn-primary" onclick="ajouterEntreeStock()" style="width:100%">&#x2714; Enregistrer l entree</button></div>';
-  html += '<div></div>';
   html += '</div>';
   html += '</div></div>';
 
@@ -19920,6 +20334,7 @@ function htmlTableauStock(liste){
     var val = (parseFloat(a.prixAchat)||0)*(parseInt(a.qte,10)||0);
     html += '<tr'+(alerte?' style="background:#FDF0F0"':'')+'>';
     html += '<td><div class="fw7">'+(a.nom||'')+'</div>'
+      +(a.reference?'<div class="xs muted">ref. '+a.reference+'</div>':'')
       +(a.dateEntree?'<div class="xs muted">entre le '+new Date(a.dateEntree).toLocaleDateString('fr-FR')+'</div>':'')+'</td>';
     html += '<td>'+(stockEstUniversel(a)
       ? '<span class="badge b-blue" style="font-size:9px">Universel</span>'
@@ -29380,6 +29795,9 @@ function tryInitFirebase(){
     // Sync personnel et comptes depuis Firebase après connexion
     setTimeout(function(){
       syncStockFromFirebase();
+      syncCommandesSpecialesFromFirebase(function(){
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      });
       syncBanquesFromFirebase(function(){
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       });
@@ -29828,7 +30246,7 @@ window.onload=function(){
       v.status = 'devis_termine'; migrated = true;
     }
   });
-  if(migrated) saveV();loadPersonnel();initFournisseurs();initBanques();loadForfaitFactures();loadStock();loadChargesFixes();loadEngagementsBancaires();loadForfaitsClients();loadClientsSansVehicule();loadExpositionSnapshots();
+  if(migrated) saveV();loadPersonnel();initFournisseurs();initBanques();loadForfaitFactures();loadStock();loadCommandesSpeciales();loadChargesFixes();loadEngagementsBancaires();loadForfaitsClients();loadClientsSansVehicule();loadExpositionSnapshots();
   migrerPaiementsClients(); // migration retroactive (voir commentaire de la fonction) — necessite vehicles ET FORFAIT_FACTURES deja charges
   // Alimenter le catalogue pièces depuis l'historique existant
   vehicles.forEach(function(v){ if(v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length) indexerPiecesChiffrage(v); });
