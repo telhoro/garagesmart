@@ -23566,7 +23566,14 @@ function openDet(id){
   b += '</div>';
 
     // ── Section DEVIS — visible technicien/chef atelier/chef equipe uniquement ─
-  var _devisVisible = ['diag_en_cours','devis_atelier','devis_valide'].indexOf(v.status)>=0 || (v.devis && v.devis.lignes && v.devis.lignes.length);
+  // Egalement visible DES L'ARRIVEE (avant meme le diagnostic formel) si
+  // des travaux ont ete repris d'un passage precedent (v.tapReprisDe) —
+  // sinon la section n'apparaissait qu'a partir de "diag_en_cours",
+  // empechant ensureDevis() de jamais s'executer et donc les pieces
+  // reprises de jamais s'afficher pour un vehicule encore a "attente_diag".
+  var _devisVisible = ['diag_en_cours','devis_atelier','devis_valide'].indexOf(v.status)>=0
+    || (v.devis && v.devis.lignes && v.devis.lignes.length)
+    || (v.tapReprisDe && v.tapReprisDe.length);
   if(_devisVisible && currentRole!=='achats' && currentRole!=='direction'){
     b += renderDevisSection(v);
   }
