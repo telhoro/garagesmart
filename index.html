@@ -2186,11 +2186,35 @@ function marquerVehiculeModifie(id){
   if(v) v.lastModified = Date.now();
 }
 
+// Filet de securite SYSTEMATIQUE : plutot que de compter sur CHAQUE
+// fonction qui modifie un vehicule pour appeler explicitement
+// marquerVehiculeModifie() (il y a plus de 50 endroits dans le code qui
+// modifient v.status ou d'autres champs directement, impossible a tous
+// verifier un par un de maniere fiable), on compare a chaque sauvegarde
+// l'etat serialise de CHAQUE vehicule avec son etat lors de la sauvegarde
+// precedente — tout vehicule dont le contenu a reellement change est
+// marque modifie automatiquement, quelle que soit la fonction en cause.
+var _dernierEtatVehiculesSave = {};
+function marquerVehiculesModifiesAuto(){
+  vehicles.forEach(function(v){
+    var copie = {};
+    for(var k in v){ if(k!=='lastModified') copie[k] = v[k]; }
+    var etatActuel = JSON.stringify(copie);
+    if(_dernierEtatVehiculesSave[v.id] !== etatActuel){
+      v.lastModified = Date.now();
+      _dernierEtatVehiculesSave[v.id] = etatActuel;
+    }
+  });
+}
+
 function saveV(){
-  // Marque automatiquement le vehicule actuellement ouvert dans la fiche
-  // detail comme modifie — couvre la grande majorite des actions (valider
-  // financierement, cocher une piece, changer de statut, etc.) qui
-  // passent par cette fiche.
+  // Detection systematique : marque TOUT vehicule dont le contenu a
+  // reellement change depuis la derniere sauvegarde, peu importe quelle
+  // fonction a fait la modification.
+  marquerVehiculesModifiesAuto();
+  // Marque aussi explicitement le vehicule actuellement ouvert dans la
+  // fiche detail (redondant avec ce qui precede dans la plupart des cas,
+  // mais ne coute rien et couvre un eventuel cas limite).
   if(typeof detCurrentVid !== 'undefined' && detCurrentVid) marquerVehiculeModifie(detCurrentVid);
   // Exclure les photos du localStorage (trop lourdes) mais garder en mémoire et Firebase
   try {
