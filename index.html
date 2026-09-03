@@ -701,7 +701,7 @@ tr:hover td{background:#faf9f7}
 </div>
 
 <!-- MODAL NOUVELLE COMMANDE SPECIALE -->
-<div class="overlay" id="modalNouvelleCS" style="display:none" onclick="if(event.target===this)fermerNouvelleCS()">
+<div class="overlay" id="modalNouvelleCS" style="display:none;z-index:1001" onclick="if(event.target===this)fermerNouvelleCS()">
 <div class="modal" style="max-width:560px">
   <div class="mhead"><h2>&#x1F4E6; Demande de commande speciale</h2><button class="btn btn-sm" onclick="fermerNouvelleCS()">X</button></div>
   <div class="mbody">
@@ -714,8 +714,22 @@ tr:hover td{background:#faf9f7}
       <div class="fr"><label class="fl">Modele</label><input class="inp" id="cs_modele" placeholder="Ex: Hilux"></div>
       <div class="fr"><label class="fl">Prix estime</label><input type="number" min="0" class="inp" id="cs_prix" placeholder="0"></div>
     </div>
+    <div class="fr" style="margin-bottom:10px">
+      <label class="fl">Vehicule concerne <span class="xs muted">(optionnel)</span></label>
+      <div style="display:flex;gap:16px;margin-bottom:6px">
+        <label class="xs" style="display:flex;align-items:center;gap:4px"><input type="radio" name="cs_veh_type" value="existant" checked onchange="toggleCsVehiculeType()"> Vehicule existant</label>
+        <label class="xs" style="display:flex;align-items:center;gap:4px"><input type="radio" name="cs_veh_type" value="autre" onchange="toggleCsVehiculeType()"> Autre vehicule</label>
+      </div>
+      <div id="cs_veh_existant_wrap">
+        <input class="inp" id="cs_veh_immat_existant" placeholder="Rechercher par immatriculation..." list="cs_veh_list" autocomplete="off">
+        <datalist id="cs_veh_list"></datalist>
+      </div>
+      <div id="cs_veh_autre_wrap" style="display:none">
+        <input class="inp" id="cs_veh_immat_autre" placeholder="Immatriculation (vehicule non enregistre)">
+      </div>
+    </div>
     <div class="fr" style="margin-bottom:10px"><label class="fl">Fournisseur envisage</label><select class="inp" id="cs_fourn"><option value="">-- Aucun / a determiner</option></select></div>
-    <div class="fr"><label class="fl">Note / precisions</label><textarea class="inp" id="cs_note" rows="2" placeholder="Reference constructeur, urgence, vehicule concerne..."></textarea></div>
+    <div class="fr"><label class="fl">Note / precisions</label><textarea class="inp" id="cs_note" rows="2" placeholder="Reference constructeur, urgence..."></textarea></div>
   </div>
   <div class="mfoot">
     <button class="btn" onclick="fermerNouvelleCS()">Annuler</button>
@@ -6437,16 +6451,32 @@ function calculerMetriquesFinancieres(borneDebut, borneFin){
   vehicles.forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
-    if(dateFacture<borneDebut || dateFacture>borneFin) return;
-    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
-    factureSurPeriode += lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
-    encaisseRealise += parseFloat(v.montantPaye)||0;
+    if(dateFacture>=borneDebut && dateFacture<=borneFin){
+      var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
+      factureSurPeriode += lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    }
+    // Encaissement realise : base sur la date REELLE de chaque versement,
+    // pas sur la date de la facture — un paiement recu maintenant pour
+    // une facture ancienne (en retard) doit compter dans la periode OU
+    // il a ete reellement encaisse, pas celle de la facture d'origine.
+    if(v.paiementsClient && v.paiementsClient.length){
+      v.paiementsClient.forEach(function(p){
+        if(p.date>=borneDebut && p.date<=borneFin) encaisseRealise += parseFloat(p.montant)||0;
+      });
+    } else if(v.montantPaye && v.paiementDate>=borneDebut && v.paiementDate<=borneFin){
+      encaisseRealise += parseFloat(v.montantPaye)||0;
+    }
   });
   FORFAIT_FACTURES.forEach(function(f){
     var dateFacture = f.deposeeDate || f.emiseDate || 0;
-    if(dateFacture<borneDebut || dateFacture>borneFin) return;
-    factureSurPeriode += f.montant||0;
-    encaisseRealise += (f.statut==='payee' ? f.montant : (f.montantPaye||0));
+    if(dateFacture>=borneDebut && dateFacture<=borneFin){
+      factureSurPeriode += f.montant||0;
+    }
+    if(f.paiementsClient && f.paiementsClient.length){
+      f.paiementsClient.forEach(function(p){
+        if(p.date>=borneDebut && p.date<=borneFin) encaisseRealise += parseFloat(p.montant)||0;
+      });
+    }
   });
   var tauxEncaissement = factureSurPeriode>0 ? Math.min(100, encaisseRealise/factureSurPeriode*100) : null;
 
@@ -12102,16 +12132,32 @@ function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
   vehicles.forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
-    if(dateFacture<bornesTreso.deb || dateFacture>bornesTreso.fin) return;
-    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
-    factureSurPeriode += lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
-    encaisseRealise += parseFloat(v.montantPaye)||0;
+    if(dateFacture>=bornesTreso.deb && dateFacture<=bornesTreso.fin){
+      var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
+      factureSurPeriode += lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    }
+    // Encaissement realise : base sur la date REELLE de chaque versement,
+    // pas sur la date de la facture — un paiement recu maintenant pour
+    // une facture ancienne (en retard) doit compter dans la periode OU
+    // il a ete reellement encaisse, pas celle de la facture d'origine.
+    if(v.paiementsClient && v.paiementsClient.length){
+      v.paiementsClient.forEach(function(p){
+        if(p.date>=bornesTreso.deb && p.date<=bornesTreso.fin) encaisseRealise += parseFloat(p.montant)||0;
+      });
+    } else if(v.montantPaye && v.paiementDate>=bornesTreso.deb && v.paiementDate<=bornesTreso.fin){
+      encaisseRealise += parseFloat(v.montantPaye)||0;
+    }
   });
   FORFAIT_FACTURES.forEach(function(f){
     var dateFacture = f.deposeeDate || f.emiseDate || 0;
-    if(dateFacture<bornesTreso.deb || dateFacture>bornesTreso.fin) return;
-    factureSurPeriode += f.montant||0;
-    encaisseRealise += (f.statut==='payee' ? f.montant : (f.montantPaye||0));
+    if(dateFacture>=bornesTreso.deb && dateFacture<=bornesTreso.fin){
+      factureSurPeriode += f.montant||0;
+    }
+    if(f.paiementsClient && f.paiementsClient.length){
+      f.paiementsClient.forEach(function(p){
+        if(p.date>=bornesTreso.deb && p.date<=bornesTreso.fin) encaisseRealise += parseFloat(p.montant)||0;
+      });
+    }
   });
   var tauxEncaissement = factureSurPeriode>0 ? Math.min(100, encaisseRealise/factureSurPeriode*100) : null;
 
@@ -19901,6 +19947,19 @@ function validerModifStock(){
   if((parseInt(a.qte,10)||0) !== qte) changements.push('quantite '+a.qte+' -> '+qte);
   if((parseFloat(a.prixAchat)||0) !== prix) changements.push('prix');
 
+  // Si le fournisseur change et que cet article a ete achete a credit
+  // (dette liee), synchroniser aussi le fournisseur de la dette — sinon
+  // elle reste associee a l'ancien fournisseur alors que le stock affiche
+  // deja le nouveau, et le suivi "Dettes fournisseurs" devient incoherent.
+  if(a.detteManuelleId && a.fournisseurId !== fournId){
+    var detteLiee = DETTES_MANUELLES.find(function(d){ return d.id===a.detteManuelleId; });
+    if(detteLiee){
+      detteLiee.fournisseurId = fournId;
+      saveDettesManuelles();
+      changements.push('fournisseur (repercute sur la dette liee)');
+    }
+  }
+
   a.fournisseurId = fournId;
   a.nom = nom;
   a.reference = reference;
@@ -20043,12 +20102,37 @@ function ouvrirNouvelleCS(){
     });
     sel.innerHTML = opts;
   }
-  ['cs_piece','cs_marque','cs_modele','cs_prix','cs_note'].forEach(function(id){
+  // Liste des immatriculations existantes, pour la recherche "vehicule existant"
+  var dl = document.getElementById('cs_veh_list');
+  if(dl){
+    var seen = {}; var optsV = '';
+    vehicles.forEach(function(v){
+      if(!v.immat || v.isProspect) return;
+      var k = v.immat.toUpperCase();
+      if(seen[k]) return; seen[k]=true;
+      optsV += '<option value="'+v.immat+'">'+(v.marque||'')+' '+(v.modele||'')+' — '+(v.client||'')+'</option>';
+    });
+    dl.innerHTML = optsV;
+  }
+  ['cs_piece','cs_marque','cs_modele','cs_prix','cs_note','cs_veh_immat_existant','cs_veh_immat_autre'].forEach(function(id){
     var e = document.getElementById(id); if(e) e.value = '';
   });
   var qteEl = document.getElementById('cs_qte'); if(qteEl) qteEl.value = 1;
+  var radioExistant = document.querySelector('input[name="cs_veh_type"][value="existant"]');
+  if(radioExistant) radioExistant.checked = true;
+  toggleCsVehiculeType();
   var m = document.getElementById('modalNouvelleCS');
   if(m) m.style.display = 'flex';
+}
+// Bascule entre la recherche d'un vehicule deja enregistre et la saisie
+// libre d'une immatriculation pour un vehicule non enregistre dans l'app.
+function toggleCsVehiculeType(){
+  var radio = document.querySelector('input[name="cs_veh_type"]:checked');
+  var type = radio ? radio.value : 'existant';
+  var wrapExistant = document.getElementById('cs_veh_existant_wrap');
+  var wrapAutre = document.getElementById('cs_veh_autre_wrap');
+  if(wrapExistant) wrapExistant.style.display = (type==='existant') ? 'block' : 'none';
+  if(wrapAutre) wrapAutre.style.display = (type==='autre') ? 'block' : 'none';
 }
 function fermerNouvelleCS(){
   var m = document.getElementById('modalNouvelleCS');
@@ -20063,6 +20147,9 @@ function enregistrerCommandeSpeciale(){
   var prix = parseFloat(g('cs_prix'));
   var fournisseurId = g('cs_fourn');
   var note = (g('cs_note')||'').trim();
+  var radio = document.querySelector('input[name="cs_veh_type"]:checked');
+  var vehiculeType = radio ? radio.value : 'existant';
+  var immat = (vehiculeType==='existant' ? g('cs_veh_immat_existant') : g('cs_veh_immat_autre')).trim().toUpperCase();
 
   if(!piece){ afficherToastNotif('Designation manquante', 'Saisissez le nom de la piece.', 'alerte'); return; }
   if(isNaN(qte) || qte<1){ afficherToastNotif('Quantite invalide', 'La quantite doit etre au moins 1.', 'alerte'); return; }
@@ -20071,6 +20158,7 @@ function enregistrerCommandeSpeciale(){
     id: 'cs_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
     piece: piece, marque: marque, modele: modele, qte: qte,
     fournisseurId: fournisseurId, prixAchatEstime: isNaN(prix)?'':prix, note: note,
+    immat: immat, vehiculeType: immat ? vehiculeType : '',
     demandeur: currentUser ? (currentUser.login||currentUser.nom) : currentRole,
     dateDemande: Date.now(), statut: 'demande', dateCommande: null, dateLivraison: null
   });
@@ -20122,6 +20210,7 @@ function rechercherCommandesSpeciales(texte){
       return (c.piece||'').toLowerCase().indexOf(q)>=0 ||
         (c.marque||'').toLowerCase().indexOf(q)>=0 ||
         (c.modele||'').toLowerCase().indexOf(q)>=0 ||
+        (c.immat||'').toLowerCase().indexOf(q)>=0 ||
         (f && f.nom.toLowerCase().indexOf(q)>=0);
     });
   }
@@ -20154,17 +20243,19 @@ function htmlTableauCommandesSpeciales(liste){
       : c.statut==='commande' ? '<span class="badge b-blue">Commandee</span>'
       : '<span class="badge b-green">Livree</span>';
     html += '<tr>';
-    html += '<td><div class="fw7">'+(c.piece||'')+'</div>'+(c.note?'<div class="xs muted">'+c.note+'</div>':'')+'</td>';
+    html += '<td><div class="fw7">'+(c.piece||'')+'</div>'
+      +(c.immat?'<div class="xs" style="color:#185FA5">&#x1F697; '+c.immat+(c.vehiculeType==='autre'?' <span class="muted">(hors dossier)</span>':'')+'</div>':'')
+      +(c.note?'<div class="xs muted">'+c.note+'</div>':'')+'</td>';
     html += '<td class="xs">'+((c.marque||c.modele)?((c.marque||'')+' '+(c.modele||'')).trim():'<span class="badge b-blue" style="font-size:9px">Universel</span>')+'</td>';
     html += '<td style="text-align:center">'+(c.qte||1)+'</td>';
     html += '<td class="xs">'+(f?f.nom:'<span class="muted">—</span>')+'</td>';
     html += '<td>'+badgeStatut+'</td>';
     html += '<td class="xs" style="font-family:monospace">'+tempsEcouleCS(c)+(c.statut==='livree'?'':' <span class="muted">(en cours)</span>')+'</td>';
     html += '<td style="white-space:nowrap">';
-    // Seul le profil Achats peut lancer/receptionner une commande — les
+    // Achats ET Direction peuvent lancer/receptionner une commande — les
     // autres roles (ex: chef d'atelier, qui peut faire la demande) n'ont
     // qu'une vue en lecture seule du statut de leur demande.
-    if(currentRole==='achats'){
+    if(currentRole==='achats' || currentRole==='direction'){
       if(c.statut==='demande'){
         html += '<button class="btn btn-sm btn-primary" data-csid="'+c.id+'" onclick="lancerCommandeSpecialeByEl(this)">&#x1F6D2; Lancer commande</button> ';
         html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="supprimerCommandeSpecialeByEl(this)" title="Annuler la demande" style="color:#A32D2D">&#x2715;</button>';
