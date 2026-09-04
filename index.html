@@ -2195,6 +2195,22 @@ function marquerVehiculeModifie(id){
 // precedente — tout vehicule dont le contenu a reellement change est
 // marque modifie automatiquement, quelle que soit la fonction en cause.
 var _dernierEtatVehiculesSave = {};
+// IMPORTANT : capture la baseline pour CHAQUE vehicule sans rien marquer
+// comme modifie — a appeler juste apres chaque chargement/synchronisation
+// (jamais apres une vraie edition locale). Sans cet appel explicite au
+// bon moment, le cache reste vide jusqu'a la premiere sauvegarde, qui
+// marquerait alors TOUS les vehicules comme "modifies a l'instant" meme
+// s'ils n'ont jamais ete touches — un vehicule charge depuis une copie
+// perimee se retrouverait avec un horodatage artificiellement frais et
+// gagnerait a tort la fusion contre une modification reellement plus
+// recente faite sur un autre appareil (cause du bug de perte de donnees).
+function initialiserBaselineVehicules(){
+  vehicles.forEach(function(v){
+    var copie = {};
+    for(var k in v){ if(k!=='lastModified') copie[k] = v[k]; }
+    _dernierEtatVehiculesSave[v.id] = JSON.stringify(copie);
+  });
+}
 function marquerVehiculesModifiesAuto(){
   vehicles.forEach(function(v){
     var copie = {};
@@ -30258,6 +30274,10 @@ function initFirebase(){
           merged.push(nTs > lTs ? n : l);
         });
         vehicles = merged;
+        // Re-capture la baseline sur le resultat FUSIONNE — sinon, la
+        // toute prochaine sauvegarde locale marquerait a tort tous les
+        // vehicules recus d'un autre appareil comme "modifies a l'instant".
+        initialiserBaselineVehicules();
         migrerFactureDeposeeLe(); // migration retroactive, aussi apres synchro Firebase
         migrerValideDirFacturesManuelles(); // idem, pour les factures manuelles/imports
         migrerForfaitsLivresBloques(); // idem, pour les forfaits bloques sur "livre"
@@ -30426,7 +30446,7 @@ window.onload=function(){
   checkMobileLayout();
   window.addEventListener('resize', checkMobileLayout);
 
-  initData();vehicles=loadV();
+  initData();vehicles=loadV();initialiserBaselineVehicules();
   migrerFactureDeposeeLe(); // migration retroactive (voir commentaire de la fonction)
   migrerValideDirFacturesManuelles(); // idem, pour les factures manuelles/imports
   migrerForfaitsLivresBloques(); // idem, pour les forfaits bloques sur "livre"
