@@ -6287,6 +6287,12 @@ var rentaDevisAnalysePiecesSortCol = 'total';
 var rentaDevisAnalysePiecesSortDir = 'desc';
 var rentaDevisApBorneDebut = 0;
 var rentaDevisApBorneFin = null;
+// true lorsque "Analyse pieces" est ouverte depuis la page Clients TKM —
+// lu par collecterLignesDevisPourAnalyse() pour filtrer sur les seuls
+// clients TKM. Reste global (pas un simple parametre) car les
+// rafraichissements de recherche/tri (setRentaDevisApRechercheByEl...)
+// n'ont pas de contexte pour transmettre ce filtre autrement.
+var rentaDevisApFiltreTkm = false;
 var rentaFiltre = 'tous';  // 'tous','mois','trimestre','annee','custom'
 var rentaSort = 'marge';   // 'marge','taux','ca','date'
 var rentaDebut = null;
@@ -6297,12 +6303,6 @@ var rentaFin = null;
 // d'affichage (tri, vues, KPI) pour un comportement identique. Ne
 // modifie rien a pageRentabilite() ni aux fonctions partagees.
 function pageRentabiliteTKM(){
-  // Securite : si on arrive sur cette page avec la vue encore reglee sur
-  // "evolution" ou "analyse_pieces" (choisie precedemment sur la page
-  // Clients Devis, l'etat de vue etant partage), on force la vue Clients
-  // — ces deux vues ne peuvent pas etre filtrees correctement sur les
-  // seuls clients TKM (voir plus bas).
-  if(rentaVue==='evolution' || rentaVue==='analyse_pieces') rentaVue = 'clients';
   var today = new Date();
   var borneDebut = 0;
   var borneFin = null;
@@ -6363,11 +6363,11 @@ function pageRentabiliteTKM(){
   html += '<input type="date" class="inp" id="rentaFin" style="width:95px;font-size:11px;padding:2px 3px" value="'+(rentaFin||'')+'">';
   html += '<button class="btn btn-sm btn-primary" style="font-size:11px;padding:3px 6px" onclick="setRentaCustom()">OK</button>';
   html += '<span style="flex:1"></span>';
-  // Uniquement la vue Clients ici : Evolution CA et Analyse pieces
-  // recalculent leurs donnees depuis TOUS les clients devis (fonctions
-  // partagees avec la page Clients Devis, volontairement non modifiees)
-  // et ne peuvent donc pas etre filtrees sur les seuls clients TKM sans
-  // toucher a ces fonctions communes.
+  // Evolution CA et Analyse pieces reutilisent les memes fonctions que
+  // Clients Devis, avec le filtre TKM active.
+  [{v:'clients',l:'Clients'},{v:'evolution',l:'&#x1F4C8; Evolution CA'},{v:'analyse_pieces',l:'&#x1F50D; Analyse pieces'}].forEach(function(v){
+    html += '<button class="btn btn-sm'+(rentaVue===v.v?' btn-primary':'')+'" data-rv="'+v.v+'" onclick="setRentaVueByEl(this)" style="font-size:11px;padding:3px 7px">'+v.l+'</button>';
+  });
   html += '</div>';
   if(rentaVue!=='evolution' && rentaVue!=='analyse_pieces'){
   html += '<div class="kgrid k4" style="margin-bottom:8px">';
@@ -6388,9 +6388,9 @@ function pageRentabiliteTKM(){
   } else if(rentaVue==='periode'){
     html += rentaVuePeriode();
   } else if(rentaVue==='evolution'){
-    html += rentaEvolution();
+    html += rentaEvolution(true);
   } else if(rentaVue==='analyse_pieces'){
-    html += rentaDevisAnalysePieces(borneDebut, borneFin);
+    html += rentaDevisAnalysePieces(borneDebut, borneFin, true);
   } else {
     html += rentaParClient(dossiers);
   }
@@ -6667,10 +6667,10 @@ function htmlPickerPeriode(cible, type, valeurActuelle){
 // Collecte le CA (devis+assurance) par client et par MOIS, sur TOUT
 // l'historique — independant du filtre de periode global de la page, car
 // cette vue compare elle-meme des periodes entre elles.
-function collecterCAParClientMois(){
+function collecterCAParClientMois(filtreTkm){
   var data = {};
   vehicles.filter(function(v){
-    return v.typeClient!=='forfait' && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;
+    return v.typeClient!=='forfait' && (!filtreTkm || v.tkm===true) && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;
   }).forEach(function(v){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     var totalVente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
@@ -7561,12 +7561,12 @@ function ordonnerPeriodesParChronologie(periodeA, periodeB, type){
   }
 }
 
-function rentaEvolution(){
+function rentaEvolution(filtreTkm){
   if(!rentaEvolutionPeriodeA){
     rentaEvolutionPeriodeA = periodeKeyDuMoment(rentaEvolutionType);
     rentaEvolutionPeriodeB = periodePrecedente(rentaEvolutionPeriodeA, rentaEvolutionType);
   }
-  var caParClientMois = collecterCAParClientMois();
+  var caParClientMois = collecterCAParClientMois(filtreTkm);
 
   // La periode la plus RECENTE s'affiche toujours en seconde colonne
   // (celle des deux montants), peu importe si l'utilisateur l'a saisie
@@ -7619,7 +7619,7 @@ function rentaEvolution(){
 
   // ── Tableau de comparaison, trie ──
   html += '<div class="card"><div class="card-head" style="display:flex;justify-content:space-between;align-items:center">';
-  html += '<span>Comparaison par client ('+comparaison.length+')</span>';
+  html += '<span>Comparaison par client'+(filtreTkm?' — <span class="badge b-blue" style="font-size:10px">TKM</span>':'')+' ('+comparaison.length+')</span>';
   html += '<div class="flex gap6">';
   html += '<button class="btn btn-sm'+(rentaEvolutionTri==='ca_desc'?' btn-primary':'')+'" data-ret2="ca_desc" onclick="setRentaEvolutionTriByEl(this)" style="font-size:11px">Trier par CA</button>';
   html += '<button class="btn btn-sm'+(rentaEvolutionTri==='variation_desc'?' btn-primary':'')+'" data-ret2="variation_desc" onclick="setRentaEvolutionTriByEl(this)" style="font-size:11px">Plus forte hausse</button>';
@@ -7700,7 +7700,7 @@ function initGraphiquesRentaEvolution(caParClientMois){
 // page — inclut les dossiers assurance).
 function collecterLignesDevisPourAnalyse(){
   var lignes = [];
-  vehicles.filter(function(v){return v.typeClient!=='forfait';}).forEach(function(v){
+  vehicles.filter(function(v){return v.typeClient!=='forfait' && (!rentaDevisApFiltreTkm || v.tkm===true);}).forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     if(rentaDevisApBorneDebut>0 && dateRef<rentaDevisApBorneDebut) return;
@@ -7819,9 +7819,10 @@ function reinitialiserRentaDevisAnalysePieces(){
   renderPage();
 }
 
-function rentaDevisAnalysePieces(borneDebut, borneFin){
+function rentaDevisAnalysePieces(borneDebut, borneFin, filtreTkm){
   rentaDevisApBorneDebut = borneDebut||0;
   rentaDevisApBorneFin = borneFin||null;
+  rentaDevisApFiltreTkm = !!filtreTkm;
 
   var toutesLignes = collecterLignesDevisPourAnalyse();
 
@@ -7844,6 +7845,9 @@ function rentaDevisAnalysePieces(borneDebut, borneFin){
   var listeModeles = Object.keys(modelesUniques).map(function(k){return modelesUniques[k];}).sort();
 
   var html = '<div class="card" style="padding:14px 16px;margin-bottom:16px">';
+  if(rentaDevisApFiltreTkm){
+    html += '<div class="xs" style="margin-bottom:8px"><span class="badge b-blue">TKM</span> <span class="muted">Analyse limitee aux clients TKM</span></div>';
+  }
   html += '<div class="fr" style="margin-bottom:10px"><input class="inp" id="rentaDevisApRecherche" placeholder="Recherche contextuelle (ex: plaquette, vidange...)..." value="'+rentaDevisAnalysePiecesRecherche+'" oninput="setRentaDevisApRechercheByEl(this)" autocomplete="off"></div>';
   html += '<div class="flex gap6" style="flex-wrap:wrap;align-items:center">';
   html += '<select class="inp" id="rentaDevisApClient" onchange="setRentaDevisApClientByEl(this)" style="width:200px">';
