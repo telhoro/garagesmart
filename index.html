@@ -1669,6 +1669,7 @@ var BANQUES = [];
 // appareil la recalcule a tort comme "non deposee" / "a emettre".
 var FORFAIT_FACTURES = []; // factures forfait generees
 function saveForfaitFactures(){
+  marquerCollectionModifieAuto('forfait_factures', FORFAIT_FACTURES);
   localStorage.setItem('gos_forfait_factures', JSON.stringify(FORFAIT_FACTURES));
   if(fbDb && fbConnected){
     fbDb.ref('gos_forfait_factures').set(JSON.stringify(FORFAIT_FACTURES)).catch(function(e){
@@ -1689,6 +1690,7 @@ function syncForfaitFacturesFromFirebase(callback){
     } else if(FORFAIT_FACTURES.length && fbConnected){
       fbDb.ref('gos_forfait_factures').set(JSON.stringify(FORFAIT_FACTURES));
     }
+    initialiserBaselineCollection('forfait_factures', FORFAIT_FACTURES);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -1698,6 +1700,7 @@ var SAMPLE_BANQUES = [
   {id:'b3', nom:'Ecobank', solde:0, actif:true}
 ];
 function saveBanques(){
+  marquerCollectionModifieAuto('banques', BANQUES);
   localStorage.setItem('gos_banques', JSON.stringify(BANQUES));
   if(fbDb && fbConnected){
     fbDb.ref('gos_banques').set(JSON.stringify(BANQUES)).catch(function(e){
@@ -1717,6 +1720,7 @@ function syncBanquesFromFirebase(callback){
       // donnees locales existantes pour amorcer la synchronisation.
       fbDb.ref('gos_banques').set(JSON.stringify(BANQUES));
     }
+    initialiserBaselineCollection('banques', BANQUES);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -1741,6 +1745,7 @@ function initBanques(){
 // compte, avec mise a jour en temps reel entre appareils.
 var CHARGES_FIXES = [];
 function saveChargesFixes(){
+  marquerCollectionModifieAuto('charges_fixes', CHARGES_FIXES);
   localStorage.setItem('gos_charges_fixes', JSON.stringify(CHARGES_FIXES));
   if(fbDb && fbConnected){
     fbDb.ref('gos_charges_fixes').set(JSON.stringify(CHARGES_FIXES)).catch(function(e){
@@ -1760,6 +1765,7 @@ function syncChargesFixesFromFirebase(callback){
     } else if(CHARGES_FIXES.length && fbConnected){
       fbDb.ref('gos_charges_fixes').set(JSON.stringify(CHARGES_FIXES));
     }
+    initialiserBaselineCollection('charges_fixes', CHARGES_FIXES);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -1769,6 +1775,7 @@ function syncChargesFixesFromFirebase(callback){
 // Synchronise via Firebase, meme principe que les charges fixes ci-dessus.
 var ENGAGEMENTS_BANCAIRES = [];
 function saveEngagementsBancaires(){
+  marquerCollectionModifieAuto('engagements_bancaires', ENGAGEMENTS_BANCAIRES);
   localStorage.setItem('gos_engagements_bancaires', JSON.stringify(ENGAGEMENTS_BANCAIRES));
   if(fbDb && fbConnected){
     fbDb.ref('gos_engagements_bancaires').set(JSON.stringify(ENGAGEMENTS_BANCAIRES)).catch(function(e){
@@ -1788,6 +1795,7 @@ function syncEngagementsBancairesFromFirebase(callback){
     } else if(ENGAGEMENTS_BANCAIRES.length && fbConnected){
       fbDb.ref('gos_engagements_bancaires').set(JSON.stringify(ENGAGEMENTS_BANCAIRES));
     }
+    initialiserBaselineCollection('engagements_bancaires', ENGAGEMENTS_BANCAIRES);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -1804,6 +1812,7 @@ function syncEngagementsBancairesFromFirebase(callback){
 var CLIENT_ACCOUNTS = {}; // {uid: {...}}, charge en memoire pour affichage cote Direction uniquement
 function saveClientAccount(uid, data){
   CLIENT_ACCOUNTS[uid] = data;
+  marquerObjetModifieAuto('comptes_clients', CLIENT_ACCOUNTS);
   if(fbDb && fbConnected){
     fbDb.ref('gos_client_accounts/'+uid).set(data).catch(function(e){
       console.error('Firebase client account save error:', e);
@@ -1812,6 +1821,7 @@ function saveClientAccount(uid, data){
 }
 function deleteClientAccountData(uid){
   delete CLIENT_ACCOUNTS[uid];
+  marquerObjetModifieAuto('comptes_clients', CLIENT_ACCOUNTS);
   if(fbDb && fbConnected){
     fbDb.ref('gos_client_accounts/'+uid).remove().catch(function(e){
       console.error('Firebase client account delete error:', e);
@@ -1822,6 +1832,7 @@ function syncClientAccountsFromFirebase(callback){
   if(!fbDb){ if(callback) callback(); return; }
   fbDb.ref('gos_client_accounts').once('value').then(function(snap){
     CLIENT_ACCOUNTS = snap.val() || {};
+    initialiserBaselineObjet('comptes_clients', CLIENT_ACCOUNTS);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -1835,6 +1846,7 @@ function syncClientAccountsFromFirebase(callback){
 // telephone...), meme principe que les charges fixes ci-dessus.
 var FORFAITS_CLIENTS = []; // {client, montantAnnuel, montantMensuel, jourDepot}
 function saveForfaitsClients(){
+  marquerCollectionModifieAuto('forfaits_clients', FORFAITS_CLIENTS);
   localStorage.setItem('gos_forfaits_clients', JSON.stringify(FORFAITS_CLIENTS));
   if(fbDb && fbConnected){
     fbDb.ref('gos_forfaits_clients').set(JSON.stringify(FORFAITS_CLIENTS)).catch(function(e){
@@ -1854,6 +1866,7 @@ function syncForfaitsClientsFromFirebase(callback){
     } else if(FORFAITS_CLIENTS.length && fbConnected){
       fbDb.ref('gos_forfaits_clients').set(JSON.stringify(FORFAITS_CLIENTS));
     }
+    initialiserBaselineCollection('forfaits_clients', FORFAITS_CLIENTS);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -1869,6 +1882,7 @@ function syncForfaitsClientsFromFirebase(callback){
 // existe deja pour ce nom+tel, pour ne jamais dupliquer une ligne client.
 var CLIENTS_SANS_VEHICULE = []; // {id, nom, tel, email, typeClient, entite, creeLe}
 function saveClientsSansVehicule(){
+  marquerCollectionModifieAuto('clients_sans_vehicule', CLIENTS_SANS_VEHICULE);
   localStorage.setItem('gos_clients_sans_vehicule', JSON.stringify(CLIENTS_SANS_VEHICULE));
   if(fbDb && fbConnected){
     fbDb.ref('gos_clients_sans_vehicule').set(JSON.stringify(CLIENTS_SANS_VEHICULE)).catch(function(e){
@@ -1888,6 +1902,7 @@ function syncClientsSansVehiculeFromFirebase(callback){
     } else if(CLIENTS_SANS_VEHICULE.length && fbConnected){
       fbDb.ref('gos_clients_sans_vehicule').set(JSON.stringify(CLIENTS_SANS_VEHICULE));
     }
+    initialiserBaselineCollection('clients_sans_vehicule', CLIENTS_SANS_VEHICULE);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -1917,6 +1932,7 @@ function syncFournisseursFromFirebase(callback){
         fbDb.ref('gos_fournisseurs').set(JSON.stringify(FOURNISSEURS));
       }
     }
+    initialiserBaselineCollection('fournisseurs', FOURNISSEURS);
     if(callback) callback();
   }).catch(function(e){ console.error('Firebase fournisseurs load error:', e); if(callback) callback(); });
 }
@@ -1940,6 +1956,7 @@ function loadCommandesSpeciales(){
   catch(e){ COMMANDES_SPECIALES = []; }
 }
 function saveCommandesSpeciales(){
+  marquerCollectionModifieAuto('commandes_speciales', COMMANDES_SPECIALES);
   localStorage.setItem('gos_commandes_speciales', JSON.stringify(COMMANDES_SPECIALES));
   if(fbDb && fbConnected){
     fbDb.ref('gos_commandes_speciales').set(JSON.stringify(COMMANDES_SPECIALES)).catch(function(e){
@@ -1959,6 +1976,7 @@ function syncCommandesSpecialesFromFirebase(callback){
     } else if(COMMANDES_SPECIALES.length && fbConnected){
       fbDb.ref('gos_commandes_speciales').set(JSON.stringify(COMMANDES_SPECIALES));
     }
+    initialiserBaselineCollection('commandes_speciales', COMMANDES_SPECIALES);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -1969,6 +1987,7 @@ function loadStock(){
 }
 
 function saveStock(){
+  marquerCollectionModifieAuto('stock', STOCK);
   localStorage.setItem('gos_stock', JSON.stringify(STOCK));
   if(fbDb && fbConnected){
     fbDb.ref('gos_stock').set(JSON.stringify(STOCK)).catch(function(e){
@@ -1989,6 +2008,7 @@ function syncStockFromFirebase(callback){
     } else if(STOCK.length && fbConnected){
       fbDb.ref('gos_stock').set(JSON.stringify(STOCK));
     }
+    initialiserBaselineCollection('stock', STOCK);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -2050,6 +2070,7 @@ function stockArticleById(id){
 }
 
 function saveFournisseurs(){
+  marquerCollectionModifieAuto('fournisseurs', FOURNISSEURS);
   localStorage.setItem('gos_fournisseurs',JSON.stringify(FOURNISSEURS));
   if(fbDb && fbConnected){
     fbDb.ref('gos_fournisseurs').set(JSON.stringify(FOURNISSEURS)).catch(function(e){
@@ -2204,6 +2225,102 @@ var _dernierEtatVehiculesSave = {};
 // perimee se retrouverait avec un horodatage artificiellement frais et
 // gagnerait a tort la fusion contre une modification reellement plus
 // recente faite sur un autre appareil (cause du bug de perte de donnees).
+// ══════════════════════════════════════════════════════════════════════
+// MOTEUR GENERIQUE de suivi des modifications et de fusion par element,
+// reutilisable pour N'IMPORTE QUELLE collection (array d'objets avec un
+// champ id) synchronisee en direct avec Firebase — meme principe que
+// celui applique specifiquement aux vehicules, pour eviter qu'un
+// ecrasement en bloc ne fasse perdre des modifications recentes faites
+// sur un autre appareil.
+// ══════════════════════════════════════════════════════════════════════
+var _dernierEtatCollections = {};
+function initialiserBaselineCollection(nom, tableau){
+  var cache = {};
+  tableau.forEach(function(item){
+    var copie = {};
+    for(var k in item){ if(k!=='lastModified') copie[k] = item[k]; }
+    cache[item.id] = JSON.stringify(copie);
+  });
+  _dernierEtatCollections[nom] = cache;
+}
+function marquerCollectionModifieAuto(nom, tableau){
+  if(!_dernierEtatCollections[nom]) _dernierEtatCollections[nom] = {};
+  var cache = _dernierEtatCollections[nom];
+  tableau.forEach(function(item){
+    var copie = {};
+    for(var k in item){ if(k!=='lastModified') copie[k] = item[k]; }
+    var etatActuel = JSON.stringify(copie);
+    if(cache[item.id] !== etatActuel){
+      item.lastModified = Date.now();
+      cache[item.id] = etatActuel;
+    }
+  });
+}
+function fusionnerCollectionParItem(local, distant, dernierPushLocal){
+  var localById = {}, distantById = {}, tousLesIds = {};
+  local.forEach(function(x){ localById[x.id]=x; tousLesIds[x.id]=true; });
+  distant.forEach(function(x){ distantById[x.id]=x; tousLesIds[x.id]=true; });
+  var merged = [];
+  Object.keys(tousLesIds).forEach(function(id){
+    var l = localById[id], d = distantById[id];
+    if(!l){ merged.push(d); return; }
+    if(!d){
+      var lTsAbsent = l.lastModified||0;
+      if(lTsAbsent && lTsAbsent < dernierPushLocal) return; // supprime ailleurs
+      merged.push(l);
+      return;
+    }
+    var lTs = l.lastModified||0, dTs = d.lastModified||0;
+    merged.push(dTs > lTs ? d : l);
+  });
+  return merged;
+}
+
+// ── Variante du moteur ci-dessus pour les collections stockees comme un
+// OBJET cle/valeur (comptes clients, messagerie, delais de paiement,
+// empreintes faciales) plutot qu'une liste avec un champ id. La valeur
+// distante ne porte pas de lastModified (les valeurs peuvent etre de
+// simples nombres ou textes) : on suit donc la fraicheur SEPAREMENT, par
+// cle, dans un registre local — une cle modifiee tres recemment (apres
+// notre dernier envoi) garde sa version locale, sinon on prend la
+// version distante.
+var _dernierEtatObjets = {};
+var _lastModifiedObjets = {};
+function initialiserBaselineObjet(nom, objet){
+  var cache = {};
+  Object.keys(objet).forEach(function(cle){ cache[cle] = JSON.stringify(objet[cle]); });
+  _dernierEtatObjets[nom] = cache;
+}
+function marquerObjetModifieAuto(nom, objet){
+  if(!_dernierEtatObjets[nom]) _dernierEtatObjets[nom] = {};
+  if(!_lastModifiedObjets[nom]) _lastModifiedObjets[nom] = {};
+  var cache = _dernierEtatObjets[nom], meta = _lastModifiedObjets[nom];
+  Object.keys(objet).forEach(function(cle){
+    var etatActuel = JSON.stringify(objet[cle]);
+    if(cache[cle] !== etatActuel){ meta[cle] = Date.now(); cache[cle] = etatActuel; }
+  });
+}
+function fusionnerObjetParCle(nom, local, distant, dernierPushLocal){
+  var meta = _lastModifiedObjets[nom] || {};
+  var merged = {};
+  var toutesCles = {};
+  Object.keys(local).forEach(function(k){toutesCles[k]=true;});
+  Object.keys(distant).forEach(function(k){toutesCles[k]=true;});
+  Object.keys(toutesCles).forEach(function(cle){
+    var enLocal = local.hasOwnProperty(cle), enDistant = distant.hasOwnProperty(cle);
+    if(!enLocal){ merged[cle] = distant[cle]; return; }
+    if(!enDistant){
+      var lTsAbsent = meta[cle]||0;
+      if(lTsAbsent && lTsAbsent < dernierPushLocal) return; // supprime ailleurs
+      merged[cle] = local[cle];
+      return;
+    }
+    var lTs = meta[cle]||0;
+    merged[cle] = (lTs && lTs >= dernierPushLocal) ? local[cle] : distant[cle];
+  });
+  return merged;
+}
+
 function initialiserBaselineVehicules(){
   vehicles.forEach(function(v){
     var copie = {};
@@ -2275,6 +2392,7 @@ function vehiclesActifs(){
 // personnel lui-meme.
 var PRESENCES = [];
 function savePresences(){
+  marquerCollectionModifieAuto('presences', PRESENCES);
   localStorage.setItem('gos_presences', JSON.stringify(PRESENCES));
   if(fbDb && fbConnected){
     fbDb.ref('gos_presences').set(JSON.stringify(PRESENCES)).catch(function(e){
@@ -2292,6 +2410,7 @@ function syncPresencesFromFirebase(callback){
     var val = snap.val();
     if(val){ try{ PRESENCES = JSON.parse(val)||[]; localStorage.setItem('gos_presences', val); }catch(e){} }
     else if(PRESENCES.length && fbConnected){ fbDb.ref('gos_presences').set(JSON.stringify(PRESENCES)); }
+    initialiserBaselineCollection('presences', PRESENCES);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -2302,6 +2421,7 @@ function syncPresencesFromFirebase(callback){
 // comparaison lors de la reconnaissance.
 var DESCRIPTEURS_FACIAUX = {};
 function saveDescripteursFaciaux(){
+  marquerObjetModifieAuto('descripteurs_faciaux', DESCRIPTEURS_FACIAUX);
   localStorage.setItem('gos_descripteurs_faciaux', JSON.stringify(DESCRIPTEURS_FACIAUX));
   if(fbDb && fbConnected){
     fbDb.ref('gos_descripteurs_faciaux').set(JSON.stringify(DESCRIPTEURS_FACIAUX)).catch(function(e){
@@ -2319,6 +2439,7 @@ function syncDescripteursFaciauxFromFirebase(callback){
     var val = snap.val();
     if(val){ try{ DESCRIPTEURS_FACIAUX = JSON.parse(val)||{}; localStorage.setItem('gos_descripteurs_faciaux', val); }catch(e){} }
     else if(Object.keys(DESCRIPTEURS_FACIAUX).length && fbConnected){ fbDb.ref('gos_descripteurs_faciaux').set(JSON.stringify(DESCRIPTEURS_FACIAUX)); }
+    initialiserBaselineObjet('descripteurs_faciaux', DESCRIPTEURS_FACIAUX);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -2329,6 +2450,7 @@ function syncDescripteursFaciauxFromFirebase(callback){
 // ouvertePar, fermeePar, ouvertureLe, fermetureLe}.
 var CAISSE_JOURNEES = [];
 function saveCaisseJournees(){
+  marquerCollectionModifieAuto('caisse_journees', CAISSE_JOURNEES);
   localStorage.setItem('gos_caisse_journees', JSON.stringify(CAISSE_JOURNEES));
   if(fbDb && fbConnected){
     fbDb.ref('gos_caisse_journees').set(JSON.stringify(CAISSE_JOURNEES)).catch(function(e){
@@ -2346,6 +2468,7 @@ function syncCaisseJourneesFromFirebase(callback){
     var val = snap.val();
     if(val){ try{ CAISSE_JOURNEES = JSON.parse(val)||[]; localStorage.setItem('gos_caisse_journees', val); }catch(e){} }
     else if(CAISSE_JOURNEES.length && fbConnected){ fbDb.ref('gos_caisse_journees').set(JSON.stringify(CAISSE_JOURNEES)); }
+    initialiserBaselineCollection('caisse_journees', CAISSE_JOURNEES);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -2355,6 +2478,7 @@ function syncCaisseJourneesFromFirebase(callback){
 // vehiculeId (optionnel), auteur}.
 var CAISSE_MOUVEMENTS = [];
 function saveCaisseMouvements(){
+  marquerCollectionModifieAuto('caisse_mouvements', CAISSE_MOUVEMENTS);
   localStorage.setItem('gos_caisse_mouvements', JSON.stringify(CAISSE_MOUVEMENTS));
   if(fbDb && fbConnected){
     fbDb.ref('gos_caisse_mouvements').set(JSON.stringify(CAISSE_MOUVEMENTS)).catch(function(e){
@@ -2372,6 +2496,7 @@ function syncCaisseMouvementsFromFirebase(callback){
     var val = snap.val();
     if(val){ try{ CAISSE_MOUVEMENTS = JSON.parse(val)||[]; localStorage.setItem('gos_caisse_mouvements', val); }catch(e){} }
     else if(CAISSE_MOUVEMENTS.length && fbConnected){ fbDb.ref('gos_caisse_mouvements').set(JSON.stringify(CAISSE_MOUVEMENTS)); }
+    initialiserBaselineCollection('caisse_mouvements', CAISSE_MOUVEMENTS);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -2384,6 +2509,7 @@ function syncCaisseMouvementsFromFirebase(callback){
 // du chiffrage vehicule, pour rester dans le meme tableau/calcul.
 var DETTES_MANUELLES = [];
 function saveDettesManuelles(){
+  marquerCollectionModifieAuto('dettes_manuelles', DETTES_MANUELLES);
   localStorage.setItem('gos_dettes_manuelles', JSON.stringify(DETTES_MANUELLES));
   if(fbDb && fbConnected){
     fbDb.ref('gos_dettes_manuelles').set(JSON.stringify(DETTES_MANUELLES)).catch(function(e){
@@ -2401,6 +2527,7 @@ function syncDettesManuellesFromFirebase(callback){
     var val = snap.val();
     if(val){ try{ DETTES_MANUELLES = JSON.parse(val)||[]; localStorage.setItem('gos_dettes_manuelles', val); }catch(e){} }
     else if(DETTES_MANUELLES.length && fbConnected){ fbDb.ref('gos_dettes_manuelles').set(JSON.stringify(DETTES_MANUELLES)); }
+    initialiserBaselineCollection('dettes_manuelles', DETTES_MANUELLES);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -2414,6 +2541,7 @@ function syncDettesManuellesFromFirebase(callback){
 // n'existe qu'a partir du jour de mise en place de ce mecanisme.
 var EXPOSITION_SNAPSHOTS = [];
 function saveExpositionSnapshots(){
+  marquerCollectionModifieAuto('exposition_snapshots', EXPOSITION_SNAPSHOTS);
   localStorage.setItem('gos_exposition_snapshots', JSON.stringify(EXPOSITION_SNAPSHOTS));
   if(fbDb && fbConnected){
     fbDb.ref('gos_exposition_snapshots').set(JSON.stringify(EXPOSITION_SNAPSHOTS)).catch(function(e){
@@ -2431,6 +2559,7 @@ function syncExpositionSnapshotsFromFirebase(callback){
     var val = snap.val();
     if(val){ try{ EXPOSITION_SNAPSHOTS = JSON.parse(val)||[]; localStorage.setItem('gos_exposition_snapshots', val); }catch(e){} }
     else if(EXPOSITION_SNAPSHOTS.length && fbConnected){ fbDb.ref('gos_exposition_snapshots').set(JSON.stringify(EXPOSITION_SNAPSHOTS)); }
+    initialiserBaselineCollection('exposition_snapshots', EXPOSITION_SNAPSHOTS);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -2457,6 +2586,7 @@ function capturerSnapshotExpositionDuJour(){
 // toucher au compte de connexion d'origine.
 var EMPLOYES_PRESENCE = [];
 function saveEmployesPresence(){
+  marquerCollectionModifieAuto('employes_presence', EMPLOYES_PRESENCE);
   localStorage.setItem('gos_employes_presence', JSON.stringify(EMPLOYES_PRESENCE));
   if(fbDb && fbConnected){
     fbDb.ref('gos_employes_presence').set(JSON.stringify(EMPLOYES_PRESENCE)).catch(function(e){
@@ -2474,6 +2604,7 @@ function syncEmployesPresenceFromFirebase(callback){
     var val = snap.val();
     if(val){ try{ EMPLOYES_PRESENCE = JSON.parse(val)||[]; localStorage.setItem('gos_employes_presence', val); }catch(e){} }
     else if(EMPLOYES_PRESENCE.length && fbConnected){ fbDb.ref('gos_employes_presence').set(JSON.stringify(EMPLOYES_PRESENCE)); }
+    initialiserBaselineCollection('employes_presence', EMPLOYES_PRESENCE);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -2485,6 +2616,7 @@ function syncEmployesPresenceFromFirebase(callback){
 // 30j entreprise / livraison particulier).
 var CLIENT_DELAIS_PAIEMENT = {};
 function saveClientDelaisPaiement(){
+  marquerObjetModifieAuto('client_delais_paiement', CLIENT_DELAIS_PAIEMENT);
   localStorage.setItem('gos_client_delais_paiement', JSON.stringify(CLIENT_DELAIS_PAIEMENT));
   if(fbDb && fbConnected){
     fbDb.ref('gos_client_delais_paiement').set(JSON.stringify(CLIENT_DELAIS_PAIEMENT)).catch(function(e){
@@ -2502,6 +2634,7 @@ function syncClientDelaisPaiementFromFirebase(callback){
     var val = snap.val();
     if(val){ try{ CLIENT_DELAIS_PAIEMENT = JSON.parse(val)||{}; localStorage.setItem('gos_client_delais_paiement', val); }catch(e){} }
     else if(Object.keys(CLIENT_DELAIS_PAIEMENT).length && fbConnected){ fbDb.ref('gos_client_delais_paiement').set(JSON.stringify(CLIENT_DELAIS_PAIEMENT)); }
+    initialiserBaselineObjet('client_delais_paiement', CLIENT_DELAIS_PAIEMENT);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -2938,6 +3071,7 @@ function capturerEnrolementFacial(){
 }
 
 function savePersonnel(){
+  marquerCollectionModifieAuto('personnel', PERSONNEL);
   localStorage.setItem('gos_personnel', JSON.stringify(PERSONNEL));
   if(fbDb && fbConnected){
     fbDb.ref('gos_personnel').set(JSON.stringify(PERSONNEL)).catch(function(e){
@@ -27254,6 +27388,7 @@ function syncPersonnelFromFirebase(callback){
         fbDb.ref('gos_personnel').set(JSON.stringify(PERSONNEL));
       }
     }
+    initialiserBaselineCollection('personnel', PERSONNEL);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
 }
@@ -30301,9 +30436,11 @@ function initFirebase(){
     if(val){
       try{
         var saved = JSON.parse(val);
-        localStorage.setItem('gos_fournisseurs', val);
+        var fusionneFourn = fusionnerCollectionParItem(FOURNISSEURS, saved, lastLocalTs);
         FOURNISSEURS.length = 0;
-        saved.forEach(function(f){ FOURNISSEURS.push(f); });
+        fusionneFourn.forEach(function(f){ FOURNISSEURS.push(f); });
+        initialiserBaselineCollection('fournisseurs', FOURNISSEURS);
+        localStorage.setItem('gos_fournisseurs', JSON.stringify(FOURNISSEURS));
         // Rafraichir la page pour tous les profils (sauf si une modale est ouverte)
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       }catch(e){}
@@ -30316,8 +30453,10 @@ function initFirebase(){
     var val = snapshot.val();
     if(val){
       try{
-        CHARGES_FIXES = JSON.parse(val)||[];
-        localStorage.setItem('gos_charges_fixes', val);
+        var distantCF = JSON.parse(val)||[];
+        CHARGES_FIXES = fusionnerCollectionParItem(CHARGES_FIXES, distantCF, lastLocalTs);
+        initialiserBaselineCollection('charges_fixes', CHARGES_FIXES);
+        localStorage.setItem('gos_charges_fixes', JSON.stringify(CHARGES_FIXES));
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       }catch(e){}
     }
@@ -30326,8 +30465,10 @@ function initFirebase(){
     var val = snapshot.val();
     if(val){
       try{
-        FORFAIT_FACTURES = JSON.parse(val)||[];
-        localStorage.setItem('gos_forfait_factures', val);
+        var distantFF = JSON.parse(val)||[];
+        FORFAIT_FACTURES = fusionnerCollectionParItem(FORFAIT_FACTURES, distantFF, lastLocalTs);
+        initialiserBaselineCollection('forfait_factures', FORFAIT_FACTURES);
+        localStorage.setItem('gos_forfait_factures', JSON.stringify(FORFAIT_FACTURES));
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       }catch(e){}
     }
@@ -30336,7 +30477,9 @@ function initFirebase(){
   // pas en JSON.stringify comme les autres structures : snapshot.val()
   // renvoie deja l'objet exploitable, pas de parsing necessaire.
   fbDb.ref('gos_client_accounts').on('value', function(snapshot){
-    CLIENT_ACCOUNTS = snapshot.val() || {};
+    var distantCA = snapshot.val() || {};
+    CLIENT_ACCOUNTS = fusionnerObjetParCle('comptes_clients', CLIENT_ACCOUNTS, distantCA, lastLocalTs);
+    initialiserBaselineObjet('comptes_clients', CLIENT_ACCOUNTS);
     if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
   });
   fbDb.ref('gos_messages').on('value', function(snapshot){
@@ -30352,8 +30495,10 @@ function initFirebase(){
     var val = snapshot.val();
     if(val){
       try{
-        CLIENTS_SANS_VEHICULE = JSON.parse(val)||[];
-        localStorage.setItem('gos_clients_sans_vehicule', val);
+        var distantCSV = JSON.parse(val)||[];
+        CLIENTS_SANS_VEHICULE = fusionnerCollectionParItem(CLIENTS_SANS_VEHICULE, distantCSV, lastLocalTs);
+        initialiserBaselineCollection('clients_sans_vehicule', CLIENTS_SANS_VEHICULE);
+        localStorage.setItem('gos_clients_sans_vehicule', JSON.stringify(CLIENTS_SANS_VEHICULE));
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       }catch(e){}
     }
@@ -30362,8 +30507,10 @@ function initFirebase(){
     var val = snapshot.val();
     if(val){
       try{
-        ENGAGEMENTS_BANCAIRES = JSON.parse(val)||[];
-        localStorage.setItem('gos_engagements_bancaires', val);
+        var distantEB = JSON.parse(val)||[];
+        ENGAGEMENTS_BANCAIRES = fusionnerCollectionParItem(ENGAGEMENTS_BANCAIRES, distantEB, lastLocalTs);
+        initialiserBaselineCollection('engagements_bancaires', ENGAGEMENTS_BANCAIRES);
+        localStorage.setItem('gos_engagements_bancaires', JSON.stringify(ENGAGEMENTS_BANCAIRES));
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       }catch(e){}
     }
@@ -30372,8 +30519,77 @@ function initFirebase(){
     var val = snapshot.val();
     if(val){
       try{
-        FORFAITS_CLIENTS = JSON.parse(val)||[];
-        localStorage.setItem('gos_forfaits_clients', val);
+        var distantFC = JSON.parse(val)||[];
+        FORFAITS_CLIENTS = fusionnerCollectionParItem(FORFAITS_CLIENTS, distantFC, lastLocalTs);
+        initialiserBaselineCollection('forfaits_clients', FORFAITS_CLIENTS);
+        localStorage.setItem('gos_forfaits_clients', JSON.stringify(FORFAITS_CLIENTS));
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
+    }
+  });
+  // Ecoutes en direct ajoutees pour stock / dettes manuelles / commandes
+  // speciales — ces 3 collections tres actives au quotidien n'etaient
+  // synchronisees qu'une seule fois au chargement de la page, sans jamais
+  // se remettre a jour ensuite tant que la page reste ouverte.
+  fbDb.ref('gos_stock').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        var distantStk = JSON.parse(val)||[];
+        STOCK = fusionnerCollectionParItem(STOCK, distantStk, lastLocalTs);
+        initialiserBaselineCollection('stock', STOCK);
+        localStorage.setItem('gos_stock', JSON.stringify(STOCK));
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
+    }
+  });
+  fbDb.ref('gos_dettes_manuelles').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        var distantDM = JSON.parse(val)||[];
+        DETTES_MANUELLES = fusionnerCollectionParItem(DETTES_MANUELLES, distantDM, lastLocalTs);
+        initialiserBaselineCollection('dettes_manuelles', DETTES_MANUELLES);
+        localStorage.setItem('gos_dettes_manuelles', JSON.stringify(DETTES_MANUELLES));
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
+    }
+  });
+  fbDb.ref('gos_commandes_speciales').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        var distantCS = JSON.parse(val)||[];
+        COMMANDES_SPECIALES = fusionnerCollectionParItem(COMMANDES_SPECIALES, distantCS, lastLocalTs);
+        initialiserBaselineCollection('commandes_speciales', COMMANDES_SPECIALES);
+        localStorage.setItem('gos_commandes_speciales', JSON.stringify(COMMANDES_SPECIALES));
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
+    }
+  });
+  // Caisse : de l'argent est en jeu, meme traitement complet que les
+  // autres collections financieres — ajout d'une ecoute en direct qui
+  // n'existait pas du tout jusqu'ici.
+  fbDb.ref('gos_caisse_journees').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        var distantCJ = JSON.parse(val)||[];
+        CAISSE_JOURNEES = fusionnerCollectionParItem(CAISSE_JOURNEES, distantCJ, lastLocalTs);
+        initialiserBaselineCollection('caisse_journees', CAISSE_JOURNEES);
+        localStorage.setItem('gos_caisse_journees', JSON.stringify(CAISSE_JOURNEES));
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
+    }
+  });
+  fbDb.ref('gos_caisse_mouvements').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        var distantCM = JSON.parse(val)||[];
+        CAISSE_MOUVEMENTS = fusionnerCollectionParItem(CAISSE_MOUVEMENTS, distantCM, lastLocalTs);
+        initialiserBaselineCollection('caisse_mouvements', CAISSE_MOUVEMENTS);
+        localStorage.setItem('gos_caisse_mouvements', JSON.stringify(CAISSE_MOUVEMENTS));
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       }catch(e){}
     }
