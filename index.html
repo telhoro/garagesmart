@@ -253,6 +253,11 @@ tr:hover td{background:#faf9f7}
             <input type="checkbox" id="f_dossierAssurance" style="width:18px;height:18px;cursor:pointer" onchange="toggleSectionSinistre()">
             <span>&#x1F6E1; Dossier assurance (sinistre)</span>
           </label></div>
+        <div class="fr"><label class="fl">&nbsp;</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:8px 0;font-size:13px">
+            <input type="checkbox" id="f_tkm" style="width:18px;height:18px;cursor:pointer">
+            <span>&#x1F517; Client TKM</span>
+          </label></div>
         <div class="fr" id="div_entite"><label class="fl">Statut</label>
           <select class="inp" id="f_entite"><option>Particulier</option><option>Entreprise</option></select></div>
         <div class="fr"><label class="fl">Priorite</label>
@@ -2091,7 +2096,7 @@ var NAV = {
   direction:[
     {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'},{id:'acces_clients',e:'AC',l:'Acces clients'},{id:'messages_clients',e:'MC',l:'Messages clients'},{id:'import_historique',e:'IH',l:'Import historique'},{id:'presences',e:'Pr',l:'Presences'}]},
     {l:'Finances',items:[{id:'finances_dashboard',e:'FD',l:'Tableau de bord'},{id:'facturation',e:'F',l:'Facturation'},{id:'caisse',e:'Ca',l:'Caisse'},{id:'dettes_fournisseurs',e:'DF',l:'Dettes fournisseurs'},{id:'prevision_treso',e:'PT',l:'Prevision tresorerie'},{id:'historique_paiements',e:'HP',l:'Historique paiements'},{id:'rapport_financier',e:'RF',l:'Rapport financier'}]},
-    {l:'Rentabilite',items:[{id:'rentabilite',e:'RD',l:'Clients Devis'},{id:'rentabilite_forfait',e:'RF',l:'Clients Forfait'},{id:'analyse_pieces',e:'AP',l:'Analyse pieces'}]},
+    {l:'Rentabilite',items:[{id:'rentabilite',e:'RD',l:'Clients Devis'},{id:'rentabilite_forfait',e:'RF',l:'Clients Forfait'},{id:'rentabilite_tkm',e:'RT',l:'Clients TKM'},{id:'analyse_pieces',e:'AP',l:'Analyse pieces'}]},
     {l:'Gestion',items:[{id:'archives',e:'Ar',l:'Archives'},{id:'banques',e:'B',l:'Banques'},{id:'charges_fixes',e:'CF',l:'Charges fixes'},{id:'engagements_bancaires',e:'EB',l:'Engagements bancaires'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'stock',e:'St',l:'Gestion du stock'},{id:'travaux_prevoir',e:'TP',l:'Travaux a prevoir'},{id:'devis_differes',e:'DD',l:'Devis differes'},{id:'sinistres',e:'S',l:'Sinistres'},{id:'val_fin',e:'VF',l:'Validation financiere'},{id:'kpi',e:'K',l:'KPI'}]}
   ],
   reception:[
@@ -2126,7 +2131,7 @@ var TITLES = {
   travaux_prevoir:'Travaux a prevoir',
   dashboard:'Tableau de bord',sinistres:'Sinistres',clients:'Clients et vehicules',
   a_attribuer:'A attribuer',val_devis:'Validation devis',travaux:'Travaux et Tests',
-  equipes:'Equipes et techniciens',chiffrage:'Chiffrage achats',stats_tech:'Mes statistiques',fournisseurs:'Gestion des fournisseurs',tresorerie:'Tresorerie',rentabilite:'Rentabilite clients Devis',rentabilite_forfait:'Rentabilite clients Forfait',analyse_pieces:'Analyse des pieces',facturation:'Facturation',creances:'Creances clients',archives:'Archives vehicules',facturation_forfait:'Facturation forfaits',banques:'Gestion des banques',testeur:'Tableau de bord testeur',
+  equipes:'Equipes et techniciens',chiffrage:'Chiffrage achats',stats_tech:'Mes statistiques',fournisseurs:'Gestion des fournisseurs',tresorerie:'Tresorerie',rentabilite:'Rentabilite clients Devis',rentabilite_forfait:'Rentabilite clients Forfait',rentabilite_tkm:'Rentabilite clients TKM',analyse_pieces:'Analyse des pieces',facturation:'Facturation',creances:'Creances clients',archives:'Archives vehicules',facturation_forfait:'Facturation forfaits',banques:'Gestion des banques',testeur:'Tableau de bord testeur',
   appro:'Approvisionnement',val_fin:'Validation financiere',kpi:'KPI et Analyses',
   messages_clients:'Messages clients',
   import_historique:'Import historique',
@@ -4698,6 +4703,8 @@ function ouvrirModifClient(btn){
   document.getElementById('mc_entite').value = entiteVal;
   document.getElementById('mc_responsableParc').value = ref ? (ref.responsableParc||'') : (fiche ? (fiche.responsableParc||'') : '');
   toggleResponsableParcField();
+  var tkmVal = ref ? (ref.tkm===true) : (fiche ? (fiche.tkm===true) : false);
+  document.getElementById('mc_tkm').checked = tkmVal;
   document.getElementById('modalModifClient').style.display = 'flex';
 }
 function toggleResponsableParcField(){
@@ -4715,6 +4722,7 @@ function validerModifClient(){
   var newType = document.getElementById('mc_typeClient').value;
   var newEntite = document.getElementById('mc_entite').value;
   var newResponsableParc = (document.getElementById('mc_responsableParc').value||'').trim();
+  var newTkm = document.getElementById('mc_tkm').checked;
   if(!newNom){ alert('Le nom du client est obligatoire.'); return; }
 
   var oldNom = _modifClientRef.nom;
@@ -4726,12 +4734,14 @@ function validerModifClient(){
       if(v.client!==newNom) changes.push('nom: '+v.client+' -> '+newNom);
       if((v.tel||'')!==newTel) changes.push('tel: '+(v.tel||'-')+' -> '+newTel);
       if((v.typeClient||'')!==newType && v.typeClient!=='assurance') changes.push('type: '+(v.typeClient||'-')+' -> '+newType);
+      if((v.tkm===true)!==newTkm) changes.push('TKM: '+(v.tkm===true?'oui':'non')+' -> '+(newTkm?'oui':'non'));
       v.client = newNom;
       v.tel = newTel;
       v.email = newEmail;
       if(v.typeClient!=='assurance') v.typeClient = newType; // ne pas ecraser ancien dossier assurance pur
       v.entite = newEntite;
       v.responsableParc = (newEntite==='Entreprise') ? newResponsableParc : '';
+      v.tkm = newTkm;
       count++;
       if(changes.length){
         ajouterCommentaireSysteme(v, '\u270F Modification client (direction) : '+changes.join(', '), currentUser ? currentUser.login : 'Direction');
@@ -4747,6 +4757,7 @@ function validerModifClient(){
       fiche.nom = newNom; fiche.tel = newTel; fiche.email = newEmail;
       fiche.typeClient = newType; fiche.entite = newEntite;
       fiche.responsableParc = (newEntite==='Entreprise') ? newResponsableParc : '';
+      fiche.tkm = newTkm;
       saveClientsSansVehicule();
     }
   }
@@ -5552,6 +5563,7 @@ function renderPage(){
   else if(p==='stats_tech') html=pageStatsTech();
   else if(p==='tresorerie'){ rentaVue='periode'; html=pageRentabilite(); }
   else if(p==='rentabilite') html=pageRentabilite();
+  else if(p==='rentabilite_tkm') html=pageRentabiliteTKM();
   else if(p==='rentabilite_forfait') html=pageRentabiliteForfait();
   else if(p==='analyse_pieces') html=pageAnalysePieces();
   else if(p==='facturation') html=pageFacturation();
@@ -6279,6 +6291,112 @@ var rentaFiltre = 'tous';  // 'tous','mois','trimestre','annee','custom'
 var rentaSort = 'marge';   // 'marge','taux','ca','date'
 var rentaDebut = null;
 var rentaFin = null;
+
+// Copie de pageRentabilite() (Clients Devis), filtree en plus sur les
+// clients marques TKM — reutilise EXACTEMENT les memes sous-fonctions
+// d'affichage (tri, vues, KPI) pour un comportement identique. Ne
+// modifie rien a pageRentabilite() ni aux fonctions partagees.
+function pageRentabiliteTKM(){
+  // Securite : si on arrive sur cette page avec la vue encore reglee sur
+  // "evolution" ou "analyse_pieces" (choisie precedemment sur la page
+  // Clients Devis, l'etat de vue etant partage), on force la vue Clients
+  // — ces deux vues ne peuvent pas etre filtrees correctement sur les
+  // seuls clients TKM (voir plus bas).
+  if(rentaVue==='evolution' || rentaVue==='analyse_pieces') rentaVue = 'clients';
+  var today = new Date();
+  var borneDebut = 0;
+  var borneFin = null;
+  if(rentaFiltre==='mois')      borneDebut = new Date(today.getFullYear(), today.getMonth(), 1).getTime();
+  else if(rentaFiltre==='trimestre'){ var q=Math.floor(today.getMonth()/3)*3; borneDebut=new Date(today.getFullYear(),q,1).getTime(); }
+  else if(rentaFiltre==='annee') borneDebut = new Date(today.getFullYear(), 0, 1).getTime();
+  else if(rentaFiltre==='custom' && rentaDebut){ borneDebut=new Date(rentaDebut).setHours(0,0,0,0); if(rentaFin) borneFin=new Date(rentaFin).setHours(23,59,59,999); }
+
+  var dossiers = vehicles.filter(function(v){
+    // Meme filtre que Clients Devis, avec en plus : uniquement les
+    // clients marques TKM.
+    return v.typeClient!=='forfait' && v.tkm===true && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;
+  }).map(function(v){
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
+    var totalAchat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
+    var totalVente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var marge = totalVente - totalAchat;
+    var tauxMarge = totalVente>0 ? (marge/totalVente*100) : 0;
+    var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
+    return {
+      id:v.id, immat:v.immat, marque:v.marque, modele:v.modele,
+      client:v.client, tel:v.tel,
+      status:v.status, entree:v.entree||0, dateRef:dateRef,
+      totalAchat:totalAchat, totalVente:totalVente,
+      marge:marge, tauxMarge:tauxMarge, montantPaye:parseFloat(v.montantPaye)||0,
+      nbPieces:lignes.length, lignes:lignes
+    };
+  }).filter(function(d){
+    if(borneDebut>0 && d.dateRef<borneDebut) return false;
+    if(borneFin && d.dateRef>borneFin) return false;
+    return true;
+  });
+
+  dossiers.sort(function(a,b){
+    if(rentaSort==='marge')  return b.marge-a.marge;
+    if(rentaSort==='taux')   return b.tauxMarge-a.tauxMarge;
+    if(rentaSort==='ca')     return b.totalVente-a.totalVente;
+    if(rentaSort==='date')   return b.dateRef-a.dateRef;
+    return 0;
+  });
+
+  var totAchat  = dossiers.reduce(function(s,d){return s+d.totalAchat;},0);
+  var totVente  = dossiers.reduce(function(s,d){return s+d.totalVente;},0);
+  var totMarge  = totVente - totAchat;
+  var tauxGlobal = totVente>0 ? (totMarge/totVente*100).toFixed(1)+'%' : '—';
+  var nbRentables = dossiers.filter(function(d){return d.marge>0;}).length;
+  var nbDeficit   = dossiers.filter(function(d){return d.marge<0;}).length;
+
+  var html = '';
+
+  html += '<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-bottom:12px">';
+  ['tous','mois','trimestre','annee'].forEach(function(f){
+    var lbl={tous:'Tous',mois:'Mois',trimestre:'Trim.',annee:'Annee'}[f];
+    html += '<button class="btn btn-sm'+(rentaFiltre===f?' btn-primary':'')+'" data-rf="'+f+'" onclick="setRentaFiltreByEl(this)" style="font-size:11px;padding:3px 7px">'+lbl+'</button>';
+  });
+  html += '<input type="date" class="inp" id="rentaDebut" style="width:95px;font-size:11px;padding:2px 3px" value="'+(rentaDebut||'')+'">';
+  html += '<span class="xs muted">—</span>';
+  html += '<input type="date" class="inp" id="rentaFin" style="width:95px;font-size:11px;padding:2px 3px" value="'+(rentaFin||'')+'">';
+  html += '<button class="btn btn-sm btn-primary" style="font-size:11px;padding:3px 6px" onclick="setRentaCustom()">OK</button>';
+  html += '<span style="flex:1"></span>';
+  // Uniquement la vue Clients ici : Evolution CA et Analyse pieces
+  // recalculent leurs donnees depuis TOUS les clients devis (fonctions
+  // partagees avec la page Clients Devis, volontairement non modifiees)
+  // et ne peuvent donc pas etre filtrees sur les seuls clients TKM sans
+  // toucher a ces fonctions communes.
+  html += '</div>';
+  if(rentaVue!=='evolution' && rentaVue!=='analyse_pieces'){
+  html += '<div class="kgrid k4" style="margin-bottom:8px">';
+  html += kpi('Dossiers', dossiers.length, '');
+  html += kpi('CA previsionnel total', totVente?totVente.toLocaleString('fr-FR')+' FCFA':'—', 'blue');
+  html += kpi('Total achats', totAchat?totAchat.toLocaleString('fr-FR')+' FCFA':'—', 'red');
+  html += kpi('Marge brute totale', totMarge?(totMarge>0?'+':'')+totMarge.toLocaleString('fr-FR')+' FCFA':'—', totMarge>0?'green':'red');
+  html += '</div>';
+  html += '<div class="kgrid k3" style="margin-bottom:16px">';
+  html += kpi('Taux marge global', tauxGlobal, parseFloat(tauxGlobal)>20?'green':'amber');
+  html += kpi('Dossiers rentables', nbRentables, nbRentables>0?'green':'');
+  html += kpi('Dossiers en deficit', nbDeficit, nbDeficit>0?'red':'');
+  html += '</div>';
+  }
+
+  if(rentaVue==='dossiers'){
+    html += rentaDossiers(dossiers);
+  } else if(rentaVue==='periode'){
+    html += rentaVuePeriode();
+  } else if(rentaVue==='evolution'){
+    html += rentaEvolution();
+  } else if(rentaVue==='analyse_pieces'){
+    html += rentaDevisAnalysePieces(borneDebut, borneFin);
+  } else {
+    html += rentaParClient(dossiers);
+  }
+
+  return html;
+}
 
 function pageRentabilite(){
   // Filtrer les véhicules devis
@@ -23649,6 +23767,7 @@ function openEdit(id, prefill){
   s('f_client',v.proprietaireVehicule||v.client);s('f_tel',v.tel);s('f_email',v.email);s('f_motif',v.motif);s('f_symp',v.symptomes);
   s('f_sin',v.sinistre);s('f_assureur',v.assureur);s('f_contact_ass',v.contactAssurance);s('f_expert',v.expert);s('f_contact_exp',v.contactExpert);s('f_date_sin',v.dateSinistre);
   var daEl2=document.getElementById('f_dossierAssurance');if(daEl2){ daEl2.checked = (v.dossierAssurance===true || v.typeClient==='assurance'); daEl2.disabled = (currentRole!=='direction'); toggleSectionSinistre(); }
+  var tkmEl2=document.getElementById('f_tkm');if(tkmEl2){ tkmEl2.checked = (v.tkm===true); }
   var mk=document.getElementById('f_marque');if(mk){ if(mk.options) { for(var i=0;i<mk.options.length;i++){if(mk.options[i].text===v.marque){mk.selectedIndex=i;break;}} } else { mk.value=v.marque||''; } }
   var sv=function(id,val){var el=document.getElementById(id);if(el)el.value=val;};
   sv('f_typeClient',v.typeClient);sv('f_type',v.typeClient);sv('f_entite',v.entite||'Particulier');sv('f_prio',v.priorite);sv('f_nature',v.nature||'Nouvelle panne');sv('f_bpc',v.bpc||'En attente');
@@ -23733,6 +23852,7 @@ function resetForm(){
   var ftc=document.getElementById('f_typeClient'); if(ftc){ftc.value='devis';ftc.disabled=false;}
   var fcth=document.getElementById('f_client_type_hint');if(fcth)fcth.textContent='';
   var fda=document.getElementById('f_dossierAssurance');if(fda){fda.checked=false;fda.disabled=false;}
+  var ftkm=document.getElementById('f_tkm');if(ftkm){ftkm.checked=false;}
   var fen=document.getElementById('f_energie'); if(fen) fen.disabled=false;
   var fEqReset = document.getElementById('f_equipe');
   if(fEqReset) fEqReset.value = '';
@@ -23908,6 +24028,7 @@ function submitRec(){
   // reconnaissance de client existant, affichage dans les details).
   var proprietaireVehicule = client;
   var dossierAssuranceCoche = (document.getElementById('f_dossierAssurance')||{checked:false}).checked;
+  var tkmCoche = (document.getElementById('f_tkm')||{checked:false}).checked;
   var nomAssureurSaisi = (document.getElementById('f_assureur').value||'').trim();
   var clientEffectif = (dossierAssuranceCoche && nomAssureurSaisi) ? nomAssureurSaisi : client;
 
@@ -23943,7 +24064,7 @@ function submitRec(){
     }
   }
 
-  var data={inventaire:inv,aRecuperer:!!aRecup,recuperation:recupData,immat:immat,marque:marque,modele:modele,vin:(document.getElementById('f_vin').value||'').trim(),km:parseInt(document.getElementById('f_km').value)||0,mec:document.getElementById('f_mec').value,ct_echeance:(document.getElementById('f_ct_echeance')||{value:''}).value,annee:(document.getElementById('f_mec').value?(new Date(document.getElementById('f_mec').value).getFullYear()+''):''),client:clientEffectif,proprietaireVehicule:proprietaireVehicule,tel:tel,email:emailVal,typeClient:(document.getElementById('f_typeClient')||document.getElementById('f_type')||{value:'devis'}).value,dossierAssurance:dossierAssuranceCoche,expertPasse:expertPasseFinal,expertPasseLe:expertPasseLeFinal,expertValidationTravaux:expertValidationTravauxFinal,expertValidationTravauxLe:expertValidationTravauxLeFinal,expertRapportRecu:expertRapportRecuFinal,expertRapportRecuLe:expertRapportRecuLeFinal,bonSortieAssurance:bonSortieAssuranceFinal,bonSortieAssuranceLe:bonSortieAssuranceLeFinal,entite:document.getElementById('f_entite').value,priorite:document.getElementById('f_prio').value,nature:document.getElementById('f_nature').value,motif:motif,symptomes:(document.getElementById('f_symp').value||'').trim(),livraison:livDate?new Date(livDate).getTime():null,sinistre:(document.getElementById('f_sin').value||'').trim()||null,assureur:nomAssureurSaisi||null,contactAssurance:(document.getElementById('f_contact_ass').value||'').trim()||null,expert:(document.getElementById('f_expert').value||'').trim()||null,contactExpert:(document.getElementById('f_contact_exp').value||'').trim()||null,dateSinistre:document.getElementById('f_date_sin').value||null,bpc:document.getElementById('f_bpc').value,photos:getRecPhotosData(),zonesEndommagees:(zonesEndommagees||[]).slice(),energie:(document.getElementById('f_energie')||{value:''}).value||null,vignette:(document.getElementById('f_vignette')||{value:''}).value||null};
+  var data={inventaire:inv,aRecuperer:!!aRecup,recuperation:recupData,immat:immat,marque:marque,modele:modele,vin:(document.getElementById('f_vin').value||'').trim(),km:parseInt(document.getElementById('f_km').value)||0,mec:document.getElementById('f_mec').value,ct_echeance:(document.getElementById('f_ct_echeance')||{value:''}).value,annee:(document.getElementById('f_mec').value?(new Date(document.getElementById('f_mec').value).getFullYear()+''):''),client:clientEffectif,proprietaireVehicule:proprietaireVehicule,tel:tel,email:emailVal,typeClient:(document.getElementById('f_typeClient')||document.getElementById('f_type')||{value:'devis'}).value,dossierAssurance:dossierAssuranceCoche,tkm:tkmCoche,expertPasse:expertPasseFinal,expertPasseLe:expertPasseLeFinal,expertValidationTravaux:expertValidationTravauxFinal,expertValidationTravauxLe:expertValidationTravauxLeFinal,expertRapportRecu:expertRapportRecuFinal,expertRapportRecuLe:expertRapportRecuLeFinal,bonSortieAssurance:bonSortieAssuranceFinal,bonSortieAssuranceLe:bonSortieAssuranceLeFinal,entite:document.getElementById('f_entite').value,priorite:document.getElementById('f_prio').value,nature:document.getElementById('f_nature').value,motif:motif,symptomes:(document.getElementById('f_symp').value||'').trim(),livraison:livDate?new Date(livDate).getTime():null,sinistre:(document.getElementById('f_sin').value||'').trim()||null,assureur:nomAssureurSaisi||null,contactAssurance:(document.getElementById('f_contact_ass').value||'').trim()||null,expert:(document.getElementById('f_expert').value||'').trim()||null,contactExpert:(document.getElementById('f_contact_exp').value||'').trim()||null,dateSinistre:document.getElementById('f_date_sin').value||null,bpc:document.getElementById('f_bpc').value,photos:getRecPhotosData(),zonesEndommagees:(zonesEndommagees||[]).slice(),energie:(document.getElementById('f_energie')||{value:''}).value||null,vignette:(document.getElementById('f_vignette')||{value:''}).value||null};
   // Lire l'équipe sélectionnée
   var equipeChoisie = (document.getElementById('f_equipe')||{value:''}).value;
   if(editingId){
@@ -30891,6 +31012,12 @@ window.onload=function(){
         <select class="inp" id="mc_typeClient"><option value="devis">Devis</option><option value="forfait">Forfait</option></select></div>
       <div class="fr"><label class="fl">Statut</label>
         <select class="inp" id="mc_entite" onchange="toggleResponsableParcField()"><option>Particulier</option><option>Entreprise</option></select></div>
+    </div>
+    <div class="fr" style="margin-bottom:10px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="mc_tkm" style="width:18px;height:18px;cursor:pointer">
+        <span>&#x1F517; Client TKM</span>
+      </label>
     </div>
     <div class="fr" id="mc_responsableParcWrap" style="margin-bottom:10px;display:none">
       <label class="fl">Responsable / Gestionnaire de parc</label>
