@@ -9444,15 +9444,22 @@ function pageFacturationEcheances(){
   encaissements.forEach(function(it){
     var v = it.vid ? vehicles.find(function(x){return x.id===it.vid;}) : null;
     var delaiJoursIt = it.dateDepot ? Math.floor((maintenantEch-it.dateDepot)/86400000) : null;
+    // Une facture FORFAIT n'est pas rattachee a un vehicule specifique —
+    // sa reference externe est enregistree sur l'objet FORFAIT_FACTURES
+    // lui-meme, pas sur "v" (qui peut etre absent ou sans rapport). La
+    // lire depuis "v" laissait la reference toujours vide a l'affichage,
+    // meme correctement enregistree apres la modale de saisie.
+    var estForfaitIt = it.categorieClient==='forfait';
+    var refForfaitIt = estForfaitIt ? FORFAIT_FACTURES.find(function(f){return f.periodeKey===it.periodeKey;}) : null;
     dossiersUnifies.push({
       id: it.vid, client: it.nom, immat: it.immat||'', marque: it.marque||'', modele: it.modele||'',
       resteARecouvrir: it.montant, montantFacture: it.montant,
       factureDeposee: true, dateEcheance: it.dateEcheance, enRetard: it.enRetard,
       dateDepot: it.dateDepot||null, delaiJours: delaiJoursIt,
       statut: it.enRetard ? 'retard' : 'en_attente',
-      isForfaitFacture: it.categorieClient==='forfait', periodeKey: it.periodeKey,
-      numeroFactureExterne: v ? (v.numeroFactureExterne||'') : '',
-      numeroSecondaire: v ? (v.numeroSecondaire||'') : ''
+      isForfaitFacture: estForfaitIt, periodeKey: it.periodeKey,
+      numeroFactureExterne: estForfaitIt ? (refForfaitIt?refForfaitIt.numeroFactureExterne:'')||'' : (v ? (v.numeroFactureExterne||'') : ''),
+      numeroSecondaire: estForfaitIt ? (refForfaitIt?refForfaitIt.numeroSecondaire:'')||'' : (v ? (v.numeroSecondaire||'') : '')
     });
   });
 
@@ -16436,6 +16443,10 @@ function pageDashDir(){
     if(v.status==='attente_fin') return true;
     // valide_fin : le dossier reste visible tant qu'il reste des pieces non validees a traiter
     if(v.status==='valide_fin') return aPiecesNonValidees(v);
+    // Rechiffrage en place (dossier deja avance, ex: en travaux) : reste
+    // visible pour la direction tant que la revalidation demandee par
+    // les achats n'a pas ete traitee, sans exiger un statut particulier.
+    if(v.chiffrage && v.chiffrage.revalidationDemandee && !v.chiffrage.valideDir) return true;
     return false;
   });
   if(aValiderFin.length){
@@ -18700,6 +18711,12 @@ function renderChiffrageSection(v){
       } else if(_vDir && _vDir.status==='valide_fin' && aPiecesNonValidees(_vDir)){
         // Dossier deja valide : permettre de valider les pieces restantes
         s += '<button class="btn btn-success btn-sm" onclick="validerPiecesRestantes()">&#x2714; Valider les pieces cochees</button>';
+      } else if(_vDir && _vDir.chiffrage && _vDir.chiffrage.revalidationDemandee && !_vDir.chiffrage.valideDir){
+        // Rechiffrage en place (dossier deja avance, ex: en travaux) :
+        // les achats ont demande une revalidation sans que le dossier
+        // n'ait quitte sa position — la validation ne doit pas non plus
+        // le deplacer.
+        s += '<button class="btn btn-success btn-sm" onclick="validerPiecesRestantes()">&#x2714; Valider les pieces cochees</button>';
       }
     }
     s += '</div>';
@@ -18926,12 +18943,44 @@ function validerChiffrageProspect(){
   openDetKeepEdit(detCurrentVid);
 }
 
+// Un vehicule est considere "deja en place" quand il a deja franchi la
+// porte de validation initiale (chiffrage deja verrouille par les
+// achats, et le dossier ne siege pas actuellement a l'etape
+// "attente_fin"). Pour un tel vehicule, une NOUVELLE modification du
+// chiffrage (ex: piece ajoutee alors qu'il est deja en travaux) ne doit
+// pas le faire reculer administrativement — seule une validation directe
+// des nouvelles lignes est necessaire, sans deplacer le dossier.
+function chiffrageDejaEnPlace(v){
+  return !!(v && v.status!=='attente_fin' && v.chiffrage && v.chiffrage.valide===true);
+}
 function verrouilerChiffrageDirection(){
   // Verrouiller les modifications et repasser en mode lecture avec validation
   chiffrageEditMode = false;
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(v && v.chiffrage) {
+    // Capture AVANT de poser valide=true, sinon la condition serait
+    // faussee par notre propre modification.
+    var dejaEnPlace = chiffrageDejaEnPlace(v);
     v.chiffrage.valide = true; // s'assurer que c'est verrouillé
+    if(dejaEnPlace){
+      // Direction modifie elle-meme un dossier deja avance (ex: en
+      // travaux) — validation automatique immediate, elle a deja
+      // l'autorite de validation, pas besoin d'une etape separee. Le
+      // vehicule ne bouge pas de sa position actuelle.
+      v.chiffrage.lignes.forEach(function(cl){ if((cl.piece||'').trim()) cl.valideDir = true; });
+      v.chiffrage.valideDir = true;
+      v.chiffrage.valideDirLe = Date.now();
+      v.chiffrage.revalidationDemandee = null;
+      reserverStockVehicule(v);
+      indexerPiecesChiffrage(v);
+      if(v.chiffrage.cmdLancee && v.chiffrage.lignes.some(function(cl){return (!cl.source||cl.source==='commande')&&!cl.livree&&cl.valideDir;})){
+        v.chiffrage.cmdLancee = null;
+      }
+      if(v.chiffrage.localLancee && v.chiffrage.lignes.some(function(cl){return cl.source==='local'&&!cl.livree&&cl.valideDir;})){
+        v.chiffrage.localLancee = null;
+      }
+      afficherToastNotif('Chiffrage valide', 'Modification enregistree et validee automatiquement pour '+v.immat+'.', 'ok');
+    }
     saveV();
   }
   openDetKeepEdit(detCurrentVid);
@@ -19067,12 +19116,24 @@ function demanderRevalidation(){
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v) return;
   if(!confirm('Envoyer ce chiffrage modifie a la direction pour une nouvelle validation financiere ?')) return;
+  // Capture AVANT de poser valide=true, sinon la condition serait faussee
+  // par notre propre modification (chiffrage.valide passe a true juste
+  // apres, ce qui rendrait chiffrageDejaEnPlace() toujours vrai).
+  var dejaEnPlace = chiffrageDejaEnPlace(v);
   // Remettre le chiffrage en attente de validation direction
   v.chiffrage.valide = true; // chiffrage achats valide
   v.chiffrage.valideDir = false; // reset validation direction
   v.chiffrage.revalidationDemandee = Date.now();
-  v.status = 'attente_fin'; // retour en attente validation direction
-  v.stepStart = Date.now();
+  if(!dejaEnPlace){
+    // Comportement d'origine : le dossier n'a pas encore franchi la
+    // porte de validation initiale (encore en devis) -> l'y envoyer.
+    v.status = 'attente_fin';
+    v.stepStart = Date.now();
+  }
+  // Sinon (deja en place, ex: en travaux) : le vehicule reste exactement
+  // ou il est. La demande de revalidation devient simplement visible
+  // pour la direction via le drapeau revalidationDemandee, sans deplacer
+  // le dossier de son etape physique actuelle.
   saveV();
   chiffrageEditMode = false;
   closeDet();
@@ -19123,20 +19184,29 @@ function reinitValPieces(btn){
 function validerPiecesRestantes(){
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v || !v.chiffrage) return;
-  var restantes = nbPiecesNonValidees(v);
-  if(restantes===0){ alert('Toutes les pieces sont deja validees.'); return; }
   var nbCochees = v.chiffrage.lignes.filter(function(cl){return cl.valideDir && (cl.piece||'').trim();}).length;
   if(nbCochees===0){ alert('Cochez au moins une piece avant de valider.'); return; }
   v.chiffrage.valideDirLe = Date.now();
   reserverStockVehicule(v);
   indexerPiecesChiffrage(v);
-  saveV();
   var resteApres = nbPiecesNonValidees(v);
   if(resteApres===0){
+    // Toutes les pieces sont maintenant validees : finaliser comme une
+    // validation financiere complete (utile notamment pour le
+    // rechiffrage en place, ou ce bouton fait office de validation).
+    v.chiffrage.valideDir = true;
+    v.chiffrage.revalidationDemandee = null;
+    if(v.chiffrage.cmdLancee && v.chiffrage.lignes.some(function(cl){return (!cl.source||cl.source==='commande')&&!cl.livree&&cl.valideDir;})){
+      v.chiffrage.cmdLancee = null;
+    }
+    if(v.chiffrage.localLancee && v.chiffrage.lignes.some(function(cl){return cl.source==='local'&&!cl.livree&&cl.valideDir;})){
+      v.chiffrage.localLancee = null;
+    }
     afficherToastNotif('Dossier complet', 'Toutes les pieces de '+v.immat+' sont validees.', 'ok');
   } else {
     afficherToastNotif('Pieces validees', resteApres+' piece(s) restent en attente sur '+v.immat+'.', 'info');
   }
+  saveV();
   closeDet(); renderPage();
 }
 
@@ -21347,7 +21417,11 @@ function pageDashAchats(){
   var nbChiffrage = vehiclesActifs().filter(function(v){return v.status==='attente_chiffrage' || (v.devisCompl&&v.devisCompl.statut==='valide_chef');}).length;
   var nbModif    = vehiclesActifs().filter(function(v){return v.status==='modifier_devis';}).length;
   var nbAttDir    = vehiclesActifs().filter(function(v){return v.status==='attente_fin';}).length;
-  var nbAttAppro  = vehiclesActifs().filter(function(v){return v.status==='attente_appro';}).length;
+  var nbAttAppro  = vehiclesActifs().filter(function(v){
+    if(v.status==='attente_appro') return true;
+    if(chiffrageDejaEnPlace(v) && v.chiffrage.valideDir && v.chiffrage.lignes.some(function(cl){return (cl.piece||'').trim() && cl.valideDir && !cl.livree;})) return true;
+    return false;
+  }).length;
   var nbCommande  = vehiclesActifs().filter(function(v){return v.status==='pieces_commande';}).length;
   var nbLocal     = vehiclesActifs().filter(function(v){return v.status==='appro_en_cours';}).length;
   var nbPartiel   = vehiclesActifs().filter(function(v){return v.chiffrage&&v.chiffrage.livraisonComplete===false&&['travaux_attente','travaux_cours','travaux_termines','en_test','attente_valid_chef'].indexOf(v.status)>=0;}).length;
@@ -21662,7 +21736,15 @@ function getAchatsFiltered(){
   if(achatsFilter==='modif')     return vehicles.filter(function(v){return v.status==='modifier_devis';});
   if(achatsFilter==='chiffrage') return vehicles.filter(function(v){return v.status==='attente_chiffrage';});
   if(achatsFilter==='att_dir')   return vehicles.filter(function(v){return v.status==='attente_fin';});
-  if(achatsFilter==='att_appro') return vehicles.filter(function(v){return v.status==='attente_appro';});
+  if(achatsFilter==='att_appro') return vehicles.filter(function(v){
+    if(v.status==='attente_appro') return true;
+    // Rechiffrage en place : dossier deja avance (ex: en travaux) mais
+    // avec une piece fraichement validee et pas encore livree — reste
+    // invisible pour les achats si on ne regarde que le statut, puisque
+    // le dossier n'a jamais quitte les travaux.
+    if(chiffrageDejaEnPlace(v) && v.chiffrage.valideDir && v.chiffrage.lignes.some(function(cl){return (cl.piece||'').trim() && cl.valideDir && !cl.livree;})) return true;
+    return false;
+  });
   if(achatsFilter==='commande')  return vehicles.filter(function(v){return v.status==='pieces_commande';});
   if(achatsFilter==='local')     return vehicles.filter(function(v){return v.status==='appro_en_cours';});
   if(achatsFilter==='partiel')   return vehicles.filter(function(v){return v.chiffrage&&v.chiffrage.livraisonComplete===false&&['travaux_attente','travaux_cours','travaux_termines','en_test','attente_valid_chef'].indexOf(v.status)>=0;});
