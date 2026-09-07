@@ -2098,7 +2098,7 @@ var NAV = {
   direction:[
     {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'},{id:'acces_clients',e:'AC',l:'Acces clients'},{id:'messages_clients',e:'MC',l:'Messages clients'},{id:'import_historique',e:'IH',l:'Import historique'},{id:'presences',e:'Pr',l:'Presences'}]},
     {l:'Finances',items:[{id:'finances_dashboard',e:'FD',l:'Tableau de bord'},{id:'facturation',e:'F',l:'Facturation'},{id:'caisse',e:'Ca',l:'Caisse'},{id:'dettes_fournisseurs',e:'DF',l:'Dettes fournisseurs'},{id:'prevision_treso',e:'PT',l:'Prevision tresorerie'},{id:'historique_paiements',e:'HP',l:'Historique paiements'},{id:'rapport_financier',e:'RF',l:'Rapport financier'}]},
-    {l:'Rentabilite',items:[{id:'rentabilite',e:'RD',l:'Clients Devis'},{id:'rentabilite_forfait',e:'RF',l:'Clients Forfait'},{id:'rentabilite_tkm',e:'RT',l:'Clients TKM'},{id:'analyse_pieces',e:'AP',l:'Analyse pieces'}]},
+    {l:'Rentabilite',items:[{id:'rentabilite',e:'RD',l:'Clients Devis'},{id:'rentabilite_forfait',e:'RF',l:'Clients Forfait'},{id:'rentabilite_tkm',e:'RT',l:'Clients TKM'},{id:'rentabilite_sinistres',e:'RS',l:'Sinistres'},{id:'analyse_pieces',e:'AP',l:'Analyse pieces'}]},
     {l:'Gestion',items:[{id:'archives',e:'Ar',l:'Archives'},{id:'banques',e:'B',l:'Banques'},{id:'charges_fixes',e:'CF',l:'Charges fixes'},{id:'engagements_bancaires',e:'EB',l:'Engagements bancaires'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'stock',e:'St',l:'Gestion du stock'},{id:'travaux_prevoir',e:'TP',l:'Travaux a prevoir'},{id:'devis_differes',e:'DD',l:'Devis differes'},{id:'sinistres',e:'S',l:'Sinistres'},{id:'val_fin',e:'VF',l:'Validation financiere'},{id:'kpi',e:'K',l:'KPI'},{id:'correction_statut_dir',e:'CS',l:'Correction manuelle statut'}]}
   ],
   reception:[
@@ -2133,7 +2133,7 @@ var TITLES = {
   travaux_prevoir:'Travaux a prevoir',
   dashboard:'Tableau de bord',sinistres:'Sinistres',clients:'Clients et vehicules',
   a_attribuer:'A attribuer',val_devis:'Validation devis',travaux:'Travaux et Tests',
-  equipes:'Equipes et techniciens',chiffrage:'Chiffrage achats',stats_tech:'Mes statistiques',fournisseurs:'Gestion des fournisseurs',tresorerie:'Tresorerie',rentabilite:'Rentabilite clients Devis',rentabilite_forfait:'Rentabilite clients Forfait',rentabilite_tkm:'Rentabilite clients TKM',analyse_pieces:'Analyse des pieces',facturation:'Facturation',creances:'Creances clients',archives:'Archives vehicules',facturation_forfait:'Facturation forfaits',banques:'Gestion des banques',testeur:'Tableau de bord testeur',
+  equipes:'Equipes et techniciens',chiffrage:'Chiffrage achats',stats_tech:'Mes statistiques',fournisseurs:'Gestion des fournisseurs',tresorerie:'Tresorerie',rentabilite:'Rentabilite clients Devis',rentabilite_forfait:'Rentabilite clients Forfait',rentabilite_tkm:'Rentabilite clients TKM',rentabilite_sinistres:'Rentabilite sinistres',analyse_pieces:'Analyse des pieces',facturation:'Facturation',creances:'Creances clients',archives:'Archives vehicules',facturation_forfait:'Facturation forfaits',banques:'Gestion des banques',testeur:'Tableau de bord testeur',
   appro:'Approvisionnement',val_fin:'Validation financiere',kpi:'KPI et Analyses',
   messages_clients:'Messages clients',
   import_historique:'Import historique',
@@ -5637,7 +5637,7 @@ function renderPage(){
   else if(p==='charges_fixes') html=pageChargesFixes();
   else if(p==='engagements_bancaires') html=pageEngagementsBancaires();
   else if(p==='sinistres') html=pageSinistres();
-  else if(p==='kpi') html=pageKpi();
+  else if(p==='kpi') html=pageKPI();
   else if(p==='val_fin') html=pageValFin();
   else if(p==='clients') html=pageClients();
   else if(p==='performance') html=pagePerformance();
@@ -5652,6 +5652,7 @@ function renderPage(){
   else if(p==='tresorerie'){ rentaVue='periode'; html=pageRentabilite(); }
   else if(p==='rentabilite') html=pageRentabilite();
   else if(p==='rentabilite_tkm') html=pageRentabiliteTKM();
+  else if(p==='rentabilite_sinistres') html=pageRentabiliteSinistres();
   else if(p==='rentabilite_forfait') html=pageRentabiliteForfait();
   else if(p==='analyse_pieces') html=pageAnalysePieces();
   else if(p==='facturation') html=pageFacturation();
@@ -5662,7 +5663,7 @@ function renderPage(){
   else if(p==='historique_paiements') html=pageHistoriquePaiements();
   else if(p==='rapport_financier') html=pageRapportFinancier();
   else if(p==='facturation_forfait') html=pageFacturationForfait();
-  else if(p==='chiffrage') html=pageChiffrageAchats();
+  else if(p==='chiffrage') html=pageDashAchats();
   else if(p==='testeur') html=pageDashTesteur();
   else if((r==='direction' || r==='reception' || r==='chef_atelier' || r==='chef_equipe') && p==='messages_clients') html=pageMessagesClients();
   else if((r==='direction' || r==='reception') && p==='presences') html=pagePresences();
@@ -5971,7 +5972,29 @@ function advanceById(btn){
   var id = btn.getAttribute('data-vid');
   if(id) advance(id);
 }
-function setStatus(id,st){for(var i=0;i<vehicles.length;i++){if(vehicles[i].id===id){vehicles[i].status=st;vehicles[i].stepStart=Date.now();break;}}saveV();renderPage();}
+function setStatus(id,st){
+  for(var i=0;i<vehicles.length;i++){
+    if(vehicles[i].id===id){
+      var v = vehicles[i];
+      v.status = st;
+      v.stepStart = Date.now();
+      // Memes effets de bord que la correction manuelle de statut et
+      // qu'une transition normale via advance() : sans ca, un saut direct
+      // vers "livre / facture deposee / dossier cloture" via ce menu
+      // deroulant laissait le vehicule sans date de livraison ni pieces
+      // non validees reportees, causant des incoherences plus loin dans
+      // le circuit (facturation, travaux a prevoir...).
+      if(['facture_deposee','dossier_cloture','livre'].indexOf(st)>=0){
+        v.archiveDate = Date.now();
+        v.livraison = Date.now();
+        creerTravauxAPrevoir(v);
+      }
+      marquerVehiculeModifie(v.id);
+      break;
+    }
+  }
+  saveV();renderPage();
+}
 function assignTech(id,tech){for(var i=0;i<vehicles.length;i++){if(vehicles[i].id===id){vehicles[i].technicien=tech;break;}}saveV();renderPage();}
 function deleteVehicle(id){if(!confirm('Supprimer ce vehicule ?'))return;vehicles=vehicles.filter(function(v){return v.id!==id;});saveV();renderPage();}
 
@@ -6419,12 +6442,12 @@ var rentaDevisAnalysePiecesSortCol = 'total';
 var rentaDevisAnalysePiecesSortDir = 'desc';
 var rentaDevisApBorneDebut = 0;
 var rentaDevisApBorneFin = null;
-// true lorsque "Analyse pieces" est ouverte depuis la page Clients TKM —
-// lu par collecterLignesDevisPourAnalyse() pour filtrer sur les seuls
-// clients TKM. Reste global (pas un simple parametre) car les
-// rafraichissements de recherche/tri (setRentaDevisApRechercheByEl...)
-// n'ont pas de contexte pour transmettre ce filtre autrement.
-var rentaDevisApFiltreTkm = false;
+// '' | 'tkm' | 'sinistre' — lu par collecterLignesDevisPourAnalyse() pour
+// filtrer sur les clients TKM ou les dossiers sinistres. Reste global
+// (pas un simple parametre) car les rafraichissements de recherche/tri
+// (setRentaDevisApRechercheByEl...) n'ont pas de contexte pour
+// transmettre ce filtre autrement.
+var rentaDevisApFiltreMode = '';
 var rentaFiltre = 'tous';  // 'tous','mois','trimestre','annee','custom'
 var rentaSort = 'marge';   // 'marge','taux','ca','date'
 var rentaDebut = null;
@@ -6520,9 +6543,110 @@ function pageRentabiliteTKM(){
   } else if(rentaVue==='periode'){
     html += rentaVuePeriode();
   } else if(rentaVue==='evolution'){
-    html += rentaEvolution(true);
+    html += rentaEvolution('tkm');
   } else if(rentaVue==='analyse_pieces'){
-    html += rentaDevisAnalysePieces(borneDebut, borneFin, true);
+    html += rentaDevisAnalysePieces(borneDebut, borneFin, 'tkm');
+  } else {
+    html += rentaParClient(dossiers);
+  }
+
+  return html;
+}
+
+// Copie de pageRentabiliteTKM() (elle-meme copie de pageRentabilite),
+// filtree sur les dossiers sinistres (assurance) au lieu des clients
+// TKM — meme structure, memes vues (Clients, Evolution CA, Analyse
+// pieces), meme moteur de filtre generalise. Ne modifie rien aux pages
+// existantes.
+function pageRentabiliteSinistres(){
+  var today = new Date();
+  var borneDebut = 0;
+  var borneFin = null;
+  if(rentaFiltre==='mois')      borneDebut = new Date(today.getFullYear(), today.getMonth(), 1).getTime();
+  else if(rentaFiltre==='trimestre'){ var q=Math.floor(today.getMonth()/3)*3; borneDebut=new Date(today.getFullYear(),q,1).getTime(); }
+  else if(rentaFiltre==='annee') borneDebut = new Date(today.getFullYear(), 0, 1).getTime();
+  else if(rentaFiltre==='custom' && rentaDebut){ borneDebut=new Date(rentaDebut).setHours(0,0,0,0); if(rentaFin) borneFin=new Date(rentaFin).setHours(23,59,59,999); }
+
+  var dossiers = vehicles.filter(function(v){
+    // Meme filtre que Clients Devis, avec en plus : uniquement les
+    // dossiers sinistres (assurance).
+    return v.typeClient!=='forfait' && estDossierAssurance(v) && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;
+  }).map(function(v){
+    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
+    var totalAchat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
+    var totalVente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var marge = totalVente - totalAchat;
+    var tauxMarge = totalVente>0 ? (marge/totalVente*100) : 0;
+    var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
+    return {
+      id:v.id, immat:v.immat, marque:v.marque, modele:v.modele,
+      client:v.client, tel:v.tel,
+      status:v.status, entree:v.entree||0, dateRef:dateRef,
+      totalAchat:totalAchat, totalVente:totalVente,
+      marge:marge, tauxMarge:tauxMarge, montantPaye:parseFloat(v.montantPaye)||0,
+      nbPieces:lignes.length, lignes:lignes
+    };
+  }).filter(function(d){
+    if(borneDebut>0 && d.dateRef<borneDebut) return false;
+    if(borneFin && d.dateRef>borneFin) return false;
+    return true;
+  });
+
+  dossiers.sort(function(a,b){
+    if(rentaSort==='marge')  return b.marge-a.marge;
+    if(rentaSort==='taux')   return b.tauxMarge-a.tauxMarge;
+    if(rentaSort==='ca')     return b.totalVente-a.totalVente;
+    if(rentaSort==='date')   return b.dateRef-a.dateRef;
+    return 0;
+  });
+
+  var totAchat  = dossiers.reduce(function(s,d){return s+d.totalAchat;},0);
+  var totVente  = dossiers.reduce(function(s,d){return s+d.totalVente;},0);
+  var totMarge  = totVente - totAchat;
+  var tauxGlobal = totVente>0 ? (totMarge/totVente*100).toFixed(1)+'%' : '—';
+  var nbRentables = dossiers.filter(function(d){return d.marge>0;}).length;
+  var nbDeficit   = dossiers.filter(function(d){return d.marge<0;}).length;
+
+  var html = '';
+
+  html += '<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-bottom:12px">';
+  ['tous','mois','trimestre','annee'].forEach(function(f){
+    var lbl={tous:'Tous',mois:'Mois',trimestre:'Trim.',annee:'Annee'}[f];
+    html += '<button class="btn btn-sm'+(rentaFiltre===f?' btn-primary':'')+'" data-rf="'+f+'" onclick="setRentaFiltreByEl(this)" style="font-size:11px;padding:3px 7px">'+lbl+'</button>';
+  });
+  html += '<input type="date" class="inp" id="rentaDebut" style="width:95px;font-size:11px;padding:2px 3px" value="'+(rentaDebut||'')+'">';
+  html += '<span class="xs muted">—</span>';
+  html += '<input type="date" class="inp" id="rentaFin" style="width:95px;font-size:11px;padding:2px 3px" value="'+(rentaFin||'')+'">';
+  html += '<button class="btn btn-sm btn-primary" style="font-size:11px;padding:3px 6px" onclick="setRentaCustom()">OK</button>';
+  html += '<span style="flex:1"></span>';
+  // Evolution CA et Analyse pieces reutilisent les memes fonctions que
+  // Clients Devis, avec le filtre sinistre active.
+  [{v:'clients',l:'Clients'},{v:'evolution',l:'&#x1F4C8; Evolution CA'},{v:'analyse_pieces',l:'&#x1F50D; Analyse pieces'}].forEach(function(v){
+    html += '<button class="btn btn-sm'+(rentaVue===v.v?' btn-primary':'')+'" data-rv="'+v.v+'" onclick="setRentaVueByEl(this)" style="font-size:11px;padding:3px 7px">'+v.l+'</button>';
+  });
+  html += '</div>';
+  if(rentaVue!=='evolution' && rentaVue!=='analyse_pieces'){
+  html += '<div class="kgrid k4" style="margin-bottom:8px">';
+  html += kpi('Dossiers', dossiers.length, '');
+  html += kpi('CA previsionnel total', totVente?totVente.toLocaleString('fr-FR')+' FCFA':'—', 'blue');
+  html += kpi('Total achats', totAchat?totAchat.toLocaleString('fr-FR')+' FCFA':'—', 'red');
+  html += kpi('Marge brute totale', totMarge?(totMarge>0?'+':'')+totMarge.toLocaleString('fr-FR')+' FCFA':'—', totMarge>0?'green':'red');
+  html += '</div>';
+  html += '<div class="kgrid k3" style="margin-bottom:16px">';
+  html += kpi('Taux marge global', tauxGlobal, parseFloat(tauxGlobal)>20?'green':'amber');
+  html += kpi('Dossiers rentables', nbRentables, nbRentables>0?'green':'');
+  html += kpi('Dossiers en deficit', nbDeficit, nbDeficit>0?'red':'');
+  html += '</div>';
+  }
+
+  if(rentaVue==='dossiers'){
+    html += rentaDossiers(dossiers);
+  } else if(rentaVue==='periode'){
+    html += rentaVuePeriode();
+  } else if(rentaVue==='evolution'){
+    html += rentaEvolution('sinistre');
+  } else if(rentaVue==='analyse_pieces'){
+    html += rentaDevisAnalysePieces(borneDebut, borneFin, 'sinistre');
   } else {
     html += rentaParClient(dossiers);
   }
@@ -6799,10 +6923,13 @@ function htmlPickerPeriode(cible, type, valeurActuelle){
 // Collecte le CA (devis+assurance) par client et par MOIS, sur TOUT
 // l'historique — independant du filtre de periode global de la page, car
 // cette vue compare elle-meme des periodes entre elles.
-function collecterCAParClientMois(filtreTkm){
+function collecterCAParClientMois(modeFiltre){
   var data = {};
   vehicles.filter(function(v){
-    return v.typeClient!=='forfait' && (!filtreTkm || v.tkm===true) && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;
+    if(v.typeClient==='forfait') return false;
+    if(modeFiltre==='tkm' && v.tkm!==true) return false;
+    if(modeFiltre==='sinistre' && !estDossierAssurance(v)) return false;
+    return v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;
   }).forEach(function(v){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     var totalVente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
@@ -7693,12 +7820,12 @@ function ordonnerPeriodesParChronologie(periodeA, periodeB, type){
   }
 }
 
-function rentaEvolution(filtreTkm){
+function rentaEvolution(modeFiltre){
   if(!rentaEvolutionPeriodeA){
     rentaEvolutionPeriodeA = periodeKeyDuMoment(rentaEvolutionType);
     rentaEvolutionPeriodeB = periodePrecedente(rentaEvolutionPeriodeA, rentaEvolutionType);
   }
-  var caParClientMois = collecterCAParClientMois(filtreTkm);
+  var caParClientMois = collecterCAParClientMois(modeFiltre);
 
   // La periode la plus RECENTE s'affiche toujours en seconde colonne
   // (celle des deux montants), peu importe si l'utilisateur l'a saisie
@@ -7751,7 +7878,7 @@ function rentaEvolution(filtreTkm){
 
   // ── Tableau de comparaison, trie ──
   html += '<div class="card"><div class="card-head" style="display:flex;justify-content:space-between;align-items:center">';
-  html += '<span>Comparaison par client'+(filtreTkm?' — <span class="badge b-blue" style="font-size:10px">TKM</span>':'')+' ('+comparaison.length+')</span>';
+  html += '<span>Comparaison par client'+(modeFiltre==='tkm'?' — <span class="badge b-blue" style="font-size:10px">TKM</span>':modeFiltre==='sinistre'?' — <span class="badge b-amber" style="font-size:10px">SINISTRE</span>':'')+' ('+comparaison.length+')</span>';
   html += '<div class="flex gap6">';
   html += '<button class="btn btn-sm'+(rentaEvolutionTri==='ca_desc'?' btn-primary':'')+'" data-ret2="ca_desc" onclick="setRentaEvolutionTriByEl(this)" style="font-size:11px">Trier par CA</button>';
   html += '<button class="btn btn-sm'+(rentaEvolutionTri==='variation_desc'?' btn-primary':'')+'" data-ret2="variation_desc" onclick="setRentaEvolutionTriByEl(this)" style="font-size:11px">Plus forte hausse</button>';
@@ -7832,7 +7959,12 @@ function initGraphiquesRentaEvolution(caParClientMois){
 // page — inclut les dossiers assurance).
 function collecterLignesDevisPourAnalyse(){
   var lignes = [];
-  vehicles.filter(function(v){return v.typeClient!=='forfait' && (!rentaDevisApFiltreTkm || v.tkm===true);}).forEach(function(v){
+  vehicles.filter(function(v){
+    if(v.typeClient==='forfait') return false;
+    if(rentaDevisApFiltreMode==='tkm' && v.tkm!==true) return false;
+    if(rentaDevisApFiltreMode==='sinistre' && !estDossierAssurance(v)) return false;
+    return true;
+  }).forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     if(rentaDevisApBorneDebut>0 && dateRef<rentaDevisApBorneDebut) return;
@@ -7951,10 +8083,10 @@ function reinitialiserRentaDevisAnalysePieces(){
   renderPage();
 }
 
-function rentaDevisAnalysePieces(borneDebut, borneFin, filtreTkm){
+function rentaDevisAnalysePieces(borneDebut, borneFin, modeFiltre){
   rentaDevisApBorneDebut = borneDebut||0;
   rentaDevisApBorneFin = borneFin||null;
-  rentaDevisApFiltreTkm = !!filtreTkm;
+  rentaDevisApFiltreMode = modeFiltre||'';
 
   var toutesLignes = collecterLignesDevisPourAnalyse();
 
@@ -7977,8 +8109,10 @@ function rentaDevisAnalysePieces(borneDebut, borneFin, filtreTkm){
   var listeModeles = Object.keys(modelesUniques).map(function(k){return modelesUniques[k];}).sort();
 
   var html = '<div class="card" style="padding:14px 16px;margin-bottom:16px">';
-  if(rentaDevisApFiltreTkm){
+  if(rentaDevisApFiltreMode==='tkm'){
     html += '<div class="xs" style="margin-bottom:8px"><span class="badge b-blue">TKM</span> <span class="muted">Analyse limitee aux clients TKM</span></div>';
+  } else if(rentaDevisApFiltreMode==='sinistre'){
+    html += '<div class="xs" style="margin-bottom:8px"><span class="badge b-amber">SINISTRE</span> <span class="muted">Analyse limitee aux dossiers sinistres</span></div>';
   }
   html += '<div class="fr" style="margin-bottom:10px"><input class="inp" id="rentaDevisApRecherche" placeholder="Recherche contextuelle (ex: plaquette, vidange...)..." value="'+rentaDevisAnalysePiecesRecherche+'" oninput="setRentaDevisApRechercheByEl(this)" autocomplete="off"></div>';
   html += '<div class="flex gap6" style="flex-wrap:wrap;align-items:center">';
@@ -22155,6 +22289,57 @@ function pageValFin(){
   return h+'</div>';
 }
 
+var sinistresSearch = '';
+function setSinistresSearch(val){ sinistresSearch = val.toLowerCase(); renderPage(); }
+// Cette page etait reference dans le menu Direction depuis le debut mais
+// sa fonction n'avait jamais ete ecrite — le clic sur "Sinistres" ne
+// faisait donc rien (erreur silencieuse en console).
+function pageSinistres(){
+  var dossiers = vehicles.filter(function(v){ return estDossierAssurance(v) && !v.archive; });
+  if(sinistresSearch){
+    var q = sinistresSearch;
+    dossiers = dossiers.filter(function(v){
+      return (v.immat||'').toLowerCase().indexOf(q)>=0 ||
+        (v.client||'').toLowerCase().indexOf(q)>=0 ||
+        (v.assureur||'').toLowerCase().indexOf(q)>=0 ||
+        (v.expert||'').toLowerCase().indexOf(q)>=0 ||
+        (v.sinistre||'').toLowerCase().indexOf(q)>=0;
+    });
+  }
+  dossiers.sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+
+  var html = '';
+  html += '<div class="kgrid k3" style="margin-bottom:16px">';
+  html += kpi('Dossiers sinistres actifs', vehicles.filter(function(v){return estDossierAssurance(v) && !v.archive;}).length, 'blue');
+  html += kpi('En attente validation financiere', vehicles.filter(function(v){return estDossierAssurance(v) && !v.archive && v.status==='attente_fin';}).length, 'amber');
+  html += kpi('Livres / factures', vehicles.filter(function(v){return estDossierAssurance(v) && !v.archive && LIV_ST.indexOf(v.status)>=0;}).length, 'green');
+  html += '</div>';
+
+  html += '<input class="inp" placeholder="Rechercher immat, client, assureur, expert, sinistre..." value="'+sinistresSearch+'" oninput="setSinistresSearch(this.value)" autocomplete="off" style="margin-bottom:14px">';
+
+  if(!dossiers.length){
+    html += '<div class="empty">Aucun dossier sinistre'+(sinistresSearch?' pour cette recherche':' actif')+'.</div>';
+    return html;
+  }
+
+  html += '<div class="tw"><table><thead><tr>';
+  html += '<th>Vehicule</th><th>Client</th><th>Assureur</th><th>Expert</th><th>Sinistre</th><th>Statut</th><th></th>';
+  html += '</tr></thead><tbody>';
+  dossiers.forEach(function(v){
+    html += '<tr>';
+    html += '<td><strong>'+v.immat+'</strong><div class="xs muted">'+(v.marque||'')+' '+(v.modele||'')+'</div></td>';
+    html += '<td>'+(v.client||'')+'</td>';
+    html += '<td>'+(v.assureur||'<span class="muted">—</span>')+'</td>';
+    html += '<td>'+(v.expert||'<span class="muted">—</span>')+'</td>';
+    html += '<td class="xs">'+(v.sinistre||'<span class="muted">—</span>')+'</td>';
+    html += '<td><span class="badge '+(STATUSES[v.status]?STATUSES[v.status].c:'b-gray')+'">'+sl(v.status)+'</span></td>';
+    html += '<td><button class="btn btn-sm" data-vid="'+v.id+'" onclick="openDetById(this)" title="Voir la fiche">&#x1F441;</button></td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+  return html;
+}
+
 function pageKPI(){
   var K=computeKPIs(vehicles);
   var ov=vehicles.filter(function(v){return v.livraison<Date.now()&&LIV_ST.indexOf(v.status)<0;});
@@ -24566,7 +24751,14 @@ function openDet(id){
   detCurrentVid = id; // Stocker l'id courant pour les fonctions d'affectation
   var _vCurr = vehicles.find(function(x){return x.id===id;});
   var _possible=getTransitions(v,roleEffectif());
-  var next=_possible.length?_possible[0]:null;
+  // Pour Direction, getTransitions() renvoie la liste COMPLETE de tous
+  // les statuts possibles (pas une suite logique de "prochaine etape") —
+  // prendre le premier de cette liste n'a aucun sens comme suggestion
+  // d'avancement (ex: proposerait de "reculer" vers un statut deja
+  // depasse). Direction a deja le menu deroulant complet juste a cote
+  // pour changer de statut librement ; le bouton d'avancement rapide
+  // n'est donc utile (et sense) que pour les autres roles.
+  var next=(roleEffectif()!=='direction' && _possible.length)?_possible[0]:null;
   var nextL=next?sl(next):null;
   document.getElementById('detTitle').textContent=v.immat+' - '+v.marque+' '+v.modele+(v.isDevisCompl?' [Devis compl.]':'');
   var b='<div style="background:#faf9f7;border-radius:9px;padding:12px;margin-bottom:14px">'+chronoHtml(v)+'</div>';
@@ -24998,7 +25190,18 @@ function toggleVehHistory(btn){
 }
 
 function openDetById(btn){var id=btn.getAttribute('data-vid');openDet(id);}
-function openDetHistoById(btn){var id=btn.getAttribute('data-vid');closeDet();openHisto(id);}
+function openDetHistoById(btn){
+  var id=btn.getAttribute('data-vid');
+  var v = vehicles.find(function(x){return x.id===id;});
+  closeDet();
+  // CORRECTION : ce bouton appelait openHisto(id), une fonction qui n'a
+  // jamais existe dans le fichier — le clic ne faisait donc rien (erreur
+  // silencieuse en console). On redirige vers la page Historique
+  // generale, filtree sur l'immatriculation de ce vehicule precis, qui
+  // correspond a l'intention du bouton ("Historique complet").
+  if(v && v.immat){ historiqueSearch = v.immat.toLowerCase(); }
+  navigate('historique');
+}
 function openDetEditById(btn){var id=btn.getAttribute('data-vid');closeDet();openEdit(id);}
 // Ouvre directement le formulaire de modification sur l'onglet Sinistre —
 // utilise depuis la section Sinistre du detail du dossier, pour eviter a
