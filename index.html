@@ -19160,6 +19160,18 @@ function validerFinancier(){
   if(!v.chiffrage) v.chiffrage = {lignes:[], valide:true, soumisLe:Date.now()};
   v.chiffrage.valideDir = true;
   v.chiffrage.valideDirLe = Date.now();
+  // Si de nouvelles pieces (ajoutees apres un premier passage aux achats)
+  // sont validees mais pas encore livrees, alors qu'une commande/achat
+  // local avait deja ete lance precedemment sur ce dossier, on
+  // reinitialise le drapeau correspondant — sinon le bouton de lancement
+  // reste invisible pour les achats, qui ne voient jamais la nouvelle
+  // piece a acheter (elle reste bloquee derriere l'ancien "deja lance").
+  if(v.chiffrage.cmdLancee && v.chiffrage.lignes.some(function(cl){return (!cl.source||cl.source==='commande')&&!cl.livree&&cl.valideDir;})){
+    v.chiffrage.cmdLancee = null;
+  }
+  if(v.chiffrage.localLancee && v.chiffrage.lignes.some(function(cl){return cl.source==='local'&&!cl.livree&&cl.valideDir;})){
+    v.chiffrage.localLancee = null;
+  }
   indexerPiecesChiffrage(v); // Enregistrer dans le catalogue
   saveV(); chiffrageEditMode = false; closeDet(); renderPage();
 }
