@@ -2099,7 +2099,7 @@ var NAV = {
     {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'},{id:'acces_clients',e:'AC',l:'Acces clients'},{id:'messages_clients',e:'MC',l:'Messages clients'},{id:'import_historique',e:'IH',l:'Import historique'},{id:'presences',e:'Pr',l:'Presences'}]},
     {l:'Finances',items:[{id:'finances_dashboard',e:'FD',l:'Tableau de bord'},{id:'facturation',e:'F',l:'Facturation'},{id:'caisse',e:'Ca',l:'Caisse'},{id:'dettes_fournisseurs',e:'DF',l:'Dettes fournisseurs'},{id:'prevision_treso',e:'PT',l:'Prevision tresorerie'},{id:'historique_paiements',e:'HP',l:'Historique paiements'},{id:'rapport_financier',e:'RF',l:'Rapport financier'}]},
     {l:'Rentabilite',items:[{id:'rentabilite',e:'RD',l:'Clients Devis'},{id:'rentabilite_forfait',e:'RF',l:'Clients Forfait'},{id:'rentabilite_tkm',e:'RT',l:'Clients TKM'},{id:'analyse_pieces',e:'AP',l:'Analyse pieces'}]},
-    {l:'Gestion',items:[{id:'archives',e:'Ar',l:'Archives'},{id:'banques',e:'B',l:'Banques'},{id:'charges_fixes',e:'CF',l:'Charges fixes'},{id:'engagements_bancaires',e:'EB',l:'Engagements bancaires'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'stock',e:'St',l:'Gestion du stock'},{id:'travaux_prevoir',e:'TP',l:'Travaux a prevoir'},{id:'devis_differes',e:'DD',l:'Devis differes'},{id:'sinistres',e:'S',l:'Sinistres'},{id:'val_fin',e:'VF',l:'Validation financiere'},{id:'kpi',e:'K',l:'KPI'}]}
+    {l:'Gestion',items:[{id:'archives',e:'Ar',l:'Archives'},{id:'banques',e:'B',l:'Banques'},{id:'charges_fixes',e:'CF',l:'Charges fixes'},{id:'engagements_bancaires',e:'EB',l:'Engagements bancaires'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'stock',e:'St',l:'Gestion du stock'},{id:'travaux_prevoir',e:'TP',l:'Travaux a prevoir'},{id:'devis_differes',e:'DD',l:'Devis differes'},{id:'sinistres',e:'S',l:'Sinistres'},{id:'val_fin',e:'VF',l:'Validation financiere'},{id:'kpi',e:'K',l:'KPI'},{id:'correction_statut_dir',e:'CS',l:'Correction manuelle statut'}]}
   ],
   reception:[
     {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'historique',e:'H',l:'Historique'}]},
@@ -3507,7 +3507,7 @@ function renderNav(){var cfg=NAV[currentRole]||NAV.direction,h='';cfg.forEach(fu
   h += '<button class="btn btn-sm" onclick="doLogout()" style="width:100%;color:#A32D2D;border-color:#A32D2D;font-size:12px">&#x2192; D&#xe9;connexion</button>';
   h += '</div>';
   document.getElementById('nav').innerHTML=h;}
-function navigate(page){if(page==='commandes_speciales_ca'){ouvrirCommandesSpeciales();closeMobileMenu();return;}currentPage=page;dashFilter='all';document.getElementById('pageTitle').textContent=TITLES[page]||'Tableau de bord';renderNav();renderPage();closeMobileMenu();}
+function navigate(page){if(page==='commandes_speciales_ca'){ouvrirCommandesSpeciales();closeMobileMenu();return;}if(page==='correction_statut_dir'){ouvrirCorrectionStatut();closeMobileMenu();return;}currentPage=page;dashFilter='all';document.getElementById('pageTitle').textContent=TITLES[page]||'Tableau de bord';renderNav();renderPage();closeMobileMenu();}
 function changeRole(role){
   resetNotifications();
   currentRole=role;currentPage='dashboard';dashFilter='all';caFilter={equipe:null,mode:null};
@@ -4716,6 +4716,91 @@ function toggleResponsableParcField(){
   wrap.style.display = (document.getElementById('mc_entite').value==='Entreprise') ? 'block' : 'none';
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// CORRECTION MANUELLE DE STATUT (Direction) — outil de secours pour
+// debloquer un dossier bloque dans le circuit normal, en forcant
+// directement sa position. Reproduit les memes effets de bord qu'une
+// transition normale (date de livraison, report des pieces non
+// validees...) pour ne rien casser derriere, et marque explicitement le
+// vehicule modifie pour la synchronisation.
+// ══════════════════════════════════════════════════════════════════════
+var _csVehiculeTrouve = null;
+function ouvrirCorrectionStatut(){
+  _csVehiculeTrouve = null;
+  document.getElementById('csImmatRecherche').value = '';
+  document.getElementById('csRechercheResultat').innerHTML = '';
+  document.getElementById('csFormulaireStatut').style.display = 'none';
+  document.getElementById('csBoutonAppliquer').style.display = 'none';
+  document.getElementById('modalCorrectionStatut').style.display = 'flex';
+}
+function fermerCorrectionStatut(){
+  document.getElementById('modalCorrectionStatut').style.display = 'none';
+}
+function rechercherVehiculeCorrectionStatut(texte){
+  var q = (texte||'').replace(/[-\s]/g,'').toUpperCase();
+  var resultatEl = document.getElementById('csRechercheResultat');
+  var formEl = document.getElementById('csFormulaireStatut');
+  var boutonEl = document.getElementById('csBoutonAppliquer');
+  if(q.length<4){
+    resultatEl.innerHTML = '';
+    formEl.style.display = 'none';
+    boutonEl.style.display = 'none';
+    _csVehiculeTrouve = null;
+    return;
+  }
+  var v = vehicles.find(function(x){ return (x.immat||'').replace(/[-\s]/g,'').toUpperCase()===q; });
+  if(!v){
+    resultatEl.innerHTML = '<span class="muted">Aucun vehicule actif avec cette immatriculation.</span>';
+    formEl.style.display = 'none';
+    boutonEl.style.display = 'none';
+    _csVehiculeTrouve = null;
+    return;
+  }
+  _csVehiculeTrouve = v;
+  var statutActuelLabel = (STATUSES[v.status]||{l:v.status}).l;
+  resultatEl.innerHTML = '<strong>'+v.immat+'</strong> — '+(v.marque||'')+' '+(v.modele||'')+' — client <strong>'+v.client+'</strong><br>Statut actuel : <span class="badge b-blue">'+statutActuelLabel+'</span>';
+  var opts = '';
+  Object.keys(STATUSES).forEach(function(k){
+    opts += '<option value="'+k+'"'+(k===v.status?' selected':'')+'>'+STATUSES[k].l+'</option>';
+  });
+  document.getElementById('csNouveauStatut').innerHTML = opts;
+  formEl.style.display = 'block';
+  boutonEl.style.display = 'inline-block';
+  document.getElementById('csNouveauStatut').onchange = function(){
+    var estLivre = ['livre','facture_deposee','dossier_cloture'].indexOf(this.value)>=0;
+    document.getElementById('csAvertissementLivre').style.display = estLivre ? 'block' : 'none';
+  };
+}
+function appliquerCorrectionStatut(){
+  if(!_csVehiculeTrouve) return;
+  var v = _csVehiculeTrouve;
+  var nouveauStatut = document.getElementById('csNouveauStatut').value;
+  var ancienStatut = v.status;
+  if(nouveauStatut===ancienStatut){ alert('Ce vehicule est deja sur ce statut.'); return; }
+  var ancienLabel = (STATUSES[ancienStatut]||{l:ancienStatut}).l;
+  var nouveauLabel = (STATUSES[nouveauStatut]||{l:nouveauStatut}).l;
+  demanderConfirmation(
+    'Forcer le statut de '+v.immat+' ?',
+    'De "'+ancienLabel+'" vers "'+nouveauLabel+'". Cette action force la position du dossier sans repasser par les etapes normales.',
+    function(){
+      v.status = nouveauStatut;
+      v.stepStart = Date.now();
+      if(['facture_deposee','dossier_cloture','livre'].indexOf(nouveauStatut)>=0){
+        v.archiveDate = Date.now();
+        v.livraison = Date.now();
+        creerTravauxAPrevoir(v);
+      }
+      ajouterCommentaireSysteme(v, '&#x1F527; Correction manuelle de statut : "'+ancienLabel+'" -> "'+nouveauLabel+'"', currentUser ? currentUser.login : 'Direction');
+      marquerVehiculeModifie(v.id);
+      saveV();
+      afficherToastNotif('Statut corrige', v.immat+' est maintenant sur "'+nouveauLabel+'".', 'ok');
+      fermerCorrectionStatut();
+      renderPage();
+    },
+    { icone:'&#x1F527;', libelleOk:'Forcer ce statut', danger:true }
+  );
+}
+
 function validerModifClient(){
   if(currentRole!=='direction') return;
   if(!_modifClientRef) return;
@@ -5533,7 +5618,7 @@ function uneModaleEstOuverte(){
     'modalModifStock','modalMoveTech','modalNumerosFacture','modalPaiement','modalPaiementChargeFixe',
     'modalPaiementFournisseur','modalRapport','modalRec','modalRepriseChef','modalRepriseTest',
     'modalStatutFacturesClient','modalSuppression','modalSuppressionEmiseForfait','modalTech','modalPaiementEcheance',
-    'modalPiecesACommander','modalNouvelleCS','modalCommandesSpeciales'
+    'modalPiecesACommander','modalNouvelleCS','modalCommandesSpeciales','modalCorrectionStatut'
   ];
   for(var i=0;i<modals.length;i++){
     var el = document.getElementById(modals[i]);
@@ -31175,6 +31260,36 @@ window.onload=function(){
   <div class="mfoot">
     <button class="btn" onclick="document.getElementById('modalModifClient').style.display='none'">Annuler</button>
     <button class="btn btn-primary" onclick="validerModifClient()">&#x1F4BE; Enregistrer</button>
+  </div>
+</div>
+</div>
+
+<!-- MODAL CORRECTION MANUELLE DE STATUT (Direction uniquement) -->
+<div class="overlay" id="modalCorrectionStatut" style="display:none" onclick="if(event.target===this)fermerCorrectionStatut()">
+<div class="modal" style="max-width:520px">
+  <div class="mhead"><h2>&#x1F527; Correction manuelle de statut</h2><button class="btn btn-sm" onclick="fermerCorrectionStatut()">X</button></div>
+  <div class="mbody">
+    <div class="info-box" style="margin-bottom:12px;background:#FCEBEB;color:#A32D2D">
+      &#x26A0; Reserve a un usage exceptionnel — force la position d'un dossier dans le circuit sans repasser par les etapes normales. A utiliser uniquement pour debloquer une situation confirmee.
+    </div>
+    <div class="fr" style="margin-bottom:10px">
+      <label class="fl">Immatriculation du vehicule</label>
+      <input class="inp" id="csImmatRecherche" placeholder="Ex: AA-579-VE-01" oninput="rechercherVehiculeCorrectionStatut(this.value)" autocomplete="off">
+      <div id="csRechercheResultat" class="xs" style="margin-top:6px"></div>
+    </div>
+    <div id="csFormulaireStatut" style="display:none">
+      <div class="fr" style="margin-bottom:10px">
+        <label class="fl">Nouveau statut</label>
+        <select class="inp" id="csNouveauStatut"></select>
+      </div>
+      <div class="xs muted" id="csAvertissementLivre" style="display:none;margin-bottom:10px">
+        &#x2139; Passer a un statut "livre / facture deposee / dossier cloture" enregistre automatiquement la date de livraison et reporte les pieces non validees en travaux a prevoir — exactement comme une livraison normale.
+      </div>
+    </div>
+  </div>
+  <div class="mfoot">
+    <button class="btn" onclick="fermerCorrectionStatut()">Annuler</button>
+    <button class="btn btn-danger" id="csBoutonAppliquer" style="display:none" onclick="appliquerCorrectionStatut()">&#x2714; Forcer ce statut</button>
   </div>
 </div>
 </div>
