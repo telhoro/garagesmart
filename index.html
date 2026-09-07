@@ -1695,6 +1695,7 @@ function syncForfaitFacturesFromFirebase(callback){
     } else if(FORFAIT_FACTURES.length && fbConnected){
       fbDb.ref('gos_forfait_factures').set(JSON.stringify(FORFAIT_FACTURES));
     }
+    migrerIdFacturesForfait();
     initialiserBaselineCollection('forfait_factures', FORFAIT_FACTURES);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
@@ -1871,6 +1872,7 @@ function syncForfaitsClientsFromFirebase(callback){
     } else if(FORFAITS_CLIENTS.length && fbConnected){
       fbDb.ref('gos_forfaits_clients').set(JSON.stringify(FORFAITS_CLIENTS));
     }
+    migrerIdForfaitsClients();
     initialiserBaselineCollection('forfaits_clients', FORFAITS_CLIENTS);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
@@ -2564,6 +2566,7 @@ function syncExpositionSnapshotsFromFirebase(callback){
     var val = snap.val();
     if(val){ try{ EXPOSITION_SNAPSHOTS = JSON.parse(val)||[]; localStorage.setItem('gos_exposition_snapshots', val); }catch(e){} }
     else if(EXPOSITION_SNAPSHOTS.length && fbConnected){ fbDb.ref('gos_exposition_snapshots').set(JSON.stringify(EXPOSITION_SNAPSHOTS)); }
+    migrerIdExpositionSnapshots();
     initialiserBaselineCollection('exposition_snapshots', EXPOSITION_SNAPSHOTS);
     if(callback) callback();
   }).catch(function(){ if(callback) callback(); });
@@ -2577,7 +2580,7 @@ function capturerSnapshotExpositionDuJour(){
   var collecte = collecterExpositionFinanciere();
   var total = 0;
   Object.keys(collecte.buckets).forEach(function(k){ total += collecte.buckets[k].totalExpose; });
-  EXPOSITION_SNAPSHOTS.push({date: Date.now(), montant: total});
+  EXPOSITION_SNAPSHOTS.push({id:'exp_'+Date.now(), date: Date.now(), montant: total});
   saveExpositionSnapshots();
 }
 
@@ -5755,6 +5758,50 @@ function migrerPaiementsClients(){
 // stock dont le fournisseur a ete change APRES l'achat a credit — avant
 // la correction du bug, ce changement ne se repercutait jamais sur la
 // dette, qui restait associee a l'ancien fournisseur.
+// CORRECTION CRITIQUE : les factures forfait et les forfaits clients
+// n'avaient jamais eu de champ id (identifies uniquement par
+// client+periodeKey ou par client) — le moteur de fusion generique
+// (fusionnerCollectionParItem) se base pourtant exclusivement sur id
+// pour distinguer les elements. Sans id, TOUTES les factures partagent
+// la meme cle "undefined" et s'ecrasent mutuellement dans la fusion,
+// ne laissant qu'une seule survivante — cause du bug ou "tout
+// l'historique des forfaits a disparu". Cette migration attribue un id
+// stable et deterministe (base sur les champs existants, donc identique
+// sur tous les appareils) a chaque entree qui n'en a pas encore.
+function migrerIdFacturesForfait(){
+  var nbCorriges = 0;
+  FORFAIT_FACTURES.forEach(function(f){
+    if(!f.id){
+      f.id = 'ff_'+(f.client||'').replace(/[^a-zA-Z0-9]/g,'')+'_'+(f.periodeKey||'');
+      nbCorriges++;
+    }
+  });
+  if(nbCorriges>0) saveForfaitFactures();
+  return nbCorriges;
+}
+function migrerIdForfaitsClients(){
+  var nbCorriges = 0;
+  FORFAITS_CLIENTS.forEach(function(f){
+    if(!f.id){
+      f.id = 'fc_'+(f.client||'').replace(/[^a-zA-Z0-9]/g,'');
+      nbCorriges++;
+    }
+  });
+  if(nbCorriges>0) saveForfaitsClients();
+  return nbCorriges;
+}
+function migrerIdExpositionSnapshots(){
+  var nbCorriges = 0;
+  EXPOSITION_SNAPSHOTS.forEach(function(s, idx){
+    if(!s.id){
+      s.id = 'exp_'+(s.date||Date.now())+'_'+idx;
+      nbCorriges++;
+    }
+  });
+  if(nbCorriges>0) saveExpositionSnapshots();
+  return nbCorriges;
+}
+
 function migrerFournisseursDettesStock(){
   var nbCorriges = 0;
   STOCK.forEach(function(a){
@@ -11811,6 +11858,7 @@ function confirmerEmissionFactureForfait(){
   }
   var montant = forfaitMensuelEffectifClient(client);
   FORFAIT_FACTURES.push({
+    id: 'ff_'+client.replace(/[^a-zA-Z0-9]/g,'')+'_'+pk,
     periodeKey: pk, client: client, montant: montant,
     statut: 'emise', emiseDate: Date.now(),
     deposeeDate: null, paiementDate: null
@@ -11916,6 +11964,7 @@ function emettreFactureForfaitByEl(btn){
   var montant = parseFloat(btn.getAttribute('data-montant'))||0;
   if(FORFAIT_FACTURES.find(function(f){return f.periodeKey===pk;})) return;
   FORFAIT_FACTURES.push({
+    id: 'ff_'+client.replace(/[^a-zA-Z0-9]/g,'')+'_'+pk,
     periodeKey: pk, client: client, montant: montant,
     statut: 'emise', emiseDate: Date.now(),
     deposeeDate: null, paiementDate: null
@@ -12004,7 +12053,7 @@ function validerForfaitAnnuel(){
     if(idx>=0) FORFAITS_CLIENTS.splice(idx,1);
   } else {
     var montantMensuel = Math.round(annuel/12);
-    var payload = {client:client, montantAnnuel:annuel, montantMensuel:montantMensuel, jourDepot:jourDepot, dateDebut:dateDebut};
+    var payload = {id:'fc_'+client.replace(/[^a-zA-Z0-9]/g,''), client:client, montantAnnuel:annuel, montantMensuel:montantMensuel, jourDepot:jourDepot, dateDebut:dateDebut};
     if(idx>=0) FORFAITS_CLIENTS[idx]=payload; else FORFAITS_CLIENTS.push(payload);
   }
   saveForfaitsClients(); closeForfaitAnnuel(); renderPage();
