@@ -4194,6 +4194,10 @@ function renderHistoriqueResults(){
       html += '<button class="btn btn-sm" data-vid="'+v.id+'" onclick="openDetById(this)">&#x1F441;</button>';
       if(currentRole==='direction' && v.status!=='dossier_cloture' && !v.isProspect){
         html += '<button class="btn btn-sm" title="Cloturer sans facturer (le devis part en travaux a prevoir)" style="color:#854F0B;border-color:#E8A44A" onclick="ouvrirClotureForceeByEl(this)" data-vid="'+v.id+'">&#x1F512; Cloturer</button>';
+        html += '<button class="btn btn-sm" title="Envoyer directement dans Travaux a prevoir" style="color:#854F0B;border-color:#E8A44A" onclick="envoyerVersTravauxAPrevoirByEl(this)" data-vid="'+v.id+'">&#x1F527; Travaux a prevoir</button>';
+        if(v.status!=='devis_differe'){
+          html += '<button class="btn btn-sm" title="Envoyer directement dans Devis differes" style="color:#185FA5;border-color:#B5D4F4" onclick="envoyerVersDevisDiffereByEl(this)" data-vid="'+v.id+'">&#x23F3; Devis differe</button>';
+        }
       }
       html += '</div></td>';
       html += '</tr>';
@@ -4943,6 +4947,48 @@ function clotureDossierForcee(vid){
     + (nbTransferees ? ' — '+nbTransferees+' piece(s) deplacee(s) vers Travaux a prevoir' : '')
     + '. Non comptabilise en CA/depenses.', currentUser ? currentUser.login : 'Direction');
 
+  saveV();
+  renderPage();
+}
+
+// ── Actions directes depuis l'Historique (Direction) : envoyer un
+// vehicule precis vers "Travaux a prevoir" ou "Devis differes", sans
+// passer par le circuit normal — utile pour un dossier bloque ou oublie.
+function envoyerVersTravauxAPrevoirByEl(btn){
+  if(currentRole!=='direction') return;
+  var vid = btn.getAttribute('data-vid');
+  var v = vehicles.find(function(x){return x.id===vid;});
+  if(!v) return;
+  var restantes = (v.chiffrage && v.chiffrage.lignes) ? v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && !cl.valideDir;}) : [];
+  if(!restantes.length){
+    alert('Aucune piece non validee sur ce dossier — rien a envoyer vers Travaux a prevoir.');
+    return;
+  }
+  if(!confirm('Envoyer "'+v.immat+' — '+(v.marque||'')+' '+(v.modele||'')+'" directement vers Travaux a prevoir ?\n\n'+restantes.length+' piece(s) non validee(s) seront placees dans cette liste.')) return;
+  // Reutilise le meme mecanisme que la sortie normale d'un vehicule
+  // (creerTravauxAPrevoir), qui protege deja contre les doublons.
+  var dejaFait = v.travauxAPrevoirCree;
+  v.travauxAPrevoirCree = false; // permettre un nouvel envoi meme si deja tente avant
+  creerTravauxAPrevoir(v);
+  if(!v.travauxAPrevoir || !v.travauxAPrevoir.length){ v.travauxAPrevoirCree = dejaFait; return; }
+  marquerVehiculeModifie(v.id);
+  ajouterCommentaireSysteme(v, '&#x1F527; Envoye manuellement vers Travaux a prevoir depuis l\'historique ('+restantes.length+' piece(s))', currentUser ? currentUser.login : 'Direction');
+  afficherToastNotif('Envoye', v.immat+' — '+restantes.length+' piece(s) dans Travaux a prevoir.', 'ok');
+  saveV();
+  renderPage();
+}
+function envoyerVersDevisDiffereByEl(btn){
+  if(currentRole!=='direction') return;
+  var vid = btn.getAttribute('data-vid');
+  var v = vehicles.find(function(x){return x.id===vid;});
+  if(!v) return;
+  if(!confirm('Envoyer "'+v.immat+' — '+(v.marque||'')+' '+(v.modele||'')+'" directement vers Devis differes ?')) return;
+  v.status = 'devis_differe';
+  v.deferreDate = Date.now();
+  v.stepStart = Date.now();
+  marquerVehiculeModifie(v.id);
+  ajouterCommentaireSysteme(v, '&#x23F3; Envoye manuellement vers Devis differes depuis l\'historique', currentUser ? currentUser.login : 'Direction');
+  afficherToastNotif('Envoye', v.immat+' est maintenant dans Devis differes.', 'ok');
   saveV();
   renderPage();
 }
