@@ -708,8 +708,9 @@ tr:hover td{background:#faf9f7}
 <!-- MODAL NOUVELLE COMMANDE SPECIALE -->
 <div class="overlay" id="modalNouvelleCS" style="display:none;z-index:1001" onclick="if(event.target===this)fermerNouvelleCS()">
 <div class="modal" style="max-width:560px">
-  <div class="mhead"><h2>&#x1F4E6; Demande de commande speciale</h2><button class="btn btn-sm" onclick="fermerNouvelleCS()">X</button></div>
+  <div class="mhead"><h2 id="cs_modal_titre">&#x1F4E6; Demande de commande speciale</h2><button class="btn btn-sm" onclick="fermerNouvelleCS()">X</button></div>
   <div class="mbody">
+    <input type="hidden" id="cs_edit_id" value="">
     <div class="g3" style="margin-bottom:10px">
       <div class="fr" style="grid-column:span 2"><label class="fl">Designation de la piece *</label><input class="inp" id="cs_piece" placeholder="Ex: Turbo compresseur"></div>
       <div class="fr"><label class="fl">Quantite *</label><input type="number" min="1" class="inp" id="cs_qte" value="1"></div>
@@ -738,7 +739,7 @@ tr:hover td{background:#faf9f7}
   </div>
   <div class="mfoot">
     <button class="btn" onclick="fermerNouvelleCS()">Annuler</button>
-    <button class="btn btn-primary" onclick="enregistrerCommandeSpeciale()">&#x2714; Enregistrer la demande</button>
+    <button class="btn btn-primary" id="cs_modal_bouton" onclick="enregistrerCommandeSpeciale()">&#x2714; Enregistrer la demande</button>
   </div>
 </div>
 </div>
@@ -20954,6 +20955,32 @@ function reapprovisionnerArticleByEl(btn){
 // catalogue de stock. Cycle : demande -> commande -> livree (entree
 // automatique en stock a la livraison).
 // ══════════════════════════════════════════════════════════════════════
+// Ouvre la meme modale que "Nouvelle demande", mais en mode modification
+// — preremplie avec les donnees existantes, pour corriger une erreur de
+// saisie sans perdre le statut ni les dates de la demande.
+function ouvrirModifCommandeSpecialeByEl(btn){
+  var id = btn.getAttribute('data-csid');
+  var c = COMMANDES_SPECIALES.find(function(x){return x.id===id;});
+  if(!c) return;
+  ouvrirNouvelleCS(); // pose les listes fournisseurs/vehicules et l'etat par defaut
+  document.getElementById('cs_edit_id').value = c.id;
+  document.getElementById('cs_piece').value = c.piece||'';
+  document.getElementById('cs_marque').value = c.marque||'';
+  document.getElementById('cs_modele').value = c.modele||'';
+  document.getElementById('cs_qte').value = c.qte||1;
+  document.getElementById('cs_prix').value = c.prixAchatEstime||'';
+  document.getElementById('cs_fourn').value = c.fournisseurId||'';
+  document.getElementById('cs_note').value = c.note||'';
+  if(c.immat){
+    var radioType = document.querySelector('input[name="cs_veh_type"][value="'+(c.vehiculeType||'existant')+'"]');
+    if(radioType) radioType.checked = true;
+    if(c.vehiculeType==='autre') document.getElementById('cs_veh_immat_autre').value = c.immat;
+    else document.getElementById('cs_veh_immat_existant').value = c.immat;
+    toggleCsVehiculeType();
+  }
+  document.getElementById('cs_modal_titre').innerHTML = '&#x270F; Modifier la demande';
+  document.getElementById('cs_modal_bouton').innerHTML = '&#x2714; Enregistrer les modifications';
+}
 function ouvrirNouvelleCS(){
   var sel = document.getElementById('cs_fourn');
   if(sel){
@@ -20982,6 +21009,9 @@ function ouvrirNouvelleCS(){
   var radioExistant = document.querySelector('input[name="cs_veh_type"][value="existant"]');
   if(radioExistant) radioExistant.checked = true;
   toggleCsVehiculeType();
+  document.getElementById('cs_edit_id').value = '';
+  document.getElementById('cs_modal_titre').innerHTML = '&#x1F4E6; Demande de commande speciale';
+  document.getElementById('cs_modal_bouton').innerHTML = '&#x2714; Enregistrer la demande';
   var m = document.getElementById('modalNouvelleCS');
   if(m) m.style.display = 'flex';
 }
@@ -21001,6 +21031,7 @@ function fermerNouvelleCS(){
 }
 function enregistrerCommandeSpeciale(){
   var g = function(id){ var e = document.getElementById(id); return e ? e.value : ''; };
+  var editId = g('cs_edit_id');
   var piece = (g('cs_piece')||'').trim();
   var qte = parseInt(g('cs_qte'),10);
   var marque = (g('cs_marque')||'').trim();
@@ -21015,16 +21046,29 @@ function enregistrerCommandeSpeciale(){
   if(!piece){ afficherToastNotif('Designation manquante', 'Saisissez le nom de la piece.', 'alerte'); return; }
   if(isNaN(qte) || qte<1){ afficherToastNotif('Quantite invalide', 'La quantite doit etre au moins 1.', 'alerte'); return; }
 
-  COMMANDES_SPECIALES.push({
-    id: 'cs_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
-    piece: piece, marque: marque, modele: modele, qte: qte,
-    fournisseurId: fournisseurId, prixAchatEstime: isNaN(prix)?'':prix, note: note,
-    immat: immat, vehiculeType: immat ? vehiculeType : '',
-    demandeur: currentUser ? (currentUser.login||currentUser.nom) : currentRole,
-    dateDemande: Date.now(), statut: 'demande', dateCommande: null, dateLivraison: null
-  });
-  saveCommandesSpeciales();
-  afficherToastNotif('Demande enregistree', piece+' — en attente de lancement de commande.', 'ok');
+  if(editId){
+    // Correction d'une demande deja enregistree — conserve son statut,
+    // ses dates et son identifiant, seuls les details de la piece
+    // changent.
+    var existante = COMMANDES_SPECIALES.find(function(x){return x.id===editId;});
+    if(!existante){ afficherToastNotif('Introuvable', 'Cette commande n\'existe plus.', 'alerte'); return; }
+    existante.piece = piece; existante.marque = marque; existante.modele = modele; existante.qte = qte;
+    existante.fournisseurId = fournisseurId; existante.prixAchatEstime = isNaN(prix)?'':prix; existante.note = note;
+    existante.immat = immat; existante.vehiculeType = immat ? vehiculeType : '';
+    saveCommandesSpeciales();
+    afficherToastNotif('Demande modifiee', piece+' — modifications enregistrees.', 'ok');
+  } else {
+    COMMANDES_SPECIALES.push({
+      id: 'cs_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+      piece: piece, marque: marque, modele: modele, qte: qte,
+      fournisseurId: fournisseurId, prixAchatEstime: isNaN(prix)?'':prix, note: note,
+      immat: immat, vehiculeType: immat ? vehiculeType : '',
+      demandeur: currentUser ? (currentUser.login||currentUser.nom) : currentRole,
+      dateDemande: Date.now(), statut: 'demande', dateCommande: null, dateLivraison: null
+    });
+    saveCommandesSpeciales();
+    afficherToastNotif('Demande enregistree', piece+' — en attente de lancement de commande.', 'ok');
+  }
   fermerNouvelleCS();
   ouvrirCommandesSpeciales();
 }
@@ -21118,9 +21162,11 @@ function htmlTableauCommandesSpeciales(liste){
     // qu'une vue en lecture seule du statut de leur demande.
     if(currentRole==='achats' || currentRole==='direction'){
       if(c.statut==='demande'){
+        html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="ouvrirModifCommandeSpecialeByEl(this)" title="Corriger cette demande" style="color:#185FA5;border-color:#B5D4F4">&#x270F;</button> ';
         html += '<button class="btn btn-sm btn-primary" data-csid="'+c.id+'" onclick="lancerCommandeSpecialeByEl(this)">&#x1F6D2; Lancer commande</button> ';
         html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="supprimerCommandeSpecialeByEl(this)" title="Annuler la demande" style="color:#A32D2D">&#x2715;</button>';
       } else if(c.statut==='commande'){
+        html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="ouvrirModifCommandeSpecialeByEl(this)" title="Corriger cette demande" style="color:#185FA5;border-color:#B5D4F4">&#x270F;</button> ';
         html += '<button class="btn btn-sm btn-success" data-csid="'+c.id+'" onclick="livrerCommandeSpecialeByEl(this)">&#x2714; Piece livree</button>';
       } else {
         html += '<span class="xs muted">Entree en stock le '+new Date(c.dateLivraison).toLocaleDateString('fr-FR')+'</span>';
