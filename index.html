@@ -2192,7 +2192,7 @@ var vehicles = [];
 var currentRole = 'direction';
 var currentPage = 'dashboard';
 var editingId = null;
-var vtriMode = 'statut';
+var vtriMode = 'entree';
 var dashFilter = 'all';
 var openClientKeys = {}; // multi-ouverture : plusieurs clients ouverts simultanement
 var openVehKey = null;
@@ -3432,6 +3432,17 @@ function chronoHtml(v){
 // ============================================================
 // TRI ET FILTRES
 // ============================================================
+// Date de reference pour le tri "plus recent d'abord" des tableaux de
+// bord : le moment ou le dossier est entre dans son etape ACTUELLE
+// (stepStart, mis a jour a chaque changement de statut — validation
+// achats, attribution technicien, etc.), et non v.entree qui reste fige
+// a l'arrivee initiale du vehicule au garage. Sans ca, un dossier qui
+// vient d'etre valide par les achats ne remontait jamais en tete de la
+// liste "en attente de validation" de la Direction — il fallait
+// utiliser la date d'entree dans CETTE etape, pas la date d'arrivee du
+// vehicule des semaines plus tot.
+function dateEtape(v){ return v.stepStart || v.entree || 0; }
+
 function triVehicules(list){
   var copy=list.slice();
   if(vtriMode==='entree'){
@@ -3439,7 +3450,7 @@ function triVehicules(list){
     copy.sort(function(a,b){
       var aNew=(a.status==='reception')?1:0, bNew=(b.status==='reception')?1:0;
       if(aNew!==bNew) return bNew-aNew;
-      return b.entree-a.entree; // plus recent d'abord
+      return dateEtape(b)-dateEtape(a); // plus recent d'abord
     });
   } else {
     // Tri par statut, mais 'reception' toujours en tete et a date egale plus recent d'abord
@@ -3447,7 +3458,7 @@ function triVehicules(list){
       var aNew=(a.status==='reception')?1:0, bNew=(b.status==='reception')?1:0;
       if(aNew!==bNew) return bNew-aNew;
       var ia=STATUT_ORDER.indexOf(a.status), ib=STATUT_ORDER.indexOf(b.status);
-      return ia!==ib ? ia-ib : b.entree-a.entree;
+      return ia!==ib ? ia-ib : dateEtape(b)-dateEtape(a);
     });
   }
   return copy;
@@ -6340,7 +6351,7 @@ function blocDevisEnvoye(vehicleList){
 
 function blocALivrer(vehicleList){
   var aLivrer = vehicleList.filter(function(v){return A_LIVRER_ST.indexOf(v.status)>=0;});
-  aLivrer.sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+  aLivrer.sort(function(a,b){ return dateEtape(b)-dateEtape(a); });
   var tbl = '';
   if(aLivrer.length){
     tbl = '<div class="tw"><table><thead><tr><th>Vehicule</th><th>Client</th><th>Etapes</th><th>Temps livraison</th><th>Actions</th></tr></thead><tbody>';
@@ -16712,9 +16723,23 @@ function appliquerForfaitTKMByEl(btn){
     };
   });
   v.forfaitTkmApplique = f.id;
+  // Parcours TKM raccourci : un forfait predefini est un chiffrage deja
+  // fige (pieces + prix valides une fois pour toutes dans le catalogue
+  // de forfaits, voir pageForfaitsTKM) — inutile de repasser par les
+  // etapes manuelles "Confirmer les modifications" puis "Valider
+  // definitivement". Le chiffrage passe directement a l'etat valide, ce
+  // qui debloque immediatement le bouton "Client a valide" dans le
+  // tableau des prospects (voir htmlTableauProspects / chiffreOk), sans
+  // toucher a cette derniere etape de validation client qui reste un
+  // geste explicite et trace.
+  v.chiffrage.confirme = true;
+  v.chiffrage.valide = true;
+  v.chiffrage.soumisLe = Date.now();
+  indexerPiecesChiffrage(v);
+  _prospectEditMode = false; // repasser en lecture seule (chiffrage deja valide)
   marquerVehiculeModifie(v.id);
   saveV();
-  afficherToastNotif('Forfait applique', f.nom+' — '+f.lignes.length+' piece(s) ajoutee(s).', 'ok');
+  afficherToastNotif('Forfait applique et chiffrage valide', f.nom+' — '+f.lignes.length+' piece(s) — pret pour validation client.', 'ok');
   openDetKeepEdit(v.id);
 }
 
@@ -17019,7 +17044,7 @@ function pageDashDir(){
     return false;
   });
   // Plus recent en premier — le plus recent au sommet.
-  aValiderFin.sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+  aValiderFin.sort(function(a,b){ return dateEtape(b)-dateEtape(a); });
   if(aValiderFin.length){
     html += '<div class="card" style="margin-bottom:16px">';
     html += '<div class="card-head" style="background:#FAEEDA;color:#854F0B">&#x23F3; En attente de validation financière <span class="badge b-amber">'+aValiderFin.length+'</span></div>';
@@ -17276,7 +17301,7 @@ function pageDashReception(){
 // Tableau devis avec boutons progressifs selon statut
 function recTableauDevis(title, list, badgeClass){
   // Plus recent en premier, comme le reste de l'app (voir triVehicules).
-  list = list.slice().sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+  list = list.slice().sort(function(a,b){ return dateEtape(b)-dateEtape(a); });
   var h = '<div class="card" style="margin-bottom:16px">';
   h += '<div class="card-head">'+title+' <span class="badge '+badgeClass+'">'+list.length+'</span></div>';
   if(!list.length){
@@ -17496,7 +17521,7 @@ function caSaveComment(el){
 
 function caTableau(title, list, badgeClass, subtitle){
   // Plus recent en premier, comme le reste de l'app (voir triVehicules).
-  list = list.slice().sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+  list = list.slice().sort(function(a,b){ return dateEtape(b)-dateEtape(a); });
   var h = '<div class="card" style="margin-bottom:16px">';
   h += '<div class="card-head">'+title+' <span class="badge '+badgeClass+'">'+list.length+'</span></div>';
   if(subtitle && list.length){
@@ -17943,7 +17968,7 @@ function pageDashChefAtelier(role){
         hRecap += '<div class="tw"><table><thead><tr><th>Technicien</th><th>Vehicule</th><th>Client</th><th>Statut</th><th>Depuis</th></tr></thead><tbody>';
         membresEq.forEach(function(membre){
           var vehsMembre = myVehs.filter(function(v){ return v.technicien===membre.nom; });
-          vehsMembre.sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+          vehsMembre.sort(function(a,b){ return dateEtape(b)-dateEtape(a); });
           if(vehsMembre.length){
             vehsMembre.forEach(function(v){
               var depuis = v.stepStart ? Math.round((Date.now()-v.stepStart)/3600000)+'h' : '—';
@@ -17974,7 +17999,7 @@ function pageDashChefAtelier(role){
   var aConfirmer = myVehs.filter(function(v){
     return v.status==='travaux_attente' && v.piecesConfirmees===false;
   });
-  aConfirmer.sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+  aConfirmer.sort(function(a,b){ return dateEtape(b)-dateEtape(a); });
   if(aConfirmer.length){
     var hConf = '<div class="card" style="margin-bottom:16px"><div class="card-head" style="background:#EAF3DE;color:#3B6D11">&#x1F4E6; Livraison pieces a confirmer <span class="badge b-green">'+aConfirmer.length+'</span></div>';
     hConf += '<div class="tw"><table><thead><tr><th>Vehicule</th><th>Client</th><th>Technicien</th><th>Pieces livrees</th><th>Chronometres</th><th>Action</th></tr></thead><tbody>';
@@ -18015,7 +18040,7 @@ function pageDashChefAtelier(role){
   // T2 : En attente validation
   // Travaux validés par le testeur — en attente de validation finale chef
   var aValiderTravaux = myVehs.filter(function(v){return v.status==='attente_valid_chef';});
-  aValiderTravaux.sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+  aValiderTravaux.sort(function(a,b){ return dateEtape(b)-dateEtape(a); });
   if(aValiderTravaux.length){
     html += '<div class="card" style="margin-bottom:16px;border:2px solid #3B6D11">';
     html += '<div class="card-head" style="background:#EAF3DE;color:#3B6D11">&#x2714; Travaux a valider — test effectue <span class="badge b-green">'+aValiderTravaux.length+'</span></div>';
@@ -18505,7 +18530,7 @@ function pageDashTech(){
 // avec actions specifiques selon le statut de chaque vehicule du technicien connecte
 function techTableau(title, list, badgeClass){
   // Plus recent en premier, comme le reste de l'app (voir triVehicules).
-  list = list.slice().sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+  list = list.slice().sort(function(a,b){ return dateEtape(b)-dateEtape(a); });
   var h = '<div class="card" style="margin-bottom:16px">';
   h += '<div class="card-head">'+title+' <span class="badge '+badgeClass+'">'+list.length+'</span></div>';
   if(!list.length){
@@ -19159,6 +19184,13 @@ function renderChiffrageSection(v){
         fournisseurId: ref ? (ref.fournisseurId||'') : '',
         fournisseur: '',
         source: ref ? (ref.source||'local') : 'local',
+        // IMPORTANT : conserver le lien vers l'article de stock repris du
+        // passage precedent (tapReprisDe), sinon toutesPiecesTkmEnStock()
+        // perd la reference exacte des que cette section est affichee
+        // (achats/direction, sans restriction de statut) — le raccourci
+        // TKM retombe alors sur une recherche par nom qui peut echouer et
+        // envoie le dossier en diagnostic au lieu du raccourci direct.
+        stockArticleId: ref ? (ref.stockArticleId||'') : '',
         paiement: 'cash',
         prixReporte: ref ? true : false,
         dateOrigine: ref ? ref.dateOrigine : null
@@ -19474,7 +19506,7 @@ function renderChiffrageProspect(v){
     s += '<option value="">-- Choisir un forfait --</option>';
     FORFAITS_TKM.forEach(function(f){ s += '<option value="'+f.id+'">'+f.nom+'</option>'; });
     s += '</select>';
-    s += '<button class="btn btn-sm btn-primary" onclick="appliquerForfaitTKMByEl(this)" data-vid="'+v.id+'">Appliquer</button>';
+    s += '<button class="btn btn-sm btn-primary" onclick="appliquerForfaitTKMByEl(this)" data-vid="'+v.id+'" title="Applique les pieces du forfait et valide directement le chiffrage">Appliquer et valider</button>';
     s += '</div>';
   }
 
@@ -22541,7 +22573,7 @@ function getAchatsFiltered(){
 // ── Tableau achats standard avec bouton Chiffrer et progression ─────────────
 function achatsTableau(title, list, badgeClass, type){
   // Plus recent en premier, comme le reste de l'app (voir triVehicules).
-  list = list.slice().sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+  list = list.slice().sort(function(a,b){ return dateEtape(b)-dateEtape(a); });
   var h = '<div class="card" style="margin-bottom:16px">';
   h += '<div class="card-head">'+title+' <span class="badge '+badgeClass+'">'+list.length+'</span></div>';
   if(!list.length){
@@ -22702,6 +22734,8 @@ function marquerLivreeById(btn){
 }
 // Tableau approvisionnement dédié avec liste des pièces par source
 function achatsTableauAppro(title, list, badgeClass, type, bgColor){
+  // Plus recent en premier, comme le reste de l'app (voir triVehicules).
+  list = list.slice().sort(function(a,b){ return dateEtape(b)-dateEtape(a); });
   var isLocalType = (type==='local_attente'||type==='local_cours');
   // Total global de toutes les pieces a acheter dans ce bloc
   var totalGlobal = 0;
