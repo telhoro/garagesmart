@@ -522,7 +522,7 @@ tr:hover td{background:#faf9f7}
 </div>
 
 <!-- MODAL ENTREE EN TRAVAUX (prospect) -->
-<div class="overlay" id="modalEnTravaux" style="display:none" onclick="if(event.target===this)document.getElementById('modalEnTravaux').style.display='none'">
+<div class="overlay" id="modalEnTravaux" style="display:none;z-index:1001" onclick="if(event.target===this)document.getElementById('modalEnTravaux').style.display='none'">
 <div class="modal" style="width:380px">
   <div class="mhead">
     <h2>&#x1F527; Entrée en atelier</h2>
@@ -11071,7 +11071,9 @@ function imprimerStatutFacturesClient(client){
     +'</div></div>';
 
   var w = window.open('', '_blank');
-  w.document.write(html);
+  w.document.write('<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">'
+    +'<meta name="viewport" content="width=device-width, initial-scale=1">'
+    +'<title>Statut factures</title></head><body>'+html+'</body></html>');
   w.document.close();
   setTimeout(function(){ w.print(); }, 300);
 }
@@ -16701,6 +16703,9 @@ function pageDashDir(){
   }
   html += kpiBloc(vehiclesActifs());
 
+  // ── Tableau Prospects — devis en attente (visible aussi pour Direction) ──
+  html += htmlTableauProspects();
+
   // ── Tableau 0 : Vehicules a recuperer (priorite absolue) ─────────────────
   html += blocARecuperer(vehiclesActifs());
 
@@ -16811,48 +16816,66 @@ function pageDashDir(){
   return html;
 }
 
+// Tableau des devis prospects en cours (pas encore envoyes au client
+// officiellement) — reutilisable par plusieurs profils (reception, chef
+// d'atelier, achats, direction), tous avec la meme possibilite de
+// modification (les restrictions de prix pour chef d'atelier sont gerees
+// plus bas, dans la fiche detail elle-meme). Disparait naturellement de
+// partout des qu'un prospect quitte ce statut (converti ou differe).
+function htmlTableauProspects(){
+  var prospects = vehicles.filter(function(v){ return v.isProspect && !v.archive && v.prospectStatut!=='archive' && v.prospectStatut!=='differe'; });
+  if(!prospects.length) return '';
+  // Chef d'atelier : ni montant (prix), ni decisions d'envoi/report/mise
+  // en travaux du devis — seulement voir/imprimer et modifier les pieces
+  // (dans la fiche detail, ou les prix restent egalement masques).
+  var restreintCA = (currentRole==='chef_atelier');
+  var html = '';
+  html += '<div class="card" style="margin-bottom:16px;border:2px solid #854F0B">';
+  html += '<div class="card-head" style="background:#FFF9F0;color:#854F0B">&#x1F4CB; Devis prospects <span class="badge" style="background:#854F0B;color:#fff">'+prospects.length+'</span></div>';
+  html += '<div class="tw"><table><thead><tr><th>Véhicule</th><th>Client</th><th>Motif</th><th>Statut</th>'+(restreintCA?'':'<th>Montant estimé</th>')+'<th>Actions</th></tr></thead><tbody>';
+  prospects.forEach(function(v){
+    var montant = 0;
+    if(v.chiffrage && v.chiffrage.lignes) v.chiffrage.lignes.forEach(function(l){ montant += (parseFloat(l.prixVente)||0)*(parseInt(l.qte)||1); });
+    var statut = '<span class="badge b-gray">En saisie</span>';
+    if(v.chiffrage && v.chiffrage.valide) statut = '<span class="badge b-green">Chiffre</span>';
+    if(v.prospectStatut==='valide_client') statut = '<span class="badge b-green">&#x2714; Valide client</span>';
+    if(v.prospectStatut==='veille') statut = '<span class="badge b-amber">En veille</span>';
+    var vid = v.id;
+    html += '<tr>';
+    html += '<td><div class="fw7">'+v.immat+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
+    html += '<td>'+v.client+'<div class="xs muted">'+v.tel+'</div></td>';
+    html += '<td class="xs">'+v.motif+'</td>';
+    html += '<td>'+statut+'</td>';
+    if(!restreintCA) html += '<td class="fw7">'+(montant?montant.toLocaleString('fr-FR')+' F':'—')+'</td>';
+    html += '<td><div class="flex gap6">';
+    var chiffreOk = v.chiffrage && (v.chiffrage.valide || v.chiffrage.confirme);
+    var estValideClient = v.prospectStatut === 'valide_client';
+    html += '<button class="btn btn-sm" data-vid="'+vid+'" onclick="openDetById(this)">&#x1F441; Voir</button>';
+    if(chiffreOk){
+      html += '<button class="btn btn-sm" data-vid="'+vid+'" onclick="imprimerProspectById(this)">&#x1F5A8; Imprimer</button>';
+      if(!restreintCA){
+        if(!estValideClient){
+          html += '<button class="btn btn-primary btn-sm" data-vid="'+vid+'" onclick="clientAValideDevisByEl(this)" title="Le client a accepte le devis (par telephone, en personne...)">&#x2714; Client a valide</button>';
+        } else {
+          html += '<button class="btn btn-success btn-sm" data-vid="'+vid+'" onclick="enTravauxById(this)">&#x1F527; Mettre en travaux</button>';
+        }
+      }
+    }
+    if(!restreintCA){
+      html += '<button class="btn btn-sm" data-vid="'+vid+'" onclick="differerProspectById(this)" style="color:#854F0B;border-color:#E8A44A" title="Le client reflechit : le devis reste relancable">&#x23F8; Devis differe</button>';
+    }
+    html += '</div></td></tr>';
+  });
+  html += '</tbody></table></div></div>';
+  return html;
+}
+
 // Dashboard Réception
 function pageDashReception(){
   var html = kpiBloc(vehiclesActifs());
 
   // ── Tableau Prospects — devis en attente ──────────────────────────────────
-  var prospects = vehicles.filter(function(v){ return v.isProspect && !v.archive && v.prospectStatut!=='archive' && v.prospectStatut!=='differe'; });
-  if(prospects.length){
-    html += '<div class="card" style="margin-bottom:16px;border:2px solid #854F0B">';
-    html += '<div class="card-head" style="background:#FFF9F0;color:#854F0B">&#x1F4CB; Devis prospects <span class="badge" style="background:#854F0B;color:#fff">'+prospects.length+'</span></div>';
-    html += '<div class="tw"><table><thead><tr><th>Véhicule</th><th>Client</th><th>Motif</th><th>Statut</th><th>Montant estimé</th><th>Actions</th></tr></thead><tbody>';
-    prospects.forEach(function(v){
-      var montant = 0;
-      if(v.chiffrage && v.chiffrage.lignes) v.chiffrage.lignes.forEach(function(l){ montant += (parseFloat(l.prixVente)||0)*(parseInt(l.qte)||1); });
-      var statut = '<span class="badge b-gray">En saisie</span>';
-      if(v.chiffrage && v.chiffrage.valide) statut = '<span class="badge b-green">Chiffre</span>';
-      if(v.prospectStatut==='envoye') statut = '<span class="badge b-blue">Envoye</span>';
-      if(v.prospectStatut==='veille') statut = '<span class="badge b-amber">En veille</span>';
-      var vid = v.id;
-      html += '<tr>';
-      html += '<td><div class="fw7">'+v.immat+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
-      html += '<td>'+v.client+'<div class="xs muted">'+v.tel+'</div></td>';
-      html += '<td class="xs">'+v.motif+'</td>';
-      html += '<td>'+statut+'</td>';
-      html += '<td class="fw7">'+(montant?montant.toLocaleString('fr-FR')+' F':'—')+'</td>';
-      html += '<td><div class="flex gap6">';
-      var chiffreOk = v.chiffrage && (v.chiffrage.valide || v.chiffrage.confirme);
-      var estEnvoye = v.prospectStatut === 'envoye';
-      html += '<button class="btn btn-sm" data-vid="'+vid+'" onclick="openDetById(this)">&#x1F441; Voir</button>';
-      if(chiffreOk){
-        html += '<button class="btn btn-sm" data-vid="'+vid+'" onclick="imprimerProspectById(this)">&#x1F5A8; Imprimer</button>';
-        if(!estEnvoye){
-          html += '<button class="btn btn-primary btn-sm" data-vid="'+vid+'" onclick="envoyerProspectById(this)">&#x1F4E4; Envoyer au client</button>';
-        } else {
-          html += '<button class="btn btn-success btn-sm" data-vid="'+vid+'" onclick="enTravauxById(this)">&#x1F527; En travaux</button>';
-          html += '<button class="btn btn-sm" data-vid="'+vid+'" onclick="modifierDevisProspectById(this)" style="color:#185FA5;border-color:#B5D4F4">&#x270F; Modifier</button>';
-        }
-      }
-      html += '<button class="btn btn-sm" data-vid="'+vid+'" onclick="differerProspectById(this)" style="color:#854F0B;border-color:#E8A44A" title="Le client reflechit : le devis reste relancable">&#x23F8; Devis differe</button>';
-      html += '</div></td></tr>';
-    });
-    html += '</tbody></table></div></div>';
-  }
+  html += htmlTableauProspects();
 
   // ── Tableau 0 : Vehicules a recuperer (priorite absolue) ─────────────────
   html += blocARecuperer(vehiclesActifs());
@@ -17384,6 +17407,10 @@ function pageDashChefAtelier(role){
   if(monEquipe){
     html += '<div class="info-box" style="margin-bottom:14px;background:#EBF3FB;color:#185FA5;padding:10px 14px;border-radius:8px;font-size:13px">Tableau de bord — <strong>'+monEquipe+'</strong> ('+membresEquipe.length+' membres)</div>';
   }
+
+  // ── Tableau Prospects — devis en attente (chef d'atelier uniquement,
+  // pas chef d'equipe dont le perimetre est limite a son equipe) ──────────
+  if(role==='chef_atelier') html += htmlTableauProspects();
 
   // ── Mes vehicules personnels (chef_equipe seulement) ─────────────────────
   if(role === 'chef_equipe' && currentChefEquipeNom){
@@ -18718,7 +18745,12 @@ function renderChiffrageSection(v){
 
   // Tableau pièces + prix
   var _isProspectEditor = v.isProspect && (currentRole==='achats'||currentRole==='reception'||currentRole==='direction');
-  var isChiffreLocked = !!(v.chiffrage && v.chiffrage.valide) && !chiffrageEditMode && !_isProspectEditor;
+  // Chef d'atelier : peut ajouter/modifier des pieces sur un devis
+  // prospect (designation, quantite), mais SANS acces a la partie prix —
+  // seuls achats/reception/direction voient et modifient les prix.
+  var _isProspectPieceEditor = v.isProspect && currentRole==='chef_atelier';
+  var _prospectMasquerPrix = _isProspectPieceEditor; // raccourci utilise plus bas
+  var isChiffreLocked = !!(v.chiffrage && v.chiffrage.valide) && !chiffrageEditMode && !_isProspectEditor && !_isProspectPieceEditor;
   if(isChiffreLocked){
     s += '<div style="float:right;margin-top:-30px"><button class="btn btn-sm" style="font-size:11px" onclick="toggleChiffrageEdit()">&#x270F; Modifier chiffrage</button></div>';
   }
@@ -18779,7 +18811,9 @@ function renderChiffrageSection(v){
   }
 
   s += '<div class="tw" style="overflow-x:auto"><table><thead><tr>'
-    +'<th style="background:#EAF3DE;color:#3B6D11">Pièce demandée</th><th>Qte</th><th>Désignation / Référence</th><th>Prix achat (FCFA)</th>'+(isForfait?'':'<th>Prix vente (FCFA)</th><th>Total vente</th>')+'<th>Fournisseur</th><th>Source</th><th>Paiement</th>'
+    +'<th style="background:#EAF3DE;color:#3B6D11">Pièce demandée</th><th>Qte</th><th>Désignation / Référence</th>'
+    +(_prospectMasquerPrix?'':'<th>Prix achat (FCFA)</th>'+(isForfait?'':'<th>Prix vente (FCFA)</th><th>Total vente</th>'))
+    +'<th>Fournisseur</th><th>Source</th><th>Paiement</th>'
     +(currentRole==='direction'?'<th>Validation</th>':'<th></th>')
     +'</tr></thead><tbody>';
 
@@ -18858,9 +18892,11 @@ function renderChiffrageSection(v){
       if(cl.prixReporte && cl.dateOrigine){
         indicRep = '<div class="xs" style="color:#854F0B;font-size:9px;margin-top:1px" title="Prix du passage precedent - a verifier">&#x23F3; prix du '+new Date(cl.dateOrigine).toLocaleDateString('fr-FR')+'</div>';
       }
+      if(!_prospectMasquerPrix){
       s += '<td><input type="number" min="0" class="inp" style="font-size:11px;width:100px'+(cl.prixReporte?';background:#FDF8EE':'')+'" value="'+(cl.prixAchat||'')+'" placeholder="Prix achat" data-clid="'+lineId+'" data-cfield="prixAchat" onchange="updateChiffrageLigneByEl(this)">'+indicRep+'</td>';
       if(!isForfait) s += '<td><input type="number" min="0" class="inp" style="font-size:11px;width:100px" value="'+(cl.prixVente||'')+'" placeholder="Prix vente" data-clid="'+lineId+'" data-cfield="prixVente" onchange="updateChiffrageLigneByEl(this)"></td>'; else s += '<td></td>';
       s += '<td style="font-family:monospace;font-size:11px;color:#185FA5" id="chiff-tot-'+lineId+'">'+(cl.prixVente?((parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1)).toLocaleString('fr-FR'):'—')+'</td>';
+      }
       // Colonne Fournisseur : en source Stock, elle affiche l'article choisi (selection via la designation)
       if(cl.source === 'stock'){
         var artSel = cl.stockArticleId ? stockArticleById(cl.stockArticleId) : null;
@@ -18905,6 +18941,7 @@ function renderChiffrageSection(v){
   var margePct = totalAchat>0 ? Math.round((totalMarge/totalAchat)*100) : 0;
   s += '<tr style="background:#f5f4f1;font-weight:700">';
   s += '<td colspan="3" style="text-align:right">Totaux :</td>';
+  if(!_prospectMasquerPrix){
   s += '<td style="font-family:monospace" title="Total achat">'+totalAchat.toLocaleString('fr-FR')+'</td>';
   if(!isForfait){
     s += '<td style="font-family:monospace" title="Total vente">'+totalVente.toLocaleString('fr-FR')+'</td>';
@@ -18912,6 +18949,9 @@ function renderChiffrageSection(v){
     s += '<td colspan="4" style="color:#3B6D11;font-weight:800">&#x1F4B0; Marge brute : <span style="font-family:monospace;color:'+(totalMarge>=0?'#3B6D11':'#A32D2D')+'">'+totalMarge.toLocaleString('fr-FR')+' FCFA ('+margePct+'%)</span></td>';
   } else {
     s += '<td colspan="4"></td>';
+  }
+  } else {
+    s += '<td colspan="4" class="xs muted">(prix masques pour ce profil)</td>';
   }
   s += '</tr>';
   s += '</tbody></table></div>';
@@ -18955,6 +18995,12 @@ function renderChiffrageSection(v){
     } else if(currentRole==='direction' && !_isProspectEditor){
       s += '<button class="btn btn-sm" onclick="addChiffrageLigne()">+ Ajouter une ligne</button>';
       s += '<button class="btn btn-success btn-sm" onclick="verrouilerChiffrageDirection()">&#x2714; OK — Verrouiller</button>';
+    } else if(_isProspectPieceEditor){
+      // Chef d'atelier sur un prospect : peut ajouter/retirer des pieces,
+      // mais ne valide pas le chiffrage (decision de prix, reservee a
+      // achats/reception/direction).
+      s += '<button class="btn btn-sm" onclick="addChiffrageLigne()">+ Ajouter une ligne</button>';
+      s += '<span class="xs muted" style="align-self:center">La validation des prix reste reservee a achats/reception/direction.</span>';
     }
     s += '</div>';
   } else {
@@ -19019,6 +19065,10 @@ function renderChiffrageProspect(v){
   var isValide   = !!v.chiffrage.valide;
   // Toujours grisé sauf si _prospectEditMode activé explicitement
   var locked = !_prospectEditMode;
+  // Chef d'atelier : peut ajouter/modifier des pieces (designation, qte)
+  // mais sans jamais voir ni modifier les prix — reserves a
+  // achats/reception/direction.
+  var masquerPrixCA = (currentRole==='chef_atelier');
 
   var s = '<div style="margin-top:10px">';
   // Bandeau état
@@ -19034,8 +19084,10 @@ function renderChiffrageProspect(v){
   s += '<thead><tr style="background:#f5f4f1">';
   s += '<th style="padding:6px;text-align:left;border:1px solid #e8e5e0">Pièce / Prestation</th>';
   s += '<th style="padding:6px;text-align:center;border:1px solid #e8e5e0">Qté</th>';
+  if(!masquerPrixCA){
   s += '<th style="padding:6px;text-align:right;border:1px solid #e8e5e0">Prix achat</th>';
   s += '<th style="padding:6px;text-align:right;border:1px solid #e8e5e0">Prix vente</th>';
+  }
   s += '<th style="padding:6px;border:1px solid #e8e5e0">Fournisseur</th>';
   s += '<th style="padding:6px;border:1px solid #e8e5e0">Source</th>';
   s += '<th style="padding:6px;border:1px solid #e8e5e0">Paiement</th>';
@@ -19067,8 +19119,10 @@ function renderChiffrageProspect(v){
     if(locked){
       var ff = cl.fournisseurId ? FOURNISSEURS.find(function(f){return f.id===cl.fournisseurId;}) : null;
       s += '<td style="border:1px solid #e8e5e0;padding:6px;text-align:center">'+(cl.qte||1)+'</td>';
+      if(!masquerPrixCA){
       s += '<td style="border:1px solid #e8e5e0;padding:6px;text-align:right">'+(cl.prixAchat?Number(cl.prixAchat).toLocaleString('fr-FR')+' F':'—')+'</td>';
       s += '<td style="border:1px solid #e8e5e0;padding:6px;text-align:right">'+(cl.prixVente?Number(cl.prixVente).toLocaleString('fr-FR')+' F':'—')+'</td>';
+      }
       s += '<td style="border:1px solid #e8e5e0;padding:6px;font-size:11px">'+(ff?ff.nom:'—')+'</td>';
       s += '<td style="border:1px solid #e8e5e0;padding:6px;font-size:11px">'+(cl.source||'—')+'</td>';
       s += '<td style="border:1px solid #e8e5e0;padding:6px;font-size:11px">'+(cl.paiement||'—')+'</td>';
@@ -19078,8 +19132,10 @@ function renderChiffrageProspect(v){
       var fournOpts2 = '<option value="">-- Fournisseur</option>';
       FOURNISSEURS.forEach(function(f){ fournOpts2 += '<option value="'+f.id+'"'+(cl.fournisseurId===f.id?' selected':'')+'>'+f.nom+'</option>'; });
       s += '<td style="border:1px solid #e8e5e0;padding:3px;width:50px"><input type="number" class="inp" data-lid="'+lid+'" data-field="qte" style="font-size:11px;text-align:center;width:100%" value="'+(cl.qte||1)+'" min="1" onchange="updateProspectLigne(this)"></td>';
+      if(!masquerPrixCA){
       s += '<td style="border:1px solid #e8e5e0;padding:3px;width:90px"><input type="number" class="inp" data-lid="'+lid+'" data-field="prixAchat" style="font-size:11px;text-align:right;width:100%" value="'+(cl.prixAchat||'')+'" placeholder="0" onchange="updateProspectLigne(this)"></td>';
       s += '<td style="border:1px solid #e8e5e0;padding:3px;width:90px"><input type="number" class="inp" data-lid="'+lid+'" data-field="prixVente" style="font-size:11px;text-align:right;width:100%" value="'+(cl.prixVente||'')+'" placeholder="0" onchange="updateProspectLigne(this)"></td>';
+      }
       s += '<td style="border:1px solid #e8e5e0;padding:3px"><select class="inp" data-lid="'+lid+'" data-field="fournisseurId" style="font-size:11px;width:100%" onchange="updateProspectLigne(this)">'+fournOpts2+'</select></td>';
       s += '<td style="border:1px solid #e8e5e0;padding:3px"><select class="inp" data-lid="'+lid+'" data-field="source" style="font-size:11px" onchange="updateProspectLigne(this)"><option value="local"'+((!cl.source||cl.source==='local')?' selected':'')+'>Local</option><option value="commande"'+(cl.source==='commande'?' selected':'')+'>Commande</option><option value="stock"'+(cl.source==='stock'?' selected':'')+'>Stock</option></select></td>';
       s += '<td style="border:1px solid #e8e5e0;padding:3px"><select class="inp" data-lid="'+lid+'" data-field="paiement" style="font-size:11px" onchange="updateProspectLigne(this)"><option value="cash"'+(cl.paiement==='cash'?' selected':'')+'>Cash</option><option value="credit"'+(cl.paiement==='credit'?' selected':'')+'>Credit</option></select></td>';
@@ -19093,7 +19149,7 @@ function renderChiffrageProspect(v){
 
   // Total
   var total = v.chiffrage.lignes.reduce(function(acc,l){ return acc+(parseFloat(l.prixVente)||0)*(parseInt(l.qte)||1); }, 0);
-  if(total){
+  if(total && !masquerPrixCA){
     s += '<div style="text-align:right;font-weight:700;font-size:13px;margin-top:8px;color:#185FA5">Total estimé : '+total.toLocaleString('fr-FR')+' F CFA</div>';
   }
 
@@ -19108,7 +19164,9 @@ function renderChiffrageProspect(v){
   } else {
     // Mode lecture seule (par défaut)
     s += '<button class="btn btn-primary btn-sm" onclick="activerModeEditProspect()">&#x270F; Modifier le chiffrage</button>';
-    if(isConfirme && !isValide){
+    if(masquerPrixCA){
+      s += '<span class="xs muted">La validation des prix reste reservee a achats/reception/direction.</span>';
+    } else if(isConfirme && !isValide){
       s += '<button class="btn btn-success btn-sm" onclick="validerChiffrageProspect()">&#x2714; Valider definitivement</button>';
     } else if(isValide){
       s += '<span class="badge b-green">&#x2714; Chiffrage validé</span>';
@@ -21752,6 +21810,10 @@ function pageDashAchats(){
   var tpsMoyCmd   = achatsVehs.length ? '2j 14h' : '—';
 
   var html = '';
+
+  // ── Tableau Prospects — devis en attente (visible aussi pour Achats) ────
+  html += htmlTableauProspects();
+
   // Ligne KPI 1
   html += '<div class="kgrid" style="grid-template-columns:repeat(7,1fr)">';
   html += '<div class="kpi clickable red" data-af="modif" onclick="caAchatsClick(this)" title="Devis a modifier"><div class="kpi-lbl">Devis a modifier</div><div class="kpi-val">'+nbModif+'</div></div>';
@@ -24907,13 +24969,26 @@ function openDet(id){
   b+='<div style="margin-top:14px"><div class="sdiv">Panne</div><div class="g2" style="gap:8px"><div style="background:#faf9f7;padding:9px;border-radius:7px"><div class="xs muted mb8">Motif</div><div class="sm">'+v.motif+'</div></div><div style="background:#faf9f7;padding:9px;border-radius:7px"><div class="xs muted mb8">Symptomes</div><div class="sm">'+(v.symptomes||'—')+'</div></div></div></div>';
   // Pour prospect : pas d'équipe, technicien, date — juste chiffrage libre
   if(v.isProspect){
-    if(currentRole==='reception' || currentRole==='achats' || currentRole==='direction'){
+    if(currentRole==='reception' || currentRole==='achats' || currentRole==='direction' || currentRole==='chef_atelier'){
       b += renderChiffrageProspect(v);
     }
     // Boutons prospect
-    b += '<div style="margin-top:14px;padding:10px;background:#f5f4f1;border-radius:7px;display:flex;gap:8px;flex-wrap:wrap">';
-    b += '<button class="btn btn-success btn-sm" onclick="mettreEnTravauxProspect(\''+v.id+'\')">&#x1F527; Mettre en travaux</button>';
-    b += '<button class="btn btn-sm" onclick="modifierDevisProspect(\''+v.id+'\')" style="color:#185FA5;border-color:#B5D4F4">&#x270F; Modifier le devis</button>';
+    b += '<div style="margin-top:14px;padding:10px;background:#f5f4f1;border-radius:7px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
+    if(currentRole==='reception' || currentRole==='achats' || currentRole==='direction'){
+      var _peutMettreEnTravaux = (v.prospectStatut==='valide_client');
+      if(_peutMettreEnTravaux){
+        b += '<button class="btn btn-success btn-sm" onclick="mettreEnTravauxProspect(\''+v.id+'\')">&#x1F527; Mettre en travaux</button>';
+      } else {
+        b += '<button class="btn btn-sm" disabled title="Le client doit d\'abord valider le devis" style="opacity:0.5;cursor:not-allowed">&#x1F527; Mettre en travaux</button>';
+        b += '<span class="xs muted">(en attente de validation du client)</span>';
+      }
+    }
+    if(currentRole!=='chef_atelier'){
+      // "Modifier le devis" desactive la validation du chiffrage (decision
+      // de prix) — sans objet pour chef d'atelier, qui n'a de toute facon
+      // pas acces aux prix.
+      b += '<button class="btn btn-sm" onclick="modifierDevisProspect(\''+v.id+'\')" style="color:#185FA5;border-color:#B5D4F4">&#x270F; Modifier le devis</button>';
+    }
     b += '<button class="btn btn-danger btn-sm" onclick="annulerDevisProspect(\''+v.id+'\')">&#x2716; Annuler le devis</button>';
     b += '</div>';
     document.getElementById('detBody').innerHTML = b;
@@ -25088,7 +25163,11 @@ function openDet(id){
     'devis_envoye','accord_client','attente_fin','valide_fin',
     'attente_appro','pieces_commande','appro_en_cours','pieces_partiel','pieces_livrees'];
   var _showChiffrage = currentRole==='achats' || currentRole==='direction'
-    || (currentRole==='reception' && _chiffrageStatuts.indexOf(v.status)>=0);
+    || (currentRole==='reception' && _chiffrageStatuts.indexOf(v.status)>=0)
+    // Devis prospect : accessible a reception et chef d'atelier des la
+    // creation, quel que soit son statut ("prospect" n'etait pas dans la
+    // liste ci-dessus, ce qui bloquait meme reception jusqu'ici).
+    || (v.isProspect && (currentRole==='reception' || currentRole==='chef_atelier'));
   if(_showChiffrage){
     b += renderChiffrageSection(v);
   }
@@ -26088,14 +26167,6 @@ function creerDevisProspect(){
   openDet(id);
 }
 
-function envoyerDevisProspect(vid){
-  var v = vehicles.find(function(x){return x.id===vid;});
-  if(!v) return;
-  v.prospectStatut = 'envoye';
-  saveV(); renderPage();
-}
-function envoyerProspectById(btn){ envoyerDevisProspect(btn.getAttribute('data-vid')); }
-
 function exporterPDF(){
   var body = document.getElementById('modalImpressionBody');
   var title = document.getElementById('modalImpressionTitle');
@@ -26726,7 +26797,20 @@ function imprimerDocument(vid, type){
 
   // Télécharger directement sans ouvrir la modale
   var nom = ((isFacture?'Facture':'Devis')+'_'+v.immat).replace(/[^a-zA-Z0-9_-]/g,'_');
-  var blob = new Blob([html], {type:'text/html;charset=utf-8'});
+  // CORRECTION ENCODAGE : le fragment "html" ci-dessus n'a ni <!DOCTYPE>,
+  // ni <head>, ni balise <meta charset>. Une fois telecharge et reouvert
+  // sur un telephone, le navigateur doit deviner l'encodage sans aucun
+  // indice dans le fichier lui-meme — ce qui deforme les caracteres
+  // accentues (e, e) et les espaces insecables utilisees par le format
+  // francais des nombres (150 000 F). Envelopper dans un document HTML
+  // complet avec charset explicite regle le probleme, quel que soit
+  // l'appareil ou le navigateur qui rouvre le fichier ensuite.
+  var htmlComplet = '<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">'
+    +'<meta name="viewport" content="width=device-width, initial-scale=1">'
+    +'<title>'+(isFacture?'Facture':'Devis')+' — '+v.immat+'</title></head><body>'
+    + html
+    + '</body></html>';
+  var blob = new Blob([htmlComplet], {type:'text/html;charset=utf-8'});
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = nom+'.html';
@@ -26860,7 +26944,15 @@ function imprimerBonLivraison(vid){
     +'<footer>CI -ABJ-2007-A6390 — 2345 ABJ 01 — 27 22 43 63 55 — 07 07 73 90 73</footer>';
 
   var nom = ('BonLivraison_'+v.immat).replace(/[^a-zA-Z0-9_-]/g,'_');
-  var blob = new Blob([html], {type:'text/html;charset=utf-8'});
+  // CORRECTION ENCODAGE : voir imprimerDocument() plus haut — le fragment
+  // "html" n'a pas de balise <meta charset>, ce qui deforme les accents
+  // une fois le fichier reouvert sur mobile.
+  var htmlComplet = '<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">'
+    +'<meta name="viewport" content="width=device-width, initial-scale=1">'
+    +'<title>Bon de livraison — '+v.immat+'</title></head><body>'
+    + html
+    + '</body></html>';
+  var blob = new Blob([htmlComplet], {type:'text/html;charset=utf-8'});
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = nom+'.html';
@@ -27040,7 +27132,13 @@ function imprimerFactureForfait(periodeKey){
     +'<footer>CI -ABJ-2007-A6390 — 2345 ABJ 01 — 27 22 43 63 55 — 07 07 73 90 73</footer>';
 
   var nom = ('Forfait_'+client+'_'+moisNom+annee).replace(/[^a-zA-Z0-9_-]/g,'_');
-  var blob = new Blob([html], {type:'text/html;charset=utf-8'});
+  // CORRECTION ENCODAGE : voir imprimerDocument() plus haut.
+  var htmlComplet = '<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">'
+    +'<meta name="viewport" content="width=device-width, initial-scale=1">'
+    +'<title>Facture — '+client+'</title></head><body>'
+    + html
+    + '</body></html>';
+  var blob = new Blob([htmlComplet], {type:'text/html;charset=utf-8'});
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = nom+'.html';
@@ -27257,9 +27355,46 @@ function mettreEnVeilleProspect(vid){
   saveV(); renderPage();
 }
 
+// Marque le devis prospect comme valide par le client (par telephone,
+// en personne...) — le dossier RESTE en mode prospect, dans le meme
+// tableau, mais debloque desormais le bouton "Mettre en travaux".
+function clientAValideDevisByEl(btn){
+  var vid = btn.getAttribute('data-vid');
+  var v = vehicles.find(function(x){return x.id===vid;});
+  if(!v) return;
+  if(!v.chiffrage || !v.chiffrage.lignes || !v.chiffrage.lignes.filter(function(l){return (l.piece||'').trim();}).length){
+    alert('Ajoutez au moins une piece au devis avant de le marquer valide par le client.');
+    return;
+  }
+  // IMPORTANT : demanderConfirmation() (modale personnalisee) est utilisee
+  // ici plutot que confirm() natif — ce dernier peut rester bloque/muet
+  // dans certains environnements d'affichage.
+  demanderConfirmation(
+    'Le client a-t-il valide ce devis ?',
+    '"'+v.client+' — '+v.immat+'" pourra ensuite etre mis en travaux (reception, achats ou direction).',
+    function(){
+      v.prospectStatut = 'valide_client';
+      marquerVehiculeModifie(v.id);
+      ajouterCommentaireSysteme(v, '&#x2714; Devis valide par le client — pret a etre mis en travaux', currentUser ? currentUser.login : currentRole);
+      afficherToastNotif('Devis valide', v.immat+' — le devis est valide, il peut maintenant etre mis en travaux.', 'ok');
+      saveV();
+      renderPage();
+    },
+    { icone:'&#x2714;', libelleOk:'Devis valide par le client' }
+  );
+}
+
 function mettreEnTravauxProspect(vid){
   var v = vehicles.find(function(x){return x.id===vid;});
   if(!v) return;
+  if(currentRole!=='reception' && currentRole!=='achats' && currentRole!=='direction'){
+    alert('Seuls reception, achats et direction peuvent mettre un devis prospect en travaux.');
+    return;
+  }
+  if(v.prospectStatut!=='valide_client'){
+    alert('Le client doit d\'abord valider le devis avant de pouvoir le mettre en travaux.');
+    return;
+  }
   // Ouvrir la modale d'entrée
   document.getElementById('enTravauxVid').value = vid;
   document.getElementById('enTravauxKm').value = v.km||'';
@@ -27281,28 +27416,41 @@ function confirmerEnTravaux(){
   v.km = km;
   v.entree = dateVal ? new Date(dateVal).getTime() : Date.now();
   v.stepStart = Date.now();
-  // Créer v.devis depuis les lignes du chiffrage prospect
-  // pour que renderChiffrageSection fonctionne normalement
+  // Reprise des pieces du devis prospect deja valide par le client —
+  // EXACTEMENT le meme mecanisme que pour un vehicule qui revient avec
+  // des travaux a prevoir deja identifies (tapReprisDe). ensureDevis()
+  // pre-remplira automatiquement le devis du technicien des qu'il ouvrira
+  // sa section, et _devisVisible (fiche detail) rend cette section
+  // visible des l'arrivee grace a tapReprisDe, sans attendre le
+  // diagnostic formel.
   if(v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length && !v.devis){
-    v.devis = {
-      statut: 'valide',
-      soumisLe: Date.now(),
-      lignes: v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).map(function(cl, i){
-        // Utiliser le libreId existant comme id du devis pour maintenir le lien
-        var id = cl.libreId || cl.devisId || ('dl_p_'+Date.now()+'_'+i);
-        cl.devisId = id; // synchroniser
-        return {id:id, piece:cl.piece||'', qte:cl.qte||1, observation:''};
-      })
-    };
+    v.tapReprisDe = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).map(function(cl){
+      return {
+        piece: cl.piece, qte: parseInt(cl.qte,10)||1,
+        prixAchat: cl.prixAchat||'', prixVente: cl.prixVente||'',
+        source: cl.source||'local', fournisseurId: cl.fournisseurId||'',
+        dateOrigine: Date.now()
+      };
+    });
+    // Vider l'ancien chiffrage prospect : le nouveau se reconstruira
+    // proprement depuis le devis du technicien (comme pour tout vehicule
+    // normal), sans quoi les anciennes lignes resteraient en double a
+    // cote des nouvelles lignes synchronisees depuis le devis.
+    v.chiffrage = null;
+    // Construire v.devis IMMEDIATEMENT (via le meme mecanisme que
+    // ensureDevis) plutot que d'attendre qu'un technicien ouvre sa
+    // section en premier — sinon Direction/Achats, qui n'ont pas acces a
+    // la section "Devis" (reservee technicien/chef d'atelier), ne
+    // voyaient rien du tout s'ils consultaient le dossier avant lui.
+    ensureDevis(v);
   }
-  // Circuit selon état du chiffrage
-  if(v.chiffrage && v.chiffrage.valide){
-    v.status = 'attente_fin';
-  } else if(v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length){
-    v.status = 'attente_chiffrage';
-  } else {
-    v.status = 'reception';
-  }
+  // Le vehicule entre TOUJOURS en reception (attente d'attribution
+  // equipe/technicien), exactement comme un vehicule qui vient d'arriver
+  // — la seule difference est que son devis (liste de pieces) est deja
+  // associe, comme pour un vehicule qui revient avec des travaux a
+  // prevoir deja identifies.
+  v.status = 'reception';
+  marquerVehiculeModifie(v.id);
   document.getElementById('modalEnTravaux').style.display = 'none';
   saveV();
   var modalDet = document.getElementById('modalDet');
@@ -27380,7 +27528,15 @@ function annulerDevisProspect(vid){
   v.archive = true;
   v.archiveMotif = 'Devis prospect annulé';
   v.archiveDate = Date.now();
-  saveV(); renderPage();
+  marquerVehiculeModifie(v.id);
+  saveV();
+  // CORRECTION : sans fermer la fiche detail, le vehicule etait bien
+  // archive en arriere-plan mais l'utilisateur restait sur la meme
+  // fenetre sans aucun changement visible, laissant croire que le
+  // bouton ne fonctionnait pas.
+  var modalDet = document.getElementById('modalDet');
+  if(modalDet) modalDet.style.display = 'none';
+  renderPage();
 }
 
 // ============================================================
