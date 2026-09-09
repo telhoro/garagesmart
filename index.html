@@ -616,6 +616,9 @@ tr:hover td{background:#faf9f7}
         <div></div>
       </div>
       <textarea class="inp" id="prospectMotif" placeholder="Motif / travaux demandés *" rows="2" style="width:100%;resize:none"></textarea>
+      <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12px;cursor:pointer">
+        <input type="checkbox" id="prospectTkm" style="width:auto"> Client TKM (quick service)
+      </label>
     </div>
 
     <div style="display:flex;gap:8px;justify-content:flex-end">
@@ -1959,6 +1962,41 @@ var STOCK = [];
 // -> commande (achats a lance la commande) -> livree (la piece entre
 // automatiquement en stock a ce moment-la).
 var COMMANDES_SPECIALES = [];
+// Catalogue de forfaits predefinis pour les vehicules TKM (quick service)
+// — chaque forfait regroupe une liste de pieces standard (prix + source)
+// que Reception/Achats/Direction peuvent appliquer en un clic sur un
+// devis prospect TKM, au lieu de ressaisir les memes pieces a chaque
+// fois.
+var FORFAITS_TKM = [];
+function loadForfaitsTKM(){
+  try{ FORFAITS_TKM = JSON.parse(localStorage.getItem('gos_forfaits_tkm')) || []; }
+  catch(e){ FORFAITS_TKM = []; }
+}
+function saveForfaitsTKM(){
+  marquerCollectionModifieAuto('forfaits_tkm', FORFAITS_TKM);
+  localStorage.setItem('gos_forfaits_tkm', JSON.stringify(FORFAITS_TKM));
+  if(fbDb && fbConnected){
+    fbDb.ref('gos_forfaits_tkm').set(JSON.stringify(FORFAITS_TKM)).catch(function(e){
+      console.error('Firebase forfaits TKM save error:', e);
+    });
+  }
+}
+function syncForfaitsTKMFromFirebase(callback){
+  if(!fbDb){ if(callback) callback(); return; }
+  fbDb.ref('gos_forfaits_tkm').once('value').then(function(snap){
+    var val = snap.val();
+    if(val){
+      try{
+        FORFAITS_TKM = JSON.parse(val) || [];
+        localStorage.setItem('gos_forfaits_tkm', val);
+      }catch(e){}
+    } else if(FORFAITS_TKM.length && fbConnected){
+      fbDb.ref('gos_forfaits_tkm').set(JSON.stringify(FORFAITS_TKM));
+    }
+    initialiserBaselineCollection('forfaits_tkm', FORFAITS_TKM);
+    if(callback) callback();
+  }).catch(function(){ if(callback) callback(); });
+}
 function loadCommandesSpeciales(){
   try{ COMMANDES_SPECIALES = JSON.parse(localStorage.getItem('gos_commandes_speciales')) || []; }
   catch(e){ COMMANDES_SPECIALES = []; }
@@ -2100,7 +2138,7 @@ var NAV = {
     {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'},{id:'acces_clients',e:'AC',l:'Acces clients'},{id:'messages_clients',e:'MC',l:'Messages clients'},{id:'import_historique',e:'IH',l:'Import historique'},{id:'presences',e:'Pr',l:'Presences'}]},
     {l:'Finances',items:[{id:'finances_dashboard',e:'FD',l:'Tableau de bord'},{id:'facturation',e:'F',l:'Facturation'},{id:'caisse',e:'Ca',l:'Caisse'},{id:'dettes_fournisseurs',e:'DF',l:'Dettes fournisseurs'},{id:'prevision_treso',e:'PT',l:'Prevision tresorerie'},{id:'historique_paiements',e:'HP',l:'Historique paiements'},{id:'rapport_financier',e:'RF',l:'Rapport financier'}]},
     {l:'Rentabilite',items:[{id:'rentabilite',e:'RD',l:'Clients Devis'},{id:'rentabilite_forfait',e:'RF',l:'Clients Forfait'},{id:'rentabilite_tkm',e:'RT',l:'Clients TKM'},{id:'rentabilite_sinistres',e:'RS',l:'Sinistres'},{id:'analyse_pieces',e:'AP',l:'Analyse pieces'}]},
-    {l:'Gestion',items:[{id:'archives',e:'Ar',l:'Archives'},{id:'banques',e:'B',l:'Banques'},{id:'charges_fixes',e:'CF',l:'Charges fixes'},{id:'engagements_bancaires',e:'EB',l:'Engagements bancaires'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'stock',e:'St',l:'Gestion du stock'},{id:'travaux_prevoir',e:'TP',l:'Travaux a prevoir'},{id:'devis_differes',e:'DD',l:'Devis differes'},{id:'sinistres',e:'S',l:'Sinistres'},{id:'val_fin',e:'VF',l:'Validation financiere'},{id:'kpi',e:'K',l:'KPI'},{id:'correction_statut_dir',e:'CS',l:'Correction manuelle statut'}]}
+    {l:'Gestion',items:[{id:'archives',e:'Ar',l:'Archives'},{id:'banques',e:'B',l:'Banques'},{id:'charges_fixes',e:'CF',l:'Charges fixes'},{id:'engagements_bancaires',e:'EB',l:'Engagements bancaires'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'stock',e:'St',l:'Gestion du stock'},{id:'forfaits_tkm',e:'FT',l:'Forfaits TKM'},{id:'travaux_prevoir',e:'TP',l:'Travaux a prevoir'},{id:'devis_differes',e:'DD',l:'Devis differes'},{id:'sinistres',e:'S',l:'Sinistres'},{id:'val_fin',e:'VF',l:'Validation financiere'},{id:'kpi',e:'K',l:'KPI'},{id:'correction_statut_dir',e:'CS',l:'Correction manuelle statut'}]}
   ],
   reception:[
     {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'historique',e:'H',l:'Historique'}]},
@@ -2124,7 +2162,7 @@ var NAV = {
     {l:'Suivi',items:[{id:'stats_tech',e:'S',l:'Statistiques'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'}]}
   ],
   testeur:[{l:'Test',items:[{id:'dashboard',e:'D',l:'Tableau de bord'}]}],
-  achats:[{l:'Achats',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'historique',e:'H',l:'Historique'}]},{l:'Stock',items:[{id:'stock',e:'St',l:'Gestion du stock'}]}]
+  achats:[{l:'Achats',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'historique',e:'H',l:'Historique'}]},{l:'Stock',items:[{id:'stock',e:'St',l:'Gestion du stock'},{id:'forfaits_tkm',e:'FT',l:'Forfaits TKM'}]}]
 };
 
 var TITLES = {
@@ -2134,7 +2172,7 @@ var TITLES = {
   travaux_prevoir:'Travaux a prevoir',
   dashboard:'Tableau de bord',sinistres:'Sinistres',clients:'Clients et vehicules',
   a_attribuer:'A attribuer',val_devis:'Validation devis',travaux:'Travaux et Tests',
-  equipes:'Equipes et techniciens',chiffrage:'Chiffrage achats',stats_tech:'Mes statistiques',fournisseurs:'Gestion des fournisseurs',tresorerie:'Tresorerie',rentabilite:'Rentabilite clients Devis',rentabilite_forfait:'Rentabilite clients Forfait',rentabilite_tkm:'Rentabilite clients TKM',rentabilite_sinistres:'Rentabilite sinistres',analyse_pieces:'Analyse des pieces',facturation:'Facturation',creances:'Creances clients',archives:'Archives vehicules',facturation_forfait:'Facturation forfaits',banques:'Gestion des banques',testeur:'Tableau de bord testeur',
+  equipes:'Equipes et techniciens',chiffrage:'Chiffrage achats',stats_tech:'Mes statistiques',fournisseurs:'Gestion des fournisseurs',tresorerie:'Tresorerie',rentabilite:'Rentabilite clients Devis',rentabilite_forfait:'Rentabilite clients Forfait',rentabilite_tkm:'Rentabilite clients TKM',rentabilite_sinistres:'Rentabilite sinistres',forfaits_tkm:'Forfaits TKM',analyse_pieces:'Analyse des pieces',facturation:'Facturation',creances:'Creances clients',archives:'Archives vehicules',facturation_forfait:'Facturation forfaits',banques:'Gestion des banques',testeur:'Tableau de bord testeur',
   appro:'Approvisionnement',val_fin:'Validation financiere',kpi:'KPI et Analyses',
   messages_clients:'Messages clients',
   import_historique:'Import historique',
@@ -3247,6 +3285,14 @@ function ouvrirDevisComplAction(vid, action){
 function prospectBadge(v){
   if(!v.fromProspect) return '';
   return ' <span style="background:#854F0B;color:#fff;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:700">DEVIS</span>';
+}
+
+// Badge de tracabilite pour un dossier passe par le raccourci de
+// circuit TKM (diagnostic, devis technicien, chiffrage achats et
+// validation financiere Direction tous sautes automatiquement).
+function tkmRaccourciBadge(v){
+  if(!v.circuitTkmRaccourci) return '';
+  return ' <span title="Circuit raccourci : pieces deja en stock, direct en travaux" style="background:#185FA5;color:#fff;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:700">&#x26A1; TKM RACCOURCI</span>';
 }
 
 function dcBadge(v){
@@ -5665,7 +5711,7 @@ function uneModaleEstOuverte(){
     'modalModifStock','modalMoveTech','modalNumerosFacture','modalPaiement','modalPaiementChargeFixe',
     'modalPaiementFournisseur','modalRapport','modalRec','modalRepriseChef','modalRepriseTest',
     'modalStatutFacturesClient','modalSuppression','modalSuppressionEmiseForfait','modalTech','modalPaiementEcheance',
-    'modalPiecesACommander','modalNouvelleCS','modalCommandesSpeciales','modalCorrectionStatut'
+    'modalPiecesACommander','modalNouvelleCS','modalCommandesSpeciales','modalCorrectionStatut','modalForfaitTKM'
   ];
   for(var i=0;i<modals.length;i++){
     var el = document.getElementById(modals[i]);
@@ -5691,6 +5737,7 @@ function renderPage(){
   else if(p==='historique') html=pageHistorique();
   else if(p==='fournisseurs') html=pageFournisseurs();
   else if(p==='stock') html=pageStock();
+  else if(p==='forfaits_tkm') html=pageForfaitsTKM();
   else if(p==='travaux_prevoir') html=pageTravauxAPrevoir();
   else if(p==='devis_differes') html=pageDevisDifferes();
   else if(p==='temps_morts') html=pageTempsMorts();
@@ -6076,7 +6123,7 @@ function vtableRec(list){
   list.forEach(function(v){
     var tech=v.technicien?(eqBadgeForTech(v.technicien)+av(v.technicien)+'<span class="xs" style="margin-left:4px">'+v.technicien+'</span>'):(v.equipe_affectee?'<span class="badge b-blue">'+eqLetter(v.equipe_affectee)+'</span> <span class="xs muted">'+v.equipe_affectee+'</span>':'<span class="xs muted">Non attribue</span>');
     h+='<tr>';
-    h+='<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div>'+(v.sinistre?'<div class="xs" style="color:#534AB7">'+v.sinistre+'</div>':'')+dernierCommentaireHtml(v)+'</td>';
+    h+='<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+tkmRaccourciBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div>'+(v.sinistre?'<div class="xs" style="color:#534AB7">'+v.sinistre+'</div>':'')+dernierCommentaireHtml(v)+'</td>';
     h+='<td>'+v.client+'<div class="xs muted">'+v.tel+'</div></td>';
     h+='<td>'+tbadge(v.typeClient)+assuranceBadge(v)+' '+pbadge(v.priorite)+(v.isDevisCompl?'<span class="badge" style="background:#854F0B;color:#fff;font-size:9px">Devis compl.</span>':'')+'</td>';
     h+='<td>'+sbadgeV(v)+'</td>';
@@ -6342,7 +6389,7 @@ function blocALivrer(vehicleList){
       acts += '<button class="btn btn-sm" onclick="openDetById(this)" data-vid="'+v.id+'">&#x1F441;</button>';
 
       tbl += '<tr>';
-      tbl += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
+      tbl += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+tkmRaccourciBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
       tbl += '<td>'+v.client+'<div class="xs muted">'+v.tel+'</div></td>';
       tbl += '<td>'+etapes+'</td>';
       // Phase livraison en couleur + badge immobilisé
@@ -6447,7 +6494,7 @@ function blocARecuperer(vehicleList){
     h += '<tr'+(urgente?' style="background:#FFF5F5"':'')+'>';
     var _rr = v.recuperation || {};
     var remorqBadge = _rr.typeRecup==='remorquage' ? '<span class="badge" style="background:#A32D2D;color:#fff;font-size:9px;margin-left:4px">&#x1F69A; REMORQUAGE</span>' : '';
-    h += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+remorqBadge+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
+    h += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+tkmRaccourciBadge(v)+remorqBadge+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
     h += '<td>'+v.client+'<div class="xs muted">'+v.tel+'</div></td>';
     h += '<td style="font-weight:600;color:'+(urgente?'#A32D2D':'#3B6D11')+'">'+dateStr+'</td>';
     h += '<td class="xs">'+(r.adresse||'<span class="muted">—</span>')+'</td>';
@@ -12476,7 +12523,7 @@ function pageArchives(){
 
   filtered.forEach(function(v){
     html += '<tr style="background:#fafafa;color:#888">';
-    html += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
+    html += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+tkmRaccourciBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
     html += '<td>'+v.client+'<div class="xs muted">'+v.tel+'</div></td>';
     html += '<td><span class="badge b-gray">'+(v.archiveMotif||'—')+'</span></td>';
     html += '<td class="xs">'+(v.archiveDate?new Date(v.archiveDate).toLocaleDateString('fr-FR'):'—')+'</td>';
@@ -16607,6 +16654,255 @@ function pageDevisDifferes(){
   return html;
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// FORFAITS TKM — catalogue de forfaits predefinis (quick service), avec
+// pieces + prix deja composes, pour accelerer la creation d'un devis
+// prospect TKM et permettre le raccourci de circuit (voir
+// validerAttribTech()).
+// ══════════════════════════════════════════════════════════════════════
+function pageForfaitsTKM(){
+  var html = '<div class="info-box" style="margin-bottom:14px">Catalogue de forfaits predefinis pour les vehicules TKM (quick service). Chaque forfait regroupe une liste de pieces avec prix, appliquable en un clic sur un devis prospect TKM.</div>';
+  html += '<button class="btn btn-primary btn-sm" style="margin-bottom:14px" onclick="ouvrirNouveauForfaitTKM()">&#x2795; Nouveau forfait</button>';
+  if(!FORFAITS_TKM.length){
+    html += '<div class="empty">Aucun forfait TKM cree pour le moment.</div>';
+    return html;
+  }
+  html += '<div class="tw"><table><thead><tr><th>Forfait</th><th>Pieces</th><th>Total</th><th>Lie au stock</th><th></th></tr></thead><tbody>';
+  FORFAITS_TKM.forEach(function(f){
+    var total = (f.lignes||[]).reduce(function(s,l){return s+(parseFloat(l.prixVente)||0)*(parseInt(l.qte)||1);},0);
+    var nbLiees = (f.lignes||[]).filter(function(l){return l.source==='stock' && l.stockArticleId;}).length;
+    html += '<tr>';
+    html += '<td class="fw7">'+f.nom+'</td>';
+    html += '<td class="xs">'+(f.lignes||[]).map(function(l){return l.piece+' x'+l.qte;}).join(', ')+'</td>';
+    html += '<td class="fw7">'+total.toLocaleString('fr-FR')+' F</td>';
+    html += '<td>'+(nbLiees===(f.lignes||[]).length && nbLiees>0 ? '<span class="badge b-green">&#x2714; Toutes</span>' : '<span class="badge b-amber">'+nbLiees+'/'+(f.lignes||[]).length+'</span>')+'</td>';
+    html += '<td><div class="flex gap6">';
+    html += '<button class="btn btn-sm" data-fid="'+f.id+'" onclick="ouvrirModifForfaitTKMByEl(this)" style="color:#185FA5;border-color:#B5D4F4">&#x270F;</button>';
+    html += '<button class="btn btn-sm" data-fid="'+f.id+'" onclick="supprimerForfaitTKMByEl(this)" style="color:#A32D2D">&#x1F5D1;</button>';
+    html += '</div></td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+  return html;
+}
+
+var _ftkmEditId = null;
+var _ftkmLignes = [];
+
+// Applique un forfait TKM au chiffrage d'un devis prospect — remplace
+// les lignes existantes par celles du forfait (le forfait EST le devis
+// pour un quick service standard).
+function appliquerForfaitTKMByEl(btn){
+  var vid = btn.getAttribute('data-vid');
+  var v = vehicles.find(function(x){return x.id===vid;});
+  if(!v) return;
+  var sel = document.getElementById('ftkmChoixSelect_'+vid);
+  var fid = sel ? sel.value : '';
+  if(!fid){ alert('Choisissez un forfait dans la liste.'); return; }
+  var f = FORFAITS_TKM.find(function(x){return x.id===fid;});
+  if(!f) return;
+  if(!v.chiffrage) v.chiffrage = {lignes:[], valide:false};
+  v.chiffrage.lignes = f.lignes.map(function(fl){
+    return {
+      libreId: 'cl_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
+      piece: fl.piece, qte: fl.qte, prixAchat: fl.prixAchat, prixVente: fl.prixVente,
+      source: fl.source||'local', fournisseurId: fl.fournisseurId||'',
+      stockArticleId: fl.stockArticleId||'', paiement:'cash'
+    };
+  });
+  v.forfaitTkmApplique = f.id;
+  marquerVehiculeModifie(v.id);
+  saveV();
+  afficherToastNotif('Forfait applique', f.nom+' — '+f.lignes.length+' piece(s) ajoutee(s).', 'ok');
+  openDetKeepEdit(v.id);
+}
+
+function ouvrirNouveauForfaitTKM(){
+  _ftkmEditId = null;
+  _ftkmLignes = [{piece:'', qte:1, prixAchat:'', prixVente:'', source:'stock', stockArticleId:''}];
+  document.getElementById('ftkm_nom').value = '';
+  document.getElementById('modalForfaitTKMTitre').innerHTML = '&#x2795; Nouveau forfait TKM';
+  renderFormForfaitTKMLignes();
+  document.getElementById('modalForfaitTKM').style.display = 'flex';
+}
+function ouvrirModifForfaitTKMByEl(btn){
+  var id = btn.getAttribute('data-fid');
+  var f = FORFAITS_TKM.find(function(x){return x.id===id;});
+  if(!f) return;
+  _ftkmEditId = id;
+  _ftkmLignes = (f.lignes||[]).map(function(l){return Object.assign({}, l);});
+  if(!_ftkmLignes.length) _ftkmLignes = [{piece:'', qte:1, prixAchat:'', prixVente:'', source:'stock', stockArticleId:''}];
+  document.getElementById('ftkm_nom').value = f.nom||'';
+  document.getElementById('modalForfaitTKMTitre').innerHTML = '&#x270F; Modifier le forfait';
+  renderFormForfaitTKMLignes();
+  document.getElementById('modalForfaitTKM').style.display = 'flex';
+}
+function fermerModalForfaitTKM(){
+  document.getElementById('modalForfaitTKM').style.display = 'none';
+}
+function renderFormForfaitTKMLignes(){
+  var html = '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>';
+  html += '<th style="text-align:left;padding:3px">Piece</th><th style="width:70px">Qte</th><th style="width:100px">Prix achat</th><th style="width:100px">Prix vente</th><th style="width:100px">Total</th><th style="width:150px">Article stock lie</th><th></th>';
+  html += '</tr></thead><tbody id="ftkmLignesBody">';
+  var totalGeneral = 0;
+  _ftkmLignes.forEach(function(l, i){
+    var articleLie = l.stockArticleId ? stockArticleById(l.stockArticleId) : null;
+    var totalLigne = (parseFloat(l.prixVente)||0) * (parseInt(l.qte,10)||1);
+    totalGeneral += totalLigne;
+    html += '<tr>';
+    html += '<td><input class="inp" id="ftkmPiece_'+i+'" style="font-size:12px" value="'+(l.piece||'')+'" data-i="'+i+'" data-f="piece" autocomplete="off" oninput="updateFtkmLigne(this);afficherAutocompleteFtkm(this,'+i+')" onblur="setTimeout(function(){var ac=document.getElementById(\'ac_ftkmPiece_'+i+'\');if(ac)ac.remove();},200)"></td>';
+    html += '<td><input type="number" min="1" class="inp" style="font-size:12px;width:100%;box-sizing:border-box;padding:4px 3px;text-align:center" value="'+(l.qte||1)+'" data-i="'+i+'" data-f="qte" onchange="updateFtkmLigne(this);renderFormForfaitTKMLignes()"></td>';
+    html += '<td><input type="number" min="0" class="inp" style="font-size:12px" value="'+(l.prixAchat||'')+'" data-i="'+i+'" data-f="prixAchat" onchange="updateFtkmLigne(this)"></td>';
+    html += '<td><input type="number" min="0" class="inp" style="font-size:12px" value="'+(l.prixVente||'')+'" data-i="'+i+'" data-f="prixVente" onchange="updateFtkmLigne(this);renderFormForfaitTKMLignes()"></td>';
+    html += '<td style="font-family:monospace;font-weight:700;color:#185FA5;text-align:right;padding-right:6px">'+(totalLigne?totalLigne.toLocaleString('fr-FR')+' F':'—')+'</td>';
+    html += '<td>';
+    if(articleLie){
+      html += '<span class="badge b-green" style="font-size:10px">&#x2714; '+articleLie.nom+'</span> <button class="btn btn-sm" style="font-size:9px;padding:1px 4px" data-i="'+i+'" onclick="delierStockFtkmLigne(this)">&#x2715;</button>';
+    } else {
+      html += '<input class="inp" placeholder="Rechercher..." style="font-size:11px" data-i="'+i+'" oninput="rechercherStockFtkmLigne(this)" autocomplete="off">';
+      html += '<div data-res-i="'+i+'" class="xs" style="position:relative"></div>';
+    }
+    html += '</td>';
+    html += '<td><button class="btn btn-sm" style="color:#A32D2D" data-i="'+i+'" onclick="supprimerFtkmLigne(this)">&#x2715;</button></td>';
+    html += '</tr>';
+  });
+  html += '<tr style="background:#f5f4f1;font-weight:700"><td colspan="4" style="text-align:right;padding:6px">Total du forfait :</td>';
+  html += '<td style="font-family:monospace;color:#185FA5;text-align:right;padding-right:6px">'+totalGeneral.toLocaleString('fr-FR')+' F</td><td></td><td></td></tr>';
+  html += '</tbody></table>';
+  html += '<button class="btn btn-sm" style="margin-top:8px" onclick="ajouterFtkmLigne()">+ Ajouter une ligne</button>';
+  document.getElementById('ftkmLignesContainer').innerHTML = html;
+}
+// Autosuggestion en direct sur le champ piece du forfait — meme
+// mecanisme que dans le chiffrage normal (afficherAutocompletePiece),
+// adapte pour ecrire dans _ftkmLignes au lieu de v.chiffrage.lignes. La
+// selection pre-remplit aussi le prix d'achat et de vente.
+function afficherAutocompleteFtkm(inp, i){
+  var q = inp.value.trim().toLowerCase();
+  var existing = document.getElementById('ac_ftkmPiece_'+i);
+  if(existing) existing.remove();
+  if(!q || q.length < 2) return;
+
+  var cat = getCataloguePieces();
+  var matches = cat.filter(function(p){
+    return p.piece.toLowerCase().indexOf(q)>=0;
+  }).sort(function(a,b){ return (b.count||1)-(a.count||1); }).slice(0,6);
+  if(!matches.length) return;
+
+  var rect = inp.getBoundingClientRect();
+  var ac = document.createElement('div');
+  ac.id = 'ac_ftkmPiece_'+i;
+  ac.style.cssText = 'position:fixed;left:'+rect.left+'px;top:'+(rect.bottom+2)+'px;width:'+Math.max(rect.width,280)+'px;background:#fff;border:1px solid #ccc;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.15);z-index:99999;max-height:200px;overflow-y:auto';
+
+  matches.forEach(function(p){
+    var item = document.createElement('div');
+    item.style.cssText = 'padding:8px 12px;cursor:pointer;border-bottom:1px solid #f0ede8;font-size:12px';
+    var fournAC = FOURNISSEURS.find(function(f){return f.id===p.fournisseurId;});
+    item.innerHTML = '<div style="font-weight:600">'+p.piece+'</div>'
+      +'<div style="color:#666;font-size:11px;display:flex;gap:12px;margin-top:2px">'
+      +'<span>'+p.marque+' '+p.modele+'</span>'
+      +(p.prixAchat?'<span style="color:#185FA5">Achat: '+p.prixAchat.toLocaleString('fr-FR')+' F</span>':'')
+      +(p.prixVente?'<span style="color:#3B6D11">Vente: '+p.prixVente.toLocaleString('fr-FR')+' F</span>':'')
+      +(fournAC?'<span style="color:#854F0B">'+fournAC.nom+'</span>':'')
+      +'</div>';
+    item.addEventListener('mousedown', function(e){
+      e.preventDefault();
+      var acEl = document.getElementById('ac_ftkmPiece_'+i);
+      if(acEl) acEl.remove();
+      selectionnerPieceCatFtkm(p, i);
+    });
+    item.addEventListener('mouseover', function(){ item.style.background='#f5f4f1'; });
+    item.addEventListener('mouseout', function(){ item.style.background=''; });
+    ac.appendChild(item);
+  });
+  document.body.appendChild(ac);
+}
+function selectionnerPieceCatFtkm(p, i){
+  if(p.piece) _ftkmLignes[i].piece = p.piece;
+  if(p.prixAchat) _ftkmLignes[i].prixAchat = p.prixAchat;
+  if(p.prixVente) _ftkmLignes[i].prixVente = p.prixVente;
+  if(p.fournisseurId) _ftkmLignes[i].fournisseurId = p.fournisseurId;
+  if(p.source) _ftkmLignes[i].source = p.source;
+  renderFormForfaitTKMLignes();
+}
+
+function updateFtkmLigne(el){
+  var i = parseInt(el.getAttribute('data-i'),10);
+  var f = el.getAttribute('data-f');
+  _ftkmLignes[i][f] = (f==='qte'||f==='prixAchat'||f==='prixVente') ? el.value : el.value;
+}
+function ajouterFtkmLigne(){
+  _ftkmLignes.push({piece:'', qte:1, prixAchat:'', prixVente:'', source:'stock', stockArticleId:''});
+  renderFormForfaitTKMLignes();
+}
+function supprimerFtkmLigne(btn){
+  var i = parseInt(btn.getAttribute('data-i'),10);
+  _ftkmLignes.splice(i,1);
+  if(!_ftkmLignes.length) _ftkmLignes.push({piece:'', qte:1, prixAchat:'', prixVente:'', source:'stock', stockArticleId:''});
+  renderFormForfaitTKMLignes();
+}
+function delierStockFtkmLigne(btn){
+  var i = parseInt(btn.getAttribute('data-i'),10);
+  _ftkmLignes[i].stockArticleId = '';
+  renderFormForfaitTKMLignes();
+}
+function rechercherStockFtkmLigne(el){
+  var i = parseInt(el.getAttribute('data-i'),10);
+  var q = (el.value||'').toLowerCase().trim();
+  var resEl = document.querySelector('[data-res-i="'+i+'"]');
+  if(!resEl) return;
+  if(q.length<2){ resEl.innerHTML=''; return; }
+  var matches = STOCK.filter(function(a){return (a.nom||'').toLowerCase().indexOf(q)>=0;}).slice(0,5);
+  if(!matches.length){ resEl.innerHTML = '<span class="muted">Aucun article</span>'; return; }
+  resEl.innerHTML = '<div style="position:absolute;background:#fff;border:1px solid #e8e5e0;border-radius:6px;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.1);min-width:200px">'
+    + matches.map(function(a){
+        return '<div style="padding:5px 8px;cursor:pointer;font-size:11px" data-i="'+i+'" data-aid="'+a.id+'" onclick="lierStockFtkmLigne(this)">'+a.nom+' <span class="muted">('+stockDispo(a)+' dispo)</span></div>';
+      }).join('')
+    + '</div>';
+}
+function lierStockFtkmLigne(el){
+  var i = parseInt(el.getAttribute('data-i'),10);
+  var aid = el.getAttribute('data-aid');
+  var a = stockArticleById(aid);
+  if(!a) return;
+  _ftkmLignes[i].stockArticleId = aid;
+  _ftkmLignes[i].source = 'stock';
+  if(!_ftkmLignes[i].piece) _ftkmLignes[i].piece = a.nom;
+  if(!_ftkmLignes[i].prixAchat) _ftkmLignes[i].prixAchat = a.prixAchat||'';
+  if(!_ftkmLignes[i].prixVente) _ftkmLignes[i].prixVente = a.prixVente||'';
+  renderFormForfaitTKMLignes();
+}
+function enregistrerForfaitTKM(){
+  var nom = (document.getElementById('ftkm_nom').value||'').trim();
+  if(!nom){ alert('Donnez un nom au forfait.'); return; }
+  var lignesValides = _ftkmLignes.filter(function(l){return (l.piece||'').trim();});
+  if(!lignesValides.length){ alert('Ajoutez au moins une piece.'); return; }
+  if(_ftkmEditId){
+    var f = FORFAITS_TKM.find(function(x){return x.id===_ftkmEditId;});
+    if(f){ f.nom = nom; f.lignes = lignesValides; }
+  } else {
+    FORFAITS_TKM.push({id:'ftkm_'+Date.now()+'_'+Math.random().toString(36).slice(2,6), nom:nom, lignes:lignesValides});
+  }
+  saveForfaitsTKM();
+  fermerModalForfaitTKM();
+  renderPage();
+  afficherToastNotif('Forfait enregistre', nom, 'ok');
+}
+function supprimerForfaitTKMByEl(btn){
+  var id = btn.getAttribute('data-fid');
+  var f = FORFAITS_TKM.find(function(x){return x.id===id;});
+  if(!f) return;
+  demanderConfirmation(
+    'Supprimer ce forfait ?',
+    '"'+f.nom+'" — cette action ne supprime aucun devis deja etabli avec ce forfait, seulement le modele.',
+    function(){
+      FORFAITS_TKM = FORFAITS_TKM.filter(function(x){return x.id!==id;});
+      saveForfaitsTKM();
+      renderPage();
+    },
+    { icone:'&#x1F5D1;', libelleOk:'Supprimer', danger:true }
+  );
+}
+
 function pageTravauxAPrevoir(){
   // Regrouper par immatriculation (un seul dossier porteur par immat)
   var immats = {};
@@ -16920,7 +17216,7 @@ function pageDashReception(){
     hLiv += '<div class="tw"><table><thead><tr><th>Vehicule</th><th>Client</th><th>Date livraison</th><th>Action</th></tr></thead><tbody>';
     livres.forEach(function(v){
       hLiv += '<tr>';
-      hLiv += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
+      hLiv += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+tkmRaccourciBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
       hLiv += '<td>'+v.client+'</td>';
       hLiv += '<td class="xs muted">'+(v.stepStart?new Date(v.stepStart).toLocaleDateString('fr-FR'):'—')+'</td>';
       hLiv += '<td><div class="flex gap6"><button class="btn btn-success btn-sm" onclick="livraisonStep(this)" data-vid="'+v.id+'" data-next="facture_deposee">&#x2714; Facture deposee</button><button class="btn btn-sm" onclick="openDetById(this)" data-vid="'+v.id+'">&#x1F441;</button></div></td>';
@@ -17005,7 +17301,7 @@ function recTableauDevis(title, list, badgeClass){
     acts += ' <button class="btn btn-sm" onclick="openDetById(this)" data-vid="'+v.id+'">&#x1F441;</button>';
     h += '<tr>';
 
-    h += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div>'+dernierCommentaireHtml(v)+'</td>';
+    h += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+tkmRaccourciBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div>'+dernierCommentaireHtml(v)+'</td>';
     h += '<td>'+v.client+'<div class="xs muted">'+v.tel+'</div></td>';
     h += '<td>'+tbadge(v.typeClient)+assuranceBadge(v)+'</td>';
     h += '<td>'+sbadgeV(v)+'</td>';
@@ -17236,7 +17532,7 @@ function caTableau(title, list, badgeClass, subtitle){
     acts += '<button class="btn btn-sm" onclick="openDetById(this)" data-vid="'+v.id+'" title="Visualiser / Affecter">&#x1F441;</button>';
 
     h += '<tr>';
-    h += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div>';
+    h += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+tkmRaccourciBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div>';
     h += dernierCommentaireHtml(v);
     h += '</td>';
     h += '<td>'+v.client+'<div class="xs muted">'+v.tel+'</div></td>';
@@ -17286,6 +17582,24 @@ function ouvrirAttribTech(btn){
   document.getElementById('modalAttribTech').style.display = 'flex';
 }
 
+// Verifie que TOUTES les pieces du chiffrage d'un vehicule TKM sont
+// explicitement liees a un article de stock avec une quantite
+// disponible suffisante — condition necessaire pour le raccourci de
+// circuit TKM (voir validerAttribTech()). Une seule piece manquante ou
+// non liee au stock desactive le raccourci (retombe sur le circuit
+// normal, ou achats pourra commander ce qui manque).
+function toutesPiecesTkmEnStock(v){
+  if(!v.chiffrage || !v.chiffrage.lignes || !v.chiffrage.lignes.length) return false;
+  var lignesValides = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
+  if(!lignesValides.length) return false;
+  return lignesValides.every(function(cl){
+    if(cl.source!=='stock' || !cl.stockArticleId) return false;
+    var article = stockArticleById(cl.stockArticleId);
+    if(!article) return false;
+    return stockDispo(article) >= (parseInt(cl.qte,10)||1);
+  });
+}
+
 function validerAttribTech(){
   var id = document.getElementById('attribTechVid').value;
   var v = vehicles.find(function(x){return x.id===id;});
@@ -17296,8 +17610,29 @@ function validerAttribTech(){
   v.technicien = newTech;
   // Si véhicule en début de circuit → attente_diag, sinon → travaux_attente (reprise)
   var DEBUT_CIRCUIT = ['reception','attente_diag'];
+  var raccourciTkmApplique = false;
   if(DEBUT_CIRCUIT.indexOf(v.status) >= 0){
-    v.status = 'attente_diag';
+    // RACCOURCI TKM : quick service avec forfait predefini et pieces
+    // deja en stock — inutile de repasser par diagnostic, devis
+    // technicien, chiffrage achats et validation financiere direction,
+    // puisque tout est deja connu et disponible. Va directement en
+    // travaux. Si une seule piece manque au stock, retombe sur le
+    // circuit normal (achats pourra commander ce qui manque).
+    if(v.tkm===true && toutesPiecesTkmEnStock(v)){
+      v.chiffrage.lignes.forEach(function(cl){ if((cl.piece||'').trim()) cl.valideDir = true; });
+      v.chiffrage.valide = true;
+      v.chiffrage.valideDir = true;
+      v.chiffrage.valideDirLe = Date.now();
+      reserverStockVehicule(v);
+      v.status = 'travaux_cours';
+      v.piecesConfirmees = true;
+      v.circuitTkmRaccourci = true;
+      raccourciTkmApplique = true;
+      marquerJalonsTemps(v, 'travaux_cours');
+      ajouterCommentaireSysteme(v, '&#x26A1; Circuit TKM raccourci — pieces en stock, direct en travaux (diagnostic, chiffrage et validation financiere sautes)', currentUser ? currentUser.login : 'Chef atelier');
+    } else {
+      v.status = 'attente_diag';
+    }
   } else {
     v.status = 'travaux_attente';
   marquerJalonsTemps(v, 'travaux_attente');
@@ -17306,8 +17641,8 @@ function validerAttribTech(){
   v.stepStart = Date.now();
   if(motif){
     v.commentaire_chef = motif; // visible pour le technicien dans son tableau
-    if(DEBUT_CIRCUIT.indexOf(v.status) >= 0 || v.status === 'attente_diag'){
-      // Première attribution : commentaire d'instruction
+    if(raccourciTkmApplique || DEBUT_CIRCUIT.indexOf(v.status) >= 0 || v.status === 'attente_diag'){
+      // Première attribution (y compris raccourci TKM) : commentaire d'instruction
       ajouterCommentaireSysteme(v, '&#x1F4CB; Instruction chef : '+motif, currentUser ? currentUser.login : 'Chef atelier');
     } else {
       // Reprise : commentaire de reprise
@@ -17317,9 +17652,13 @@ function validerAttribTech(){
       v.interventions.push({date:Date.now(), motif:'Reattribution : '+motif, travaux:[], pieces:[], techniciens:[newTech], statut:'Reattribution technicien'});
     }
   }
+  marquerVehiculeModifie(v.id);
   saveV();
   document.getElementById('modalAttribTech').style.display='none';
   renderPage();
+  if(raccourciTkmApplique){
+    afficherToastNotif('Circuit TKM raccourci', v.immat+' est directement en travaux — pieces deja en stock.', 'ok');
+  }
   // Afficher confirmation si commentaire ajouté
   if(motif){
     var toast = document.createElement('div');
@@ -17609,7 +17948,7 @@ function pageDashChefAtelier(role){
     aConfirmer.forEach(function(v){
       var piecesLivrees = (v.chiffrage&&v.chiffrage.lignes) ? v.chiffrage.lignes.filter(function(cl){return cl.livree&&(cl.piece||'').trim();}).map(function(cl){return cl.piece+' x'+cl.qte;}).join(', ') : '—';
       hConf += '<tr>';
-      hConf += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div>'+dernierCommentaireHtml(v)+'</td>';
+      hConf += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+tkmRaccourciBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div>'+dernierCommentaireHtml(v)+'</td>';
       hConf += '<td>'+v.client+'</td>';
       hConf += '<td>'+(v.technicien?eqBadgeForTech(v.technicien)+av(v.technicien)+' <span class="xs">'+v.technicien+'</span>':'<span class="muted xs">—</span>')+'</td>';
       hConf += '<td class="xs">'+piecesLivrees+'</td>';
@@ -17650,7 +17989,7 @@ function pageDashChefAtelier(role){
     html += '<div class="tw"><table><thead><tr><th>Vehicule</th><th>Client</th><th>Technicien</th><th>Observation testeur</th><th>Actions</th></tr></thead><tbody>';
     aValiderTravaux.forEach(function(v){
       html += '<tr>';
-      html += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
+      html += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+tkmRaccourciBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
       html += '<td>'+v.client+'</td>';
       html += '<td>'+(v.technicien||'—')+'</td>';
       html += '<td class="xs muted">'+(v.commentaire_reprise_test||'—')+'</td>';
@@ -18194,7 +18533,7 @@ function techTableau(title, list, badgeClass){
 
     h += '<tr>';
 
-    h += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
+    h += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+tkmRaccourciBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
     h += '<td>'+v.client+'<div class="xs muted">'+v.tel+'</div></td>';
     h += '<td>'+tbadge(v.typeClient)+assuranceBadge(v)+' '+pbadge(v.priorite)+(v.isDevisCompl?'<span class="badge" style="background:#854F0B;color:#fff;font-size:9px">Devis compl.</span>':'')+'</td>';
     h += '<td>'+sbadgeV(v)+'</td>';
@@ -18247,7 +18586,7 @@ function pageDashTesteur(){
     html += '</tr></thead><tbody>';
     aATester.forEach(function(v){
       html += '<tr>';
-      html += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
+      html += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+tkmRaccourciBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
       html += '<td>'+v.client+'</td>';
       html += '<td>'+(v.technicien||'—')+'</td>';
       html += '<td><div class="flex gap6"><button class="btn btn-primary btn-sm" onclick="advanceById(this)" data-vid="'+v.id+'">&#x1F50D; Demarrer test</button><button class="btn btn-sm" onclick="openDetById(this)" data-vid="'+v.id+'">&#x1F441;</button></div></td>';
@@ -18268,7 +18607,7 @@ function pageDashTesteur(){
     html += '</tr></thead><tbody>';
     enTest.forEach(function(v){
       html += '<tr>';
-      html += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
+      html += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+tkmRaccourciBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
       html += '<td>'+v.client+'</td>';
       html += '<td>'+(v.technicien||'—')+'</td>';
       html += '<td><div class="flex gap6">';
@@ -18309,7 +18648,7 @@ function testeurLignes(title, list, badge){
       acts += '<button class="btn btn-danger btn-sm" onclick="openRepriseTestModal(this)" data-vid="'+v.id+'">&#x21BA; Reprendre travaux</button>';
     }
     acts += ' <button class="btn btn-sm" onclick="openDetById(this)" data-vid="'+v.id+'">&#x1F441;</button>';
-    h += '<tr><td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
+    h += '<tr><td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+tkmRaccourciBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
     h += '<td>'+v.client+'</td>';
     h += '<td>'+(v.technicien?'<span class="xs">'+v.technicien+'</span>':'<span class="muted xs">—</span>')+'</td>';
     h += '<td>'+sbadgeV(v)+'</td>';
@@ -18467,7 +18806,7 @@ function pageStatsTech(){
   } else {
     html += '<div class="tw"><table><thead><tr><th>Vehicule</th><th>Client</th><th>Statut final</th><th>Nature</th><th>Date livraison</th></tr></thead><tbody>';
     livresP.forEach(function(v){
-      html += '<tr><td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
+      html += '<tr><td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+tkmRaccourciBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div></td>';
       html += '<td>'+v.client+'</td><td>'+sbadgeV(v)+'</td>';
       html += '<td>'+(v.nature==='Retour client'?'<span class="badge b-red">Retour client</span>':'<span class="badge b-green">Nouvelle panne</span>')+'</td>';
       html += '<td class="xs">'+(v.livraison?new Date(v.livraison).toLocaleDateString('fr-FR'):'—')+'</td></tr>';
@@ -19091,6 +19430,20 @@ function renderChiffrageProspect(v){
     s += '<div style="background:#FFF9F0;color:#854F0B;padding:8px 12px;border-radius:7px;margin-bottom:10px;font-size:12px">&#x23F3; Chiffrage confirmé — vérifiez avant validation définitive</div>';
   }
   s += '<div style="font-weight:700;font-size:13px;margin-bottom:8px;color:#185FA5">&#x1F4CB; Chiffrage du devis</div>';
+
+  // Selecteur de forfait TKM — applique en un clic une liste de pieces
+  // predefinie, au lieu de tout ressaisir a chaque fois. Reserve aux
+  // roles avec acces aux prix (le forfait en contient).
+  if(v.tkm===true && !locked && !masquerPrixCA && FORFAITS_TKM.length){
+    s += '<div style="background:#EBF3FB;border-radius:7px;padding:8px 10px;margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
+    s += '<span class="xs" style="color:#185FA5;font-weight:600">&#x26A1; Forfait TKM :</span>';
+    s += '<select class="inp" id="ftkmChoixSelect_'+v.id+'" style="width:auto;font-size:12px">';
+    s += '<option value="">-- Choisir un forfait --</option>';
+    FORFAITS_TKM.forEach(function(f){ s += '<option value="'+f.id+'">'+f.nom+'</option>'; });
+    s += '</select>';
+    s += '<button class="btn btn-sm btn-primary" onclick="appliquerForfaitTKMByEl(this)" data-vid="'+v.id+'">Appliquer</button>';
+    s += '</div>';
+  }
 
   // Tableau de saisie
   s += '<div style="overflow-x:auto'+(locked?';opacity:0.7':'')+'"><table style="width:100%;border-collapse:collapse;font-size:12px">';
@@ -21879,7 +22232,7 @@ function pageDashAchats(){
     devisComplVehs.forEach(function(v){
       var pieces = v.chiffrageCompl.lignes.map(function(l){return l.piece+' x'+l.qte;}).join(', ');
       hCompl += '<tr>';
-      hCompl += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div>'+dernierCommentaireHtml(v)+'</td>';
+      hCompl += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+tkmRaccourciBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div>'+dernierCommentaireHtml(v)+'</td>';
       hCompl += '<td>'+v.client+'</td>';
       hCompl += '<td>'+sbadgeV(v)+'</td>';
       hCompl += '<td class="xs">'+pieces+'</td>';
@@ -22245,7 +22598,7 @@ function achatsTableau(title, list, badgeClass, type){
 
     h += '<tr>';
 
-    h += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div>'+dernierCommentaireHtml(v)+'</td>';
+    h += '<td><div class="fw7">'+v.immat+dcBadge(v)+prospectBadge(v)+tkmRaccourciBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div>'+dernierCommentaireHtml(v)+'</td>';
     h += '<td>'+v.client+'<div class="xs muted">'+v.tel+'</div></td>';
     h += '<td>'+tbadge(v.typeClient)+assuranceBadge(v)+'</td>';
     h += '<td>'+sbadgeV(v)+'</td>';
@@ -24981,6 +25334,9 @@ function openDet(id){
   b+='<div><div class="sdiv">Client</div><div class="drow"><span class="dlbl">Nom</span><strong>'+v.client+'</strong></div>'+(v.proprietaireVehicule && v.proprietaireVehicule!==v.client ? '<div class="drow"><span class="dlbl">Proprietaire reel</span><span style="color:#3B6D11;font-weight:600">'+v.proprietaireVehicule+'</span></div>' : '')+'<div class="drow"><span class="dlbl">Tel</span>'+v.tel+'</div><div class="drow"><span class="dlbl">Email</span>'+(v.email||'—')+'</div><div class="drow"><span class="dlbl">Type</span>'+tbadge(v.typeClient)+assuranceBadge(v)+'</div><div class="drow"><span class="dlbl">Priorite</span>'+pbadge(v.priorite)+'</div></div></div>';
   b += htmlSectionSinistre(v);
   b += htmlSequenceFinTravauxAssurance(v);
+  if(v.circuitTkmRaccourci){
+    b += '<div style="background:#EBF3FB;color:#185FA5;padding:8px 12px;border-radius:7px;margin-bottom:10px;font-size:12px">&#x26A1; Circuit TKM raccourci : pieces deja en stock au moment de l\'attribution — diagnostic, devis technicien, chiffrage achats et validation financiere directement sautes.</div>';
+  }
   b+='<div style="margin-top:14px"><div class="sdiv">Panne</div><div class="g2" style="gap:8px"><div style="background:#faf9f7;padding:9px;border-radius:7px"><div class="xs muted mb8">Motif</div><div class="sm">'+v.motif+'</div></div><div style="background:#faf9f7;padding:9px;border-radius:7px"><div class="xs muted mb8">Symptomes</div><div class="sm">'+(v.symptomes||'—')+'</div></div></div></div>';
   // Pour prospect : pas d'équipe, technicien, date — juste chiffrage libre
   if(v.isProspect){
@@ -25947,6 +26303,8 @@ function ouvrirDevisProspect(){
     var el = document.getElementById(id); if(el) el.value = '';
   });
   var tc = document.getElementById('prospectTypeClient');
+  var tkmEl = document.getElementById('prospectTkm');
+  if(tkmEl) tkmEl.checked = false;
   if(tc) tc.value = 'devis';
   var res = document.getElementById('prospectClientResults');
   if(res) res.innerHTML = '';
@@ -26170,6 +26528,7 @@ function creerDevisProspect(){
     entree: Date.now(),
     status: 'prospect',
     priorite: 'normal',
+    tkm: !!(document.getElementById('prospectTkm') && document.getElementById('prospectTkm').checked),
     devis: { statut: 'brouillon', lignes: [] },
     chiffrage: null
   };
@@ -31057,6 +31416,9 @@ function tryInitFirebase(){
     // Sync personnel et comptes depuis Firebase après connexion
     setTimeout(function(){
       syncStockFromFirebase();
+      syncForfaitsTKMFromFirebase(function(){
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      });
       syncCommandesSpecialesFromFirebase(function(){
         if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
       });
@@ -31394,6 +31756,18 @@ function initFirebase(){
       }catch(e){}
     }
   });
+  fbDb.ref('gos_forfaits_tkm').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        var distantFT = JSON.parse(val)||[];
+        FORFAITS_TKM = fusionnerCollectionParItem(FORFAITS_TKM, distantFT, lastLocalTs);
+        initialiserBaselineCollection('forfaits_tkm', FORFAITS_TKM);
+        localStorage.setItem('gos_forfaits_tkm', JSON.stringify(FORFAITS_TKM));
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
+    }
+  });
   // Caisse : de l'argent est en jeu, meme traitement complet que les
   // autres collections financieres — ajout d'une ecoute en direct qui
   // n'existait pas du tout jusqu'ici.
@@ -31594,7 +31968,7 @@ window.onload=function(){
       v.status = 'devis_termine'; migrated = true;
     }
   });
-  if(migrated) saveV();loadPersonnel();initFournisseurs();initBanques();loadForfaitFactures();loadStock();loadCommandesSpeciales();loadChargesFixes();loadEngagementsBancaires();loadForfaitsClients();loadClientsSansVehicule();loadExpositionSnapshots();
+  if(migrated) saveV();loadPersonnel();initFournisseurs();initBanques();loadForfaitFactures();loadStock();loadCommandesSpeciales();loadForfaitsTKM();loadChargesFixes();loadEngagementsBancaires();loadForfaitsClients();loadClientsSansVehicule();loadExpositionSnapshots();
   migrerPaiementsClients(); // migration retroactive (voir commentaire de la fonction) — necessite vehicles ET FORFAIT_FACTURES deja charges
   // Alimenter le catalogue pièces depuis l'historique existant
   vehicles.forEach(function(v){ if(v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length) indexerPiecesChiffrage(v); });
@@ -31737,6 +32111,22 @@ window.onload=function(){
   </div>
 </div>
 </div>
+
+<!-- MODAL FORFAIT TKM -->
+<div class="overlay" id="modalForfaitTKM" style="display:none;z-index:1001" onclick="if(event.target===this)fermerModalForfaitTKM()">
+<div class="modal" style="max-width:820px">
+  <div class="mhead"><h2 id="modalForfaitTKMTitre">&#x2795; Nouveau forfait TKM</h2><button class="btn btn-sm" onclick="fermerModalForfaitTKM()">X</button></div>
+  <div class="mbody">
+    <div class="fr" style="margin-bottom:12px"><label class="fl">Nom du forfait</label><input class="inp" id="ftkm_nom" placeholder="Ex: Vidange standard"></div>
+    <div id="ftkmLignesContainer"></div>
+  </div>
+  <div class="mfoot">
+    <button class="btn" onclick="fermerModalForfaitTKM()">Annuler</button>
+    <button class="btn btn-primary" onclick="enregistrerForfaitTKM()">&#x1F4BE; Enregistrer</button>
+  </div>
+</div>
+</div>
+
 
 <!-- MODAL CORRECTION MANUELLE DE STATUT (Direction uniquement) -->
 <div class="overlay" id="modalCorrectionStatut" style="display:none" onclick="if(event.target===this)fermerCorrectionStatut()">
