@@ -583,6 +583,7 @@ tr:hover td{background:#faf9f7}
     <input type="hidden" id="prospectTelH">
     <input type="hidden" id="prospectEmailH">
     <input type="hidden" id="prospectTypeH">
+    <input type="hidden" id="prospectTkmH" value="0">
 
     <!-- Section véhicule (toujours visible après sélection) -->
     <div id="prospectSectVeh" style="display:none;border-top:1px solid #f0ede8;padding-top:12px;margin-bottom:14px">
@@ -617,7 +618,7 @@ tr:hover td{background:#faf9f7}
       </div>
       <textarea class="inp" id="prospectMotif" placeholder="Motif / travaux demandés *" rows="2" style="width:100%;resize:none"></textarea>
       <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12px;cursor:pointer">
-        <input type="checkbox" id="prospectTkm" style="width:auto"> Client TKM (quick service)
+        <input type="checkbox" id="prospectTkm" style="width:auto" onchange="document.getElementById('prospectTkmH').value=this.checked?'1':'0'"> Client TKM (quick service)
       </label>
     </div>
 
@@ -17163,6 +17164,7 @@ function htmlTableauProspects(){
     }
     if(!restreintCA){
       html += '<button class="btn btn-sm" data-vid="'+vid+'" onclick="differerProspectById(this)" style="color:#854F0B;border-color:#E8A44A" title="Le client reflechit : le devis reste relancable">&#x23F8; Devis differe</button>';
+      html += '<button class="btn btn-sm" data-vid="'+vid+'" onclick="annulerDevisProspectByEl(this)" style="color:#A32D2D;border-color:#F0B8B8" title="Annuler definitivement ce devis prospect">&#x2716; Annuler devis</button>';
     }
     html += '</div></td></tr>';
   });
@@ -17593,10 +17595,22 @@ function toutesPiecesTkmEnStock(v){
   var lignesValides = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
   if(!lignesValides.length) return false;
   return lignesValides.every(function(cl){
-    if(cl.source!=='stock' || !cl.stockArticleId) return false;
-    var article = stockArticleById(cl.stockArticleId);
-    if(!article) return false;
-    return stockDispo(article) >= (parseInt(cl.qte,10)||1);
+    var qteNeeded = parseInt(cl.qte,10)||1;
+    // Lien deja explicite vers un article de stock (le plus fiable)
+    if(cl.stockArticleId){
+      var article = stockArticleById(cl.stockArticleId);
+      return !!article && stockDispo(article) >= qteNeeded;
+    }
+    // Sinon (piece juste tapee via l'autosuggestion catalogue, sans lien
+    // explicite) : rechercher un article correspondant par nom dans le
+    // stock reel. Si trouve, on lie la ligne automatiquement — sinon la
+    // reservation qui suit (reserverStockVehicule) ne trouverait rien a
+    // reserver malgre un stock physiquement suffisant.
+    var matches = stockArticlesPour(v, cl.piece);
+    if(!matches.length || stockDispo(matches[0]) < qteNeeded) return false;
+    cl.source = 'stock';
+    cl.stockArticleId = matches[0].id;
+    return true;
   });
 }
 
@@ -26305,6 +26319,8 @@ function ouvrirDevisProspect(){
   var tc = document.getElementById('prospectTypeClient');
   var tkmEl = document.getElementById('prospectTkm');
   if(tkmEl) tkmEl.checked = false;
+  var tkmH = document.getElementById('prospectTkmH');
+  if(tkmH) tkmH.value = '0';
   if(tc) tc.value = 'devis';
   var res = document.getElementById('prospectClientResults');
   if(res) res.innerHTML = '';
@@ -26334,7 +26350,7 @@ function rechercherClientProspect(){
     }
     // Dédoublonner véhicules par immat
     if(!map[key].vehs.find(function(x){return x.immat===v.immat;})){
-      map[key].vehs.push({immat:v.immat, marque:v.marque||'', modele:v.modele||'', annee:v.annee||'', mec:v.mec||'', vin:v.vin||'', carburant:v.carburant||''});
+      map[key].vehs.push({immat:v.immat, marque:v.marque||'', modele:v.modele||'', annee:v.annee||'', mec:v.mec||'', vin:v.vin||'', carburant:v.carburant||'', tkm: v.tkm===true});
     }
   });
 
@@ -26363,14 +26379,18 @@ function rechercherClientProspect(){
         var bMatch = (b.immat||'').toLowerCase().indexOf(q)>=0 ? 0 : 1;
         return aMatch - bMatch;
       });
+      // Client TKM : au moins un de ses vehicules deja connus est marque
+      // TKM dans Clients et vehicules — traite comme client TKM pour ce
+      // nouveau prospect aussi, quel que soit le vehicule choisi ici.
+      var clientEstTkm = c.vehs.some(function(vv){return vv.tkm===true;});
       sortedVehs.forEach(function(v){
         var immatMatch = (v.immat||'').toLowerCase().indexOf(q)>=0;
         h += '<div style="padding:8px 14px;cursor:pointer;border-bottom:1px solid #f0ede8;font-size:12px'+(immatMatch?';background:#EAF3DE':'')+'" '
           +'class="prospect-item" '
           +'onclick="selectionnerProspectComplet(this)" '
           +'data-nom="'+c.nom+'" data-tel="'+c.tel+'" data-email="'+c.email+'" data-type="'+c.typeClient+'"'
-          +' data-immat="'+v.immat+'" data-marque="'+v.marque+'" data-modele="'+v.modele+'" data-annee="'+v.annee+'" data-mec="'+v.mec+'" data-vin="'+v.vin+'" data-carburant="'+v.carburant+'">';
-        h += '<div style="font-weight:600">'+v.immat+(immatMatch?' <span style="color:#3B6D11;font-size:10px">&#x2714;</span>':'')+'</div>';
+          +' data-immat="'+v.immat+'" data-marque="'+v.marque+'" data-modele="'+v.modele+'" data-annee="'+v.annee+'" data-mec="'+v.mec+'" data-vin="'+v.vin+'" data-carburant="'+v.carburant+'" data-tkm="'+(clientEstTkm?'1':'0')+'">';
+        h += '<div style="font-weight:600">'+v.immat+(immatMatch?' <span style="color:#3B6D11;font-size:10px">&#x2714;</span>':'')+(clientEstTkm?' <span class="badge b-blue" style="font-size:9px">TKM</span>':'')+'</div>';
         h += '<div style="color:#666;font-size:11px">'+v.marque+' '+v.modele+(v.annee?' ('+v.annee+')':'')+'</div>';
         h += '</div>';
       });
@@ -26400,6 +26420,15 @@ function selectionnerProspectComplet(el){
   document.getElementById('prospectTelH').value = tel;
   document.getElementById('prospectEmailH').value = el.getAttribute('data-email')||'';
   document.getElementById('prospectTypeH').value = el.getAttribute('data-type')||'devis';
+  // Client deja marque TKM dans Clients et vehicules (au moins un de ses
+  // vehicules connus) -> coche automatiquement pour ce nouveau prospect.
+  // Champ cache utilise en source de verite (independant du rendu de la
+  // case visible), plus la case elle-meme si presente.
+  var estTkm = el.getAttribute('data-tkm')==='1';
+  var tkmH = document.getElementById('prospectTkmH');
+  if(tkmH) tkmH.value = estTkm ? '1' : '0';
+  var tkmVisible = document.getElementById('prospectTkm');
+  if(tkmVisible) tkmVisible.checked = estTkm;
   // Remplir véhicule
   document.getElementById('prospectImmat').value = el.getAttribute('data-immat')||'';
   document.getElementById('prospectMarque').value = el.getAttribute('data-marque')||'';
@@ -26528,7 +26557,8 @@ function creerDevisProspect(){
     entree: Date.now(),
     status: 'prospect',
     priorite: 'normal',
-    tkm: !!(document.getElementById('prospectTkm') && document.getElementById('prospectTkm').checked),
+    tkm: (document.getElementById('prospectTkmH') && document.getElementById('prospectTkmH').value==='1')
+      || !!(document.getElementById('prospectTkm') && document.getElementById('prospectTkm').checked),
     devis: { statut: 'brouillon', lignes: [] },
     chiffrage: null
   };
@@ -27902,6 +27932,23 @@ function archiverDevisProspect(vid){
   v.prospectStatut = 'archive';
   v.archiveDate = Date.now();
   saveV(); renderPage();
+}
+
+// Annuler depuis le tableau (pas la fiche detail) — avec confirmation,
+// pour eviter qu'un clic accidentel archive un devis directement depuis
+// la liste. Utilise demanderConfirmation() (modale personnalisee) plutot
+// que confirm() natif, qui peut rester muet dans certains environnements
+// d'affichage.
+function annulerDevisProspectByEl(btn){
+  var vid = btn.getAttribute('data-vid');
+  var v = vehicles.find(function(x){return x.id===vid;});
+  if(!v) return;
+  demanderConfirmation(
+    'Annuler ce devis prospect ?',
+    '"'+v.client+' — '+v.immat+'" sera archive et retire de la liste des prospects.',
+    function(){ annulerDevisProspect(vid); },
+    { icone:'&#x2716;', libelleOk:'Annuler le devis', danger:true }
+  );
 }
 
 function annulerDevisProspect(vid){
