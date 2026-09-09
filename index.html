@@ -548,7 +548,7 @@ tr:hover td{background:#faf9f7}
 
 <!-- MODAL DEVIS PROSPECT -->
 <div class="overlay" id="modalDevisProspect" style="display:none" onclick="if(event.target===this)fermerDevisProspect()">
-<div class="modal" style="width:520px">
+<div class="modal" style="width:600px;min-height:480px">
   <div class="mhead">
     <h2>&#x1F4CB; Nouveau devis prospect</h2>
     <button class="btn btn-sm" onclick="fermerDevisProspect()">X</button>
@@ -564,7 +564,7 @@ tr:hover td{background:#faf9f7}
     <div id="prospectSectExist" style="margin-bottom:14px">
       <div style="position:relative">
         <input class="inp" id="prospectClientSearch" placeholder="Nom, téléphone ou immatriculation..." style="width:100%" oninput="rechercherClientProspect()">
-        <div id="prospectClientResults" style="position:absolute;left:0;right:0;top:100%;z-index:1000;background:#fff;border:1px solid #ccc;border-radius:0 0 7px 7px;max-height:220px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.12)"></div>
+        <div id="prospectClientResults" style="position:absolute;left:0;right:0;top:100%;z-index:1000;background:#fff;border:1px solid #ccc;border-radius:0 0 7px 7px;max-height:340px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.12)"></div>
       </div>
     </div>
 
@@ -16740,6 +16740,7 @@ function appliquerForfaitTKMByEl(btn){
   marquerVehiculeModifie(v.id);
   saveV();
   afficherToastNotif('Forfait applique et chiffrage valide', f.nom+' — '+f.lignes.length+' piece(s) — pret pour validation client.', 'ok');
+  renderPage();
   openDetKeepEdit(v.id);
 }
 
@@ -17813,10 +17814,6 @@ function pageDashChefAtelier(role){
     html += '<div class="info-box" style="margin-bottom:14px;background:#EBF3FB;color:#185FA5;padding:10px 14px;border-radius:8px;font-size:13px">Tableau de bord — <strong>'+monEquipe+'</strong> ('+membresEquipe.length+' membres)</div>';
   }
 
-  // ── Tableau Prospects — devis en attente (chef d'atelier uniquement,
-  // pas chef d'equipe dont le perimetre est limite a son equipe) ──────────
-  if(role==='chef_atelier') html += htmlTableauProspects();
-
   // ── Mes vehicules personnels (chef_equipe seulement) ─────────────────────
   if(role === 'chef_equipe' && currentChefEquipeNom){
     // Trouver le nom du chef dans PERSONNEL
@@ -17930,6 +17927,11 @@ function pageDashChefAtelier(role){
     });
     html += '</div>';
   }
+
+  // ── Tableau Prospects — devis en attente (chef d'atelier uniquement,
+  // pas chef d'equipe dont le perimetre est limite a son equipe) —
+  // positionne juste avant "Devis a valider", a la demande de Telhoro ──
+  if(role==='chef_atelier') html += htmlTableauProspects();
 
   // ── Tableau filtre (uniquement si filtre actif) ────────────────────────────
   // Devis à valider
@@ -18936,7 +18938,13 @@ function openDevisModal(id){
 
   // Lignes à afficher : pour DC indépendant (isDevisCompl), lire v.devis.lignes
   var lignesAfficher = v.isDevisCompl ? (v.devis&&v.devis.lignes||[]) : d.lignes;
-  var isChefView = currentRole==='chef_atelier'||currentRole==='chef_equipe';
+  // Chef d'atelier/equipe agissant comme un technicien quelconque (menu
+  // deroulant "Mon tableau de bord") : traite comme le technicien
+  // (edition + soumission), pas comme le chef (lecture seule + validation)
+  // — sans quoi il ne pouvait que consulter un devis compl. deja existant,
+  // jamais en creer ni en soumettre un lui-meme.
+  var agitCommeTech = !!agirCommeTech && (currentRole==='chef_atelier'||currentRole==='chef_equipe');
+  var isChefView = (currentRole==='chef_atelier'||currentRole==='chef_equipe') && !agitCommeTech;
 
   // Corps : tableau
   var body = '<table style="width:100%;border-collapse:collapse">';
@@ -18963,7 +18971,7 @@ function openDevisModal(id){
   document.getElementById('dcModalBody').innerHTML = body;
 
   var foot = '';
-  var isChefRole = currentRole==='chef_atelier'||currentRole==='chef_equipe';
+  var isChefRole = (currentRole==='chef_atelier'||currentRole==='chef_equipe') && !agitCommeTech;
   if(isChefRole){
     // Chef : bouton valider ou renvoyer
     foot += '<button class="btn btn-success" onclick="validerDevisChef()">&#x2714; Valider le devis</button>';
@@ -19670,6 +19678,11 @@ function confirmerChiffrageProspect(){
   v.chiffrage.confirme = true;
   saveV();
   _prospectEditMode = false; // repasser en lecture seule
+  // Rafraichir le tableau de bord en arriere-plan (voir creerDevisProspect) :
+  // sans ca, les boutons "Imprimer" / "Client a valide" de
+  // htmlTableauProspects() (conditionnes par chiffrage.confirme/valide)
+  // n'apparaissent pas tant que la page n'est pas rechargee autrement.
+  renderPage();
   openDetKeepEdit(detCurrentVid);
 }
 
@@ -19680,6 +19693,7 @@ function modifierChiffrageProspect(){
   v.chiffrage.valide = false;
   saveV();
   _prospectEditMode = true; // activer mode édition
+  renderPage();
   openDetKeepEdit(detCurrentVid);
 }
 
@@ -19695,6 +19709,7 @@ function validerChiffrageProspect(){
   indexerPiecesChiffrage(v);
   _prospectEditMode = false; // repasser en lecture seule
   saveV();
+  renderPage();
   openDetKeepEdit(detCurrentVid);
 }
 
@@ -20079,8 +20094,13 @@ var devisComplEditMode = false;
 
 function renderDevisComplSection(v){
   var d = ensureDevisCompl(v);
-  var isTech   = currentRole==='technicien';
   var isChef   = currentRole==='chef_atelier' || currentRole==='chef_equipe';
+  // Chef d'atelier/equipe agissant comme un technicien quelconque (menu
+  // deroulant "Mon tableau de bord") : traite comme le technicien pour
+  // la creation/soumission du devis complementaire (isTech), tout en
+  // restant aussi "isChef" (son role reste chef_atelier/chef_equipe)
+  // pour pouvoir ensuite le valider lui-meme sans quitter son profil.
+  var isTech   = currentRole==='technicien' || (isChef && !!agirCommeTech);
   var isAchats = currentRole==='achats';
   var isDir    = currentRole==='direction';
   // CORRECTION : "isRec" etait utilisee plus bas (bouton Modifier, reponse
@@ -25595,8 +25615,15 @@ function openDet(id){
     // Devis compl uniquement à partir de travaux_cours (pas pendant diagnostic/devis)
     var _statusTravaux = ['travaux_cours','travaux_attente'].indexOf(v.status)>=0;
     var _hasDevisCompl = v.devisCompl && v.devisCompl.lignes && v.devisCompl.lignes.some(function(l){return (l.piece||'').trim();});
+    // Chef d'atelier/equipe agissant comme un technicien (menu deroulant
+    // "Mon tableau de bord" -> selection d'un technicien quelconque) :
+    // memes droits qu'un vrai technicien, y compris la creation d'un
+    // devis complementaire encore vide — jusqu'ici il fallait qu'un
+    // devis existe deja pour que le chef puisse seulement le modifier.
+    var _agitCommeTech = !!agirCommeTech && (currentRole==='chef_atelier'||currentRole==='chef_equipe');
     var _showDevisCompl = (_hasDevisCompl && _statusTravaux)
       || (currentRole==='technicien' && _statusTravaux)
+      || (_agitCommeTech && _statusTravaux)
       || ((currentRole==='chef_atelier'||currentRole==='chef_equipe') && _statusTravaux && _hasDevisCompl);
     if(_showDevisCompl && currentRole!=='achats' && currentRole!=='direction'){
       b += renderDevisComplSection(v);
@@ -26645,6 +26672,12 @@ function creerDevisProspect(){
   vehicles.push(v);
   saveV();
   fermerDevisProspect();
+  // IMPORTANT : rafraichir le tableau de bord en arriere-plan (comme le
+  // fait submitRec() pour un vehicule normal), sinon htmlTableauProspects()
+  // reste fige sur son etat d'avant la creation — le tableau n'apparait
+  // pas s'il n'existait pas encore, et le nouveau devis n'apparait pas
+  // s'il existait deja, meme si les donnees sont bien enregistrees.
+  renderPage();
   // Ouvrir directement la fiche pour chiffrer
   detCurrentVid = id;
   openDet(id);
@@ -27973,6 +28006,7 @@ function modifierDevisProspect(vid){
   v.prospectStatut = 'en_attente';
   if(v.chiffrage) v.chiffrage.valide = false;
   saveV();
+  renderPage();
   openDet(vid);
 }
 
