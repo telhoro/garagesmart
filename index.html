@@ -17591,6 +17591,25 @@ function ouvrirAttribTech(btn){
 // non liee au stock desactive le raccourci (retombe sur le circuit
 // normal, ou achats pourra commander ce qui manque).
 function toutesPiecesTkmEnStock(v){
+  // Un vehicule converti depuis un devis prospect (confirmerEnTravaux)
+  // a son v.chiffrage volontairement vide a ce stade — les pieces
+  // validees par le client sont conservees dans v.tapReprisDe en
+  // attendant que le technicien ouvre sa section devis. Sans ca, cette
+  // verification ne trouvait jamais rien et le raccourci ne se
+  // declenchait jamais pour un dossier issu d'un devis prospect.
+  if((!v.chiffrage || !v.chiffrage.lignes || !v.chiffrage.lignes.length) && v.tapReprisDe && v.tapReprisDe.length){
+    v.chiffrage = {
+      valide:false,
+      lignes: v.tapReprisDe.map(function(t, i){
+        return {
+          libreId: 'cl_tap_'+Date.now()+'_'+i, piece: t.piece, qte: t.qte,
+          prixAchat: t.prixAchat, prixVente: t.prixVente,
+          source: t.source||'local', stockArticleId: t.stockArticleId||'',
+          fournisseurId: t.fournisseurId||''
+        };
+      })
+    };
+  }
   if(!v.chiffrage || !v.chiffrage.lignes || !v.chiffrage.lignes.length) return false;
   var lignesValides = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
   if(!lignesValides.length) return false;
@@ -20032,6 +20051,13 @@ function renderDevisComplSection(v){
   var isChef   = currentRole==='chef_atelier' || currentRole==='chef_equipe';
   var isAchats = currentRole==='achats';
   var isDir    = currentRole==='direction';
+  // CORRECTION : "isRec" etait utilisee plus bas (bouton Modifier, reponse
+  // client) sans jamais avoir ete declaree dans cette fonction — une
+  // variable du meme nom existe bien, mais dans une toute autre fonction,
+  // sans lien. Resultat : une ReferenceError qui interrompait le rendu de
+  // toute la section des qu'un devis complementaire deja chiffre etait
+  // affiche pour technicien, chef d'atelier ou chef d'equipe.
+  var isRec = currentRole==='reception';
   var isForfait = (v.typeClient==='forfait');
   var isEditing = devisComplEditMode && (isTech || isChef);
 
@@ -25716,9 +25742,28 @@ function detAffecterEquipe(id){
   // Si le vehicule est encore en 'reception' et qu'on a defini equipe ET technicien
   // -> passer automatiquement en attente_diag
   if(v.status==='reception' && v.equipe_affectee && v.technicien){
-    v.status = 'attente_diag';
-    v.stepStart = Date.now();
+    // RACCOURCI TKM : voir validerAttribTech() pour l'explication complete
+    // — meme logique ici, puisque c'est ce formulaire (attribution depuis
+    // la fiche detail) qui est reellement utilise par chef d'atelier,
+    // et pas seulement la modale separee.
+    if(v.tkm===true && toutesPiecesTkmEnStock(v)){
+      v.chiffrage.lignes.forEach(function(cl){ if((cl.piece||'').trim()) cl.valideDir = true; });
+      v.chiffrage.valide = true;
+      v.chiffrage.valideDir = true;
+      v.chiffrage.valideDirLe = Date.now();
+      reserverStockVehicule(v);
+      v.status = 'travaux_cours';
+      v.piecesConfirmees = true;
+      v.circuitTkmRaccourci = true;
+      marquerJalonsTemps(v, 'travaux_cours');
+      ajouterCommentaireSysteme(v, '&#x26A1; Circuit TKM raccourci — pieces en stock, direct en travaux (diagnostic, chiffrage et validation financiere sautes)', currentUser ? currentUser.login : 'Chef atelier');
+      afficherToastNotif('Circuit TKM raccourci', v.immat+' est directement en travaux — pieces deja en stock.', 'ok');
+    } else {
+      v.status = 'attente_diag';
+      v.stepStart = Date.now();
+    }
   }
+  marquerVehiculeModifie(v.id);
   saveV();
   detEditMode = false; // repasse en lecture seule apres validation
   renderPage();   // met a jour les tableaux en arriere-plan
@@ -27838,6 +27883,7 @@ function confirmerEnTravaux(){
         piece: cl.piece, qte: parseInt(cl.qte,10)||1,
         prixAchat: cl.prixAchat||'', prixVente: cl.prixVente||'',
         source: cl.source||'local', fournisseurId: cl.fournisseurId||'',
+        stockArticleId: cl.stockArticleId||'',
         dateOrigine: Date.now()
       };
     });
