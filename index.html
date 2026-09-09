@@ -17197,6 +17197,8 @@ function caSaveComment(el){
 }
 
 function caTableau(title, list, badgeClass, subtitle){
+  // Plus recent en premier, comme le reste de l'app (voir triVehicules).
+  list = list.slice().sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
   var h = '<div class="card" style="margin-bottom:16px">';
   h += '<div class="card-head">'+title+' <span class="badge '+badgeClass+'">'+list.length+'</span></div>';
   if(subtitle && list.length){
@@ -17569,6 +17571,7 @@ function pageDashChefAtelier(role){
         hRecap += '<div class="tw"><table><thead><tr><th>Technicien</th><th>Vehicule</th><th>Client</th><th>Statut</th><th>Depuis</th></tr></thead><tbody>';
         membresEq.forEach(function(membre){
           var vehsMembre = myVehs.filter(function(v){ return v.technicien===membre.nom; });
+          vehsMembre.sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
           if(vehsMembre.length){
             vehsMembre.forEach(function(v){
               var depuis = v.stepStart ? Math.round((Date.now()-v.stepStart)/3600000)+'h' : '—';
@@ -27435,7 +27438,12 @@ function confirmerEnTravaux(){
   // sa section, et _devisVisible (fiche detail) rend cette section
   // visible des l'arrivee grace a tapReprisDe, sans attendre le
   // diagnostic formel.
-  if(v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length && !v.devis){
+  // IMPORTANT : v.devis existe TOUJOURS depuis la creation du prospect
+  // ({statut:'brouillon', lignes:[]}) — verifier "!v.devis" ne suffit
+  // donc jamais (toujours faux). Il faut verifier l'ABSENCE de ligne avec
+  // un contenu reel, pas la simple existence de l'objet.
+  var devisProspectVide = !v.devis || !v.devis.lignes || !v.devis.lignes.filter(function(l){return (l.piece||'').trim();}).length;
+  if(v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length && devisProspectVide){
     v.tapReprisDe = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).map(function(cl){
       return {
         piece: cl.piece, qte: parseInt(cl.qte,10)||1,
@@ -27449,11 +27457,14 @@ function confirmerEnTravaux(){
     // normal), sans quoi les anciennes lignes resteraient en double a
     // cote des nouvelles lignes synchronisees depuis le devis.
     v.chiffrage = null;
-    // Construire v.devis IMMEDIATEMENT (via le meme mecanisme que
-    // ensureDevis) plutot que d'attendre qu'un technicien ouvre sa
-    // section en premier — sinon Direction/Achats, qui n'ont pas acces a
-    // la section "Devis" (reservee technicien/chef d'atelier), ne
-    // voyaient rien du tout s'ils consultaient le dossier avant lui.
+    // Ecraser le devis vide (brouillon initial de creation) plutot que de
+    // le laisser tel quel — construire v.devis IMMEDIATEMENT (via le
+    // meme mecanisme que ensureDevis) plutot que d'attendre qu'un
+    // technicien ouvre sa section en premier — sinon Direction/Achats,
+    // qui n'ont pas acces a la section "Devis" (reservee technicien/chef
+    // d'atelier), ne voyaient rien du tout s'ils consultaient le dossier
+    // avant lui.
+    v.devis = null;
     ensureDevis(v);
   }
   // Le vehicule entre TOUJOURS en reception (attente d'attribution
