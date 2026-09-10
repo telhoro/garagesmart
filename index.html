@@ -27206,7 +27206,12 @@ function exporterPDF(){
       margin: 10,
       filename: nom+'.pdf',
       image: { type:'jpeg', quality:0.98 },
-      html2canvas: { scale:3, useCORS:true, backgroundColor:'#ffffff' },
+      // IMPORTANT : sans windowWidth/windowHeight explicites, la capture
+      // se base par defaut sur les dimensions de la fenetre PRINCIPALE
+      // (beaucoup plus large que l'iframe A4) au lieu du contenu reel a
+      // capturer — decalant et coupant le tableau sur le cote droit.
+      html2canvas: { scale:3, useCORS:true, backgroundColor:'#ffffff',
+        windowWidth: doc.body.scrollWidth, windowHeight: doc.body.scrollHeight },
       jsPDF: { unit:'mm', format:'a4', orientation:'portrait' },
       // IMPORTANT : ne pas forcer l'evitement de coupure a l'interieur du
       // tableau ('avoid-all') — avec un tableau de plusieurs lignes qui
@@ -27265,9 +27270,23 @@ function exporterWord(){
   // travaille sur une COPIE du contenu pour nettoyer ces proprietes sans
   // toucher a l'apercu affiche a l'ecran.
   var clone = doc.body.cloneNode(true);
+
+  // Les logos integres en base64 (data:image/...) sont tres mal geres
+  // par le moteur HTML de Word dans ce format .doc — resultat : pas de
+  // logo affiche, et un grand espace vide reserve a sa place en haut de
+  // la page (d'ou l'impression que "le devis commence au milieu de la
+  // page"). On les remplace par un texte equivalent, fiable partout.
+  clone.querySelectorAll('img[src^="data:"]').forEach(function(img){
+    var remplacement = doc.createElement('div');
+    remplacement.textContent = 'SMART SERVICES';
+    remplacement.style.cssText = 'font-size:18pt;font-weight:900;color:#1a1a1a';
+    img.parentNode.replaceChild(remplacement, img);
+  });
+
   var proprietesARetirer = ['position','top','left','right','bottom','display',
     'flex','flexDirection','flexWrap','justifyContent','alignItems','gap',
-    'transform','float','zIndex','minWidth','maxWidth'];
+    'transform','float','zIndex','minWidth','maxWidth','minHeight','padding',
+    'paddingTop','paddingBottom','paddingLeft','paddingRight'];
   function nettoyerStyle(el){
     if(!el.style) return;
     proprietesARetirer.forEach(function(p){ el.style[p] = ''; });
@@ -27284,8 +27303,10 @@ function exporterWord(){
     t.setAttribute('border','1');
     t.setAttribute('cellspacing','0');
     t.setAttribute('cellpadding','5');
+    t.setAttribute('align','center');
     t.style.width = '100%';
     t.style.borderCollapse = 'collapse';
+    t.style.margin = '8pt auto';
   });
 
   var html = '<!DOCTYPE html><html xmlns:o="urn:schemas-microsoft-com:office:office" '
@@ -27293,8 +27314,8 @@ function exporterWord(){
     +'<head><meta charset="UTF-8">'
     +'<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>90</w:Zoom>'
     +'<w:DoNotOptimizeForBrowser/></w:WordDocument></xml><![endif]-->'
-    +'<style>body{font-family:Arial,sans-serif;font-size:11pt;margin:1.5cm}'
-    +'table{border-collapse:collapse;width:100%;margin:8pt 0}'
+    +'<style>body{font-family:Arial,sans-serif;font-size:11pt;margin:0}'
+    +'table{border-collapse:collapse;width:100%;margin:8pt auto}'
     +'th,td{border:1px solid #999;padding:5pt;font-size:10pt}'
     +'@page{size:A4;margin:2cm}</style>'
     +'</head><body>'+clone.innerHTML+'</body></html>';
@@ -27324,24 +27345,29 @@ function exporterExcel(){
   // (HTML deguise en .xls) declenchait une alerte "format de fichier
   // suspect" dans Excel et affichait un contenu incoherent une fois
   // ouverte malgre tout — un .xlsx genuine n'a ni l'un ni l'autre probleme.
+  //
+  // Un document (devis, facture...) contient souvent plusieurs balises
+  // <table> distinctes (bloc vehicule, tableau des pieces...) — elles
+  // sont toutes regroupees ici sur UNE SEULE feuille (l'une sous
+  // l'autre, separees par une ligne vide), plutot qu'une feuille par
+  // tableau qui eclatait le document en plusieurs onglets.
   var tables = doc.body.querySelectorAll('table');
-  if(!tables.length){
+  var tablesAvecLignes = [];
+  tables.forEach(function(t){
+    if(t.querySelectorAll('tr').length) tablesAvecLignes.push(t);
+  });
+  if(!tablesAvecLignes.length){
     afficherToastNotif('Aucun tableau', 'Ce document ne contient pas de tableau exploitable en Excel.', 'alerte');
     return;
   }
   var wb = XLSX.utils.book_new();
-  var nbFeuilles = 0;
-  tables.forEach(function(t){
-    var rows = t.querySelectorAll('tr');
-    if(!rows.length) return;
-    nbFeuilles++;
-    var ws = XLSX.utils.table_to_sheet(t);
-    XLSX.utils.book_append_sheet(wb, ws, 'Feuille'+nbFeuilles);
-  });
-  if(!nbFeuilles){
-    afficherToastNotif('Aucun tableau', 'Ce document ne contient pas de tableau exploitable en Excel.', 'alerte');
-    return;
+  var ws = XLSX.utils.table_to_sheet(tablesAvecLignes[0]);
+  for(var i=1;i<tablesAvecLignes.length;i++){
+    // origin:-1 = ajoute a la suite, juste apres la derniere ligne deja
+    // presente sur la feuille (avec une ligne vide de separation).
+    XLSX.utils.sheet_add_dom(ws, tablesAvecLignes[i], {origin:-1});
   }
+  XLSX.utils.book_append_sheet(wb, ws, 'Feuille1');
   XLSX.writeFile(wb, nom+'.xlsx');
 }
 
