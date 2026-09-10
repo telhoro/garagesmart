@@ -27271,6 +27271,7 @@ function _paginerPourPdf(doc, body){
   // page ; on ne le duplique qu'entre les pages intermediaires.
   var pointInsertion = tablePieces.nextSibling;
   var derniereTable = tablePieces;
+  var dernierWrapper = null; // le conteneur de la toute derniere page generee
   for(var g=1; g<groupes.length; g++){
     if(footer){
       var piedCopie = footer.cloneNode(true);
@@ -27295,6 +27296,7 @@ function _paginerPourPdf(doc, body){
     wrapperPage.appendChild(nouvelleTable);
     tablePieces.parentNode.insertBefore(wrapperPage, pointInsertion);
     derniereTable = nouvelleTable;
+    dernierWrapper = wrapperPage;
   }
 
   // Le total suit desormais la derniere page, juste apres ses dernieres
@@ -27306,6 +27308,25 @@ function _paginerPourPdf(doc, body){
   // entier sur une page supplementaire des qu'il ne restait plus assez
   // de place en bas de la derniere page de pieces, faisant "disparaitre"
   // la signature et le pied de page de la page attendue.
+
+  // Pousser le pied de page jusqu'au bas de cette derniere page : sans
+  // ca, il suit immediatement la signature, avec tout le blanc restant
+  // de la page EN DESSOUS de lui au lieu d'au-dessus — d'ou l'impression
+  // qu'il "flotte" au milieu de la page plutot que d'etre en bas.
+  if(footer && dernierWrapper){
+    var PAGE_HAUTEUR_PX = 1122; // A4 ~297mm a 96dpi, mesure en px CSS
+    var MARGE_BAS = 15;
+    var rectBody = body.getBoundingClientRect();
+    var hautDernierePage = dernierWrapper.getBoundingClientRect().top - rectBody.top;
+    var basFooterAvant = footer.getBoundingClientRect().bottom - rectBody.top;
+    var hauteurUtilisee = basFooterAvant - hautDernierePage;
+    var espaceRestant = PAGE_HAUTEUR_PX - hauteurUtilisee - MARGE_BAS;
+    if(espaceRestant > 0){
+      var spacer = doc.createElement('div');
+      spacer.style.height = espaceRestant+'px';
+      footer.parentNode.insertBefore(spacer, footer);
+    }
+  }
 }
 
 function exporterPDF(){
@@ -27355,11 +27376,11 @@ function exporterPDF(){
     html2canvas: {
       scale: 2.5, useCORS: true, backgroundColor: '#ffffff',
       x: 0, y: 0,
-      // +200px de marge de securite sur la hauteur : le pied de page
-      // continuait a etre tronque avec une marge plus faible — mieux
-      // vaut un peu de blanc en trop qu'un pied de page manquant.
-      width: doc.body.scrollWidth, height: doc.body.scrollHeight+200,
-      windowWidth: doc.body.scrollWidth, windowHeight: doc.body.scrollHeight+200
+      // Legere marge de securite sur la hauteur (le pied de page est
+      // maintenant positionne precisement via un espaceur calcule dans
+      // _paginerPourPdf — cette marge n'est qu'un filet de securite).
+      width: doc.body.scrollWidth, height: doc.body.scrollHeight+20,
+      windowWidth: doc.body.scrollWidth, windowHeight: doc.body.scrollHeight+20
     },
     jsPDF: { unit:'mm', format:'a4', orientation:'portrait' },
     pagebreak: { mode:['css','legacy'] }
