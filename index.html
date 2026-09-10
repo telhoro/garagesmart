@@ -27276,20 +27276,24 @@ function _paginerPourPdf(doc, body){
       var piedCopie = footer.cloneNode(true);
       tablePieces.parentNode.insertBefore(piedCopie, pointInsertion);
     }
+    // Point de coupure sur un WRAPPER (pas directement sur le tableau) :
+    // l'algorithme de pagination mesure la position du bord du wrapper
+    // pour decider ou couper — une marge sur le tableau lui-meme pouvait
+    // finir absorbee en bas de la PRECEDENTE page plutot que d'apparaitre
+    // en haut de la nouvelle. Le padding du wrapper, lui, est toujours
+    // rendu apres le point de coupure.
+    var wrapperPage = doc.createElement('div');
+    wrapperPage.style.pageBreakBefore = 'always';
+    wrapperPage.style.paddingTop = '10mm';
     var nouvelleTable = doc.createElement('table');
     if(tablePieces.getAttribute('style')) nouvelleTable.setAttribute('style', tablePieces.getAttribute('style'));
     nouvelleTable.className = tablePieces.className;
-    nouvelleTable.style.pageBreakBefore = 'always';
-    // Espace en haut de la nouvelle page : sans ca, le tableau colle
-    // directement au bord superieur (seule la 1ere page beneficie du
-    // padding du conteneur .page — un tableau insere en milieu de flux
-    // n'en herite pas automatiquement).
-    nouvelleTable.style.marginTop = '10mm';
     if(thead) nouvelleTable.appendChild(thead.cloneNode(true));
     var nouveauTbody = doc.createElement('tbody');
     groupes[g].forEach(function(tr){ nouveauTbody.appendChild(tr); }); // deplace les <tr> hors de l'ancien tbody
     nouvelleTable.appendChild(nouveauTbody);
-    tablePieces.parentNode.insertBefore(nouvelleTable, pointInsertion);
+    wrapperPage.appendChild(nouvelleTable);
+    tablePieces.parentNode.insertBefore(wrapperPage, pointInsertion);
     derniereTable = nouvelleTable;
   }
 
@@ -27351,11 +27355,11 @@ function exporterPDF(){
     html2canvas: {
       scale: 2.5, useCORS: true, backgroundColor: '#ffffff',
       x: 0, y: 0,
-      // +60px de marge de securite sur la hauteur : evite qu'un leger
-      // sous-calcul (par ex. lie aux colonnes en flottant) ne tronque la
-      // toute fin du document (signature, pied de page).
-      width: doc.body.scrollWidth, height: doc.body.scrollHeight+60,
-      windowWidth: doc.body.scrollWidth, windowHeight: doc.body.scrollHeight+60
+      // +200px de marge de securite sur la hauteur : le pied de page
+      // continuait a etre tronque avec une marge plus faible — mieux
+      // vaut un peu de blanc en trop qu'un pied de page manquant.
+      width: doc.body.scrollWidth, height: doc.body.scrollHeight+200,
+      windowWidth: doc.body.scrollWidth, windowHeight: doc.body.scrollHeight+200
     },
     jsPDF: { unit:'mm', format:'a4', orientation:'portrait' },
     pagebreak: { mode:['css','legacy'] }
