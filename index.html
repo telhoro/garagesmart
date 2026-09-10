@@ -27185,9 +27185,13 @@ function creerDevisProspect(){
 // colonnes client/vehicule) : le moteur de capture d'image ne les gere
 // pas correctement, provoquant des decalages tantot a droite, tantot a
 // gauche selon les reglages. On convertit donc temporairement ces
-// rangees flex en vrais tableaux HTML (fiables a la capture) qui
-// recreent la meme disposition cote-a-cote — juste le temps de la
-// capture, SANS toucher a l'apercu affiche a l'ecran.
+// rangees flex — juste le temps de la capture, SANS toucher a l'apercu
+// affiche a l'ecran — en colonnes par FLOTTANTS (float left/right),
+// une technique plus ancienne que le tableau/vertical-align mais bien
+// plus fiable pour la capture d'image : chaque colonne s'aligne
+// naturellement sur le haut, sans dependre d'un support parfois
+// imparfait de vertical-align sur des cellules de tableau (source du
+// decalage vertical variable observe sur le bloc "N° serie").
 function _convertirFlexEnTable(doc, conteneur){
   var candidats = [];
   conteneur.querySelectorAll('*').forEach(function(el){
@@ -27198,37 +27202,36 @@ function _convertirFlexEnTable(doc, conteneur){
   candidats.reverse().forEach(function(el){
     var enfants = Array.prototype.slice.call(el.children);
     if(enfants.length < 2){ el.style.display = ''; return; }
-    var table = doc.createElement('table');
-    table.style.cssText = 'width:100%;border-collapse:collapse';
-    var tr = doc.createElement('tr');
-    enfants.forEach(function(enfant, idx){
-      var td = doc.createElement('td');
-      td.style.cssText = 'vertical-align:top;padding:0;border:none';
-      // Sur une rangee a 2 colonnes (le cas le plus frequent : logo/titre,
-      // vehicule/date...), la 1ere colonne colle a gauche (comme avant),
-      // la 2e est poussee a droite — ce qui reproduit fidelement l'effet
-      // "justify-content:space-between" de la mise en page flex d'origine.
-      if(enfants.length===2){
-        if(idx===0){ td.style.width='1%'; td.style.whiteSpace='nowrap'; }
-        else { td.style.textAlign='right'; }
-      }
-      td.appendChild(enfant); // deplace l'enfant (conserve son propre style)
-      tr.appendChild(td);
-    });
-    table.appendChild(tr);
-    el.innerHTML='';
-    el.appendChild(table);
+    if(enfants.length===2){
+      // Rangee a 2 colonnes (le cas le plus frequent : logo/titre,
+      // vehicule/date...) : 1ere colonne collee a gauche, 2e collee a
+      // droite — reproduit fidelement l'effet "justify-content:
+      // space-between" de la mise en page flex d'origine, chacune
+      // demarrant exactement en haut de la rangee.
+      enfants[0].style.float = 'left';
+      enfants[1].style.float = 'right';
+    } else {
+      enfants.forEach(function(enfant){ enfant.style.display = 'inline-block'; enfant.style.verticalAlign = 'top'; });
+    }
+    // "Clearfix" : sans ca, un conteneur ne contenant QUE des enfants
+    // flottants se retrouverait de hauteur nulle (les flottants sont
+    // retires du flux normal), ecrasant tout ce qui suit.
+    var clear = doc.createElement('div');
+    clear.style.cssText = 'clear:both;height:0;font-size:0;line-height:0';
+    el.appendChild(clear);
     el.style.display = '';
   });
 }
-// Pagination manuelle pour l'export PDF : coupe le (ou les) tableau(x)
-// de pieces exactement entre deux lignes selon la hauteur REELLEMENT
-// rendue (mesuree sur le DOM deja affiche), et duplique le pied de page
-// en bas de chaque page generee — plutot que de laisser html2pdf couper
-// bêtement par hauteur de pixels sans notion de ligne, ce qui pouvait
-// laisser une poignee de lignes esseulees sur une page quasi vide, et
-// le pied de page absent de toutes les pages sauf (parfois) la derniere.
+// Pagination manuelle pour l'export PDF : au-dela d'un certain nombre
+// de lignes dans le tableau des pieces (trop pour tenir sur une page
+// A4), les lignes suivantes basculent sur une nouvelle page, avec le
+// pied de page reproduit en bas de CHAQUE page generee. Un simple seuil
+// de nombre de lignes (plutot qu'une mesure de hauteur en pixels,
+// dependante du rendu exact et donc plus fragile) — previsible et
+// facile a verifier.
 function _paginerPourPdf(doc, body){
+  var LIGNES_PAR_PAGE = 25; // au format A4, avec l'entete + le pied de page, ~25 lignes tiennent confortablement
+
   var footer = body.querySelector('footer');
   var tablePieces = null, maxRows = 0;
   body.querySelectorAll('table').forEach(function(t){
@@ -27237,40 +27240,18 @@ function _paginerPourPdf(doc, body){
   });
   if(!tablePieces) return;
 
-  var PAGE_HAUTEUR_PX = 1122; // A4 ~297mm a 96dpi, mesure en px CSS (independant du "scale" de capture)
-  var MARGE_SECURITE = 30;
-  var footerHauteur = footer ? (footer.getBoundingClientRect().height || 50) : 0;
-  var rectBody = body.getBoundingClientRect();
-
   var thead = tablePieces.querySelector('thead');
   var tbody = tablePieces.querySelector('tbody') || tablePieces;
   var lignes = Array.prototype.slice.call(tbody.children).filter(function(el){ return el.tagName==='TR'; });
-  if(lignes.length < 2) return;
+  if(lignes.length <= LIGNES_PAR_PAGE) return; // tout tient sur une seule page, rien a faire
 
-  // 1) Mesurer TOUTES les lignes AVANT toute modification du DOM — une
-  // mesure/mutation entrelacee (mesurer, deplacer, remesurer...) est une
-  // source classique d'incoherences (chaque deplacement peut decaler ce
-  // qui suit, faussant les mesures suivantes).
-  var positions = lignes.map(function(tr){ return tr.getBoundingClientRect().bottom - rectBody.top; });
-
-  // 2) Determiner les indices de lignes ou une nouvelle page doit commencer.
-  var seuilParPage = PAGE_HAUTEUR_PX - footerHauteur - MARGE_SECURITE;
-  var coupures = [];
-  var pageActuelle = 1;
-  for(var i=1;i<positions.length;i++){
-    if(positions[i] > pageActuelle*seuilParPage){
-      coupures.push(i);
-      pageActuelle++;
-    }
+  // Regrouper les lignes par page de LIGNES_PAR_PAGE.
+  var groupes = [];
+  for(var i=0;i<lignes.length;i+=LIGNES_PAR_PAGE){
+    groupes.push(lignes.slice(i, i+LIGNES_PAR_PAGE));
   }
-  if(!coupures.length) return; // tout tient sur une seule page, rien a faire
 
-  // 3) Regrouper les lignes par page.
-  var groupes = []; var debut = 0;
-  coupures.forEach(function(idx){ groupes.push(lignes.slice(debut, idx)); debut = idx; });
-  groupes.push(lignes.slice(debut));
-
-  // 4) Reconstruire : table (groupe 1) -> pied de page -> table (groupe 2)
+  // Reconstruire : table (groupe 1) -> pied de page -> table (groupe 2)
   // -> pied de page -> ... -> table (dernier groupe). Le pied de page
   // ORIGINAL, deja present en fin de document, sert pour la derniere
   // page ; on ne le duplique qu'entre les pages intermediaires.
