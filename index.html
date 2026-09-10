@@ -27221,6 +27221,77 @@ function _convertirFlexEnTable(doc, conteneur){
     el.style.display = '';
   });
 }
+// Pagination manuelle pour l'export PDF : coupe le (ou les) tableau(x)
+// de pieces exactement entre deux lignes selon la hauteur REELLEMENT
+// rendue (mesuree sur le DOM deja affiche), et duplique le pied de page
+// en bas de chaque page generee — plutot que de laisser html2pdf couper
+// bêtement par hauteur de pixels sans notion de ligne, ce qui pouvait
+// laisser une poignee de lignes esseulees sur une page quasi vide, et
+// le pied de page absent de toutes les pages sauf (parfois) la derniere.
+function _paginerPourPdf(doc, body){
+  var footer = body.querySelector('footer');
+  var tablePieces = null, maxRows = 0;
+  body.querySelectorAll('table').forEach(function(t){
+    var n = t.querySelectorAll('tbody tr, tr').length;
+    if(n > maxRows){ maxRows = n; tablePieces = t; }
+  });
+  if(!tablePieces) return;
+
+  var PAGE_HAUTEUR_PX = 1122; // A4 ~297mm a 96dpi, mesure en px CSS (independant du "scale" de capture)
+  var MARGE_SECURITE = 30;
+  var footerHauteur = footer ? (footer.getBoundingClientRect().height || 50) : 0;
+  var rectBody = body.getBoundingClientRect();
+
+  var thead = tablePieces.querySelector('thead');
+  var tbody = tablePieces.querySelector('tbody') || tablePieces;
+  var lignes = Array.prototype.slice.call(tbody.children).filter(function(el){ return el.tagName==='TR'; });
+  if(lignes.length < 2) return;
+
+  // 1) Mesurer TOUTES les lignes AVANT toute modification du DOM — une
+  // mesure/mutation entrelacee (mesurer, deplacer, remesurer...) est une
+  // source classique d'incoherences (chaque deplacement peut decaler ce
+  // qui suit, faussant les mesures suivantes).
+  var positions = lignes.map(function(tr){ return tr.getBoundingClientRect().bottom - rectBody.top; });
+
+  // 2) Determiner les indices de lignes ou une nouvelle page doit commencer.
+  var seuilParPage = PAGE_HAUTEUR_PX - footerHauteur - MARGE_SECURITE;
+  var coupures = [];
+  var pageActuelle = 1;
+  for(var i=1;i<positions.length;i++){
+    if(positions[i] > pageActuelle*seuilParPage){
+      coupures.push(i);
+      pageActuelle++;
+    }
+  }
+  if(!coupures.length) return; // tout tient sur une seule page, rien a faire
+
+  // 3) Regrouper les lignes par page.
+  var groupes = []; var debut = 0;
+  coupures.forEach(function(idx){ groupes.push(lignes.slice(debut, idx)); debut = idx; });
+  groupes.push(lignes.slice(debut));
+
+  // 4) Reconstruire : table (groupe 1) -> pied de page -> table (groupe 2)
+  // -> pied de page -> ... -> table (dernier groupe). Le pied de page
+  // ORIGINAL, deja present en fin de document, sert pour la derniere
+  // page ; on ne le duplique qu'entre les pages intermediaires.
+  var pointInsertion = tablePieces.nextSibling;
+  for(var g=1; g<groupes.length; g++){
+    if(footer){
+      var piedCopie = footer.cloneNode(true);
+      tablePieces.parentNode.insertBefore(piedCopie, pointInsertion);
+    }
+    var nouvelleTable = doc.createElement('table');
+    if(tablePieces.getAttribute('style')) nouvelleTable.setAttribute('style', tablePieces.getAttribute('style'));
+    nouvelleTable.className = tablePieces.className;
+    nouvelleTable.style.pageBreakBefore = 'always';
+    if(thead) nouvelleTable.appendChild(thead.cloneNode(true));
+    var nouveauTbody = doc.createElement('tbody');
+    groupes[g].forEach(function(tr){ nouveauTbody.appendChild(tr); }); // deplace les <tr> hors de l'ancien tbody
+    nouvelleTable.appendChild(nouveauTbody);
+    tablePieces.parentNode.insertBefore(nouvelleTable, pointInsertion);
+  }
+}
+
 function exporterPDF(){
   var frame = document.getElementById('modalImpressionFrame');
   var doc = _modalImpressionDoc();
@@ -27245,17 +27316,28 @@ function exporterPDF(){
 
   doc.body.innerHTML = clone.innerHTML;
 
+  // Reorganiser le(s) tableau(x) de pieces en pages completes (coupure
+  // entre deux lignes, jamais au milieu, et pied de page reproduit en
+  // bas de chaque page) — a faire APRES avoir insere le contenu dans
+  // l'iframe (mesures fiables uniquement sur du contenu reellement
+  // rendu), et AVANT le calcul de scrollWidth/scrollHeight ci-dessous
+  // (la pagination modifie la hauteur totale du document).
+  _paginerPourPdf(doc, doc.body);
+
   afficherToastNotif('Generation du PDF...', 'Le telechargement demarre dans quelques secondes.', 'info');
 
   html2pdf().set({
     margin: 0, // le contenu a deja sa propre marge interne (.page{padding})
     filename: nom+'.pdf',
-    // PNG (sans perte) plutot que JPEG : plus net sur du texte et des
-    // traits de tableau, la compression JPEG a tendance a les adoucir.
-    // Resolution de capture augmentee (scale) pour un rendu plus fin.
-    image: { type:'png' },
+    // IMPORTANT : le PNG (sans perte) a ete teste a haute resolution et
+    // produisait des fichiers de plusieurs dizaines de Mo (jusqu'a 70 Mo
+    // sur un devis de 2 pages), impraticables a partager. Le JPEG a
+    // qualite elevee reste net sur du texte/tableau tout en compressant
+    // bien mieux les grandes zones blanches d'un document — fichier
+    // final de l'ordre du Mo au lieu de dizaines de Mo.
+    image: { type:'jpeg', quality:0.95 },
     html2canvas: {
-      scale: 4, useCORS: true, backgroundColor: '#ffffff',
+      scale: 2.5, useCORS: true, backgroundColor: '#ffffff',
       x: 0, y: 0,
       width: doc.body.scrollWidth, height: doc.body.scrollHeight,
       windowWidth: doc.body.scrollWidth, windowHeight: doc.body.scrollHeight
