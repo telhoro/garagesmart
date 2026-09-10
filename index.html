@@ -27284,21 +27284,12 @@ function _paginerPourPdf(doc, body){
   // Le total suit desormais la derniere page, juste apres ses dernieres
   // lignes de pieces — exactement comme sur un document a une seule page.
   if(tfoot) derniereTable.appendChild(tfoot);
-
-  // Regrouper tout ce qui suit la derniere table (mention en lettres,
-  // signature, numero de page, pied de page) dans un bloc dont la
-  // coupure entre deux pages est explicitement evitee — sinon ce petit
-  // bloc final pouvait se retrouver scinde entre la derniere page de
-  // pieces et une page suivante presque vide.
-  var suite = [];
-  var n = derniereTable.nextSibling;
-  while(n){ var suivant = n.nextSibling; suite.push(n); n = suivant; }
-  if(suite.length){
-    var blocFinal = doc.createElement('div');
-    blocFinal.style.pageBreakInside = 'avoid';
-    derniereTable.parentNode.insertBefore(blocFinal, derniereTable.nextSibling);
-    suite.forEach(function(el){ blocFinal.appendChild(el); });
-  }
+  // NOTE : le bloc final (mention en lettres, signature, pied de page)
+  // reste volontairement en flux normal apres la derniere table — le
+  // forcer a rester groupe (page-break-inside:avoid) le poussait en
+  // entier sur une page supplementaire des qu'il ne restait plus assez
+  // de place en bas de la derniere page de pieces, faisant "disparaitre"
+  // la signature et le pied de page de la page attendue.
 }
 
 function exporterPDF(){
