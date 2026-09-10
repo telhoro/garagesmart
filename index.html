@@ -143,6 +143,7 @@ tr:hover td{background:#faf9f7}
 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </head>
@@ -505,7 +506,7 @@ tr:hover td{background:#faf9f7}
 </div>
 
 <!-- MODAL IMPRESSION DOCUMENT -->
-<div <div class="overlay" id="modalImpression" style="display:none;z-index:20000" onclick="if(event.target===this)fermerImpression()">
+<div class="overlay" id="modalImpression" style="display:none;z-index:20000" onclick="if(event.target===this)fermerImpression()">
 <div class="modal" style="width:90vw;max-width:900px;max-height:90vh;overflow-y:auto">
   <div class="mhead" style="position:sticky;top:0;z-index:1;background:#fff">
     <h2 id="modalImpressionTitle">Document</h2>
@@ -27194,7 +27195,34 @@ function exporterPDF(){
     +body.innerHTML
     +'</body></html>';
 
-  // Télécharger comme fichier HTML (ouvrable dans tous les navigateurs → Imprimer → PDF)
+  // Generation directe d'un vrai fichier PDF cote client (html2pdf.js,
+  // charge via CDN). En cas d'echec de chargement de la bibliotheque
+  // (pas de connexion au premier chargement de la page par exemple), on
+  // se rabat sur l'ancien comportement : telecharger un HTML pret a
+  // imprimer, avec instruction claire pour l'utilisateur.
+  if(typeof html2pdf !== 'undefined'){
+    var conteneur = document.createElement('div');
+    conteneur.style.cssText = 'position:fixed;left:-9999px;top:0;width:210mm;background:#fff;padding:10mm;font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#1a1a1a';
+    conteneur.innerHTML = body.innerHTML;
+    document.body.appendChild(conteneur);
+    afficherToastNotif('Generation du PDF...', 'Le telechargement demarre dans quelques secondes.', 'info');
+    html2pdf().set({
+      margin: 10,
+      filename: nom+'.pdf',
+      image: { type:'jpeg', quality:0.98 },
+      html2canvas: { scale:2, useCORS:true },
+      jsPDF: { unit:'mm', format:'a4', orientation:'portrait' },
+      pagebreak: { mode:['avoid-all','css','legacy'] }
+    }).from(conteneur).save().then(function(){
+      document.body.removeChild(conteneur);
+    }).catch(function(){
+      document.body.removeChild(conteneur);
+      afficherToastNotif('Echec de la generation PDF', 'Reessayez, ou utilisez Imprimer puis "Enregistrer en PDF" depuis la fenetre d\'impression.', 'alerte');
+    });
+    return;
+  }
+
+  // Repli : telecharger comme fichier HTML (ouvrable dans tous les navigateurs → Imprimer → PDF)
   var blob = new Blob([htmlDoc], {type:'text/html;charset=utf-8'});
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
@@ -27211,7 +27239,7 @@ function exporterPDF(){
   msg.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);'
     +'background:#1a1a1a;color:#fff;padding:12px 20px;border-radius:8px;'
     +'font-size:12px;z-index:99999;max-width:400px;text-align:center;line-height:1.5';
-  msg.innerHTML = '<strong>Fichier téléchargé !</strong><br>Ouvrez-le dans votre navigateur → Imprimer → Enregistrer en PDF';
+  msg.innerHTML = '<strong>Module PDF indisponible (hors-ligne) — fichier telecharge a la place.</strong><br>Ouvrez-le dans votre navigateur → Imprimer → Enregistrer en PDF';
   document.body.appendChild(msg);
   setTimeout(function(){
     msg.style.transition = 'opacity 0.5s';
@@ -27282,6 +27310,19 @@ function exporterExcel(){
 
 
 
+// Point d'entree commun : affiche un document dans la modale d'apercu
+// (Imprimer / PDF / Word / Excel) au lieu de forcer un telechargement
+// direct. htmlContenu est le fragment de corps du document (sans
+// <html>/<head>), tel que deja produit par les fonctions imprimerXxx().
+function ouvrirModaleImpression(titre, htmlContenu){
+  var t = document.getElementById('modalImpressionTitle');
+  var b = document.getElementById('modalImpressionBody');
+  var m = document.getElementById('modalImpression');
+  if(!t || !b || !m) return;
+  t.textContent = titre;
+  b.innerHTML = htmlContenu;
+  m.style.display = 'flex';
+}
 function fermerImpression(){
   var m = document.getElementById('modalImpression');
   if(m) m.style.display = 'none';
@@ -27800,35 +27841,7 @@ function imprimerDocument(vid, type){
     +'</div></div>'
     +'<footer>CI -ABJ-2007-A6390 — 2345 ABJ 01 — 27 22 43 63 55 — 07 07 73 90 73</footer>';
 
-  // Télécharger directement sans ouvrir la modale
-  var nom = ((isFacture?'Facture':'Devis')+'_'+v.immat).replace(/[^a-zA-Z0-9_-]/g,'_');
-  // CORRECTION ENCODAGE : le fragment "html" ci-dessus n'a ni <!DOCTYPE>,
-  // ni <head>, ni balise <meta charset>. Une fois telecharge et reouvert
-  // sur un telephone, le navigateur doit deviner l'encodage sans aucun
-  // indice dans le fichier lui-meme — ce qui deforme les caracteres
-  // accentues (e, e) et les espaces insecables utilisees par le format
-  // francais des nombres (150 000 F). Envelopper dans un document HTML
-  // complet avec charset explicite regle le probleme, quel que soit
-  // l'appareil ou le navigateur qui rouvre le fichier ensuite.
-  var htmlComplet = '<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">'
-    +'<meta name="viewport" content="width=device-width, initial-scale=1">'
-    +'<title>'+(isFacture?'Facture':'Devis')+' — '+v.immat+'</title></head><body>'
-    + html
-    + '</body></html>';
-  var blob = new Blob([htmlComplet], {type:'text/html;charset=utf-8'});
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = nom+'.html';
-  a.style.display = 'none';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 2000);
-  var msg = document.createElement('div');
-  msg.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1a1a;color:#fff;padding:10px 18px;border-radius:8px;font-size:12px;z-index:99999;text-align:center';
-  msg.innerHTML = '<strong>Fichier téléchargé !</strong><br>Ouvrez-le → Imprimer → Enregistrer en PDF<br><small>Décochez "En-têtes et pieds de page" dans les options</small>';
-  document.body.appendChild(msg);
-  setTimeout(function(){ msg.style.opacity='0'; msg.style.transition='opacity 0.5s'; setTimeout(function(){ if(msg.parentNode)msg.parentNode.removeChild(msg); },600); },4000);
+  ouvrirModaleImpression((isFacture?'Facture':'Devis')+' — '+v.immat, html);
 }
 
 // Bon de livraison : disponible automatiquement des qu'un vehicule est au
@@ -27948,86 +27961,9 @@ function imprimerBonLivraison(vid){
     +'</div></div>'
     +'<footer>CI -ABJ-2007-A6390 — 2345 ABJ 01 — 27 22 43 63 55 — 07 07 73 90 73</footer>';
 
-  var nom = ('BonLivraison_'+v.immat).replace(/[^a-zA-Z0-9_-]/g,'_');
-  // CORRECTION ENCODAGE : voir imprimerDocument() plus haut — le fragment
-  // "html" n'a pas de balise <meta charset>, ce qui deforme les accents
-  // une fois le fichier reouvert sur mobile.
-  var htmlComplet = '<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">'
-    +'<meta name="viewport" content="width=device-width, initial-scale=1">'
-    +'<title>Bon de livraison — '+v.immat+'</title></head><body>'
-    + html
-    + '</body></html>';
-  var blob = new Blob([htmlComplet], {type:'text/html;charset=utf-8'});
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = nom+'.html';
-  a.style.display = 'none';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 2000);
-  var msg2 = document.createElement('div');
-  msg2.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1a1a;color:#fff;padding:10px 18px;border-radius:8px;font-size:12px;z-index:99999;text-align:center';
-  msg2.innerHTML = '<strong>Fichier téléchargé !</strong><br>Ouvrez-le → Imprimer → Enregistrer en PDF<br><small>Décochez "En-têtes et pieds de page" dans les options</small>';
-  document.body.appendChild(msg2);
-  setTimeout(function(){ msg2.style.opacity='0'; msg2.style.transition='opacity 0.5s'; setTimeout(function(){ if(msg2.parentNode)msg2.parentNode.removeChild(msg2); },600); },4000);
+  ouvrirModaleImpression('Bon de livraison — '+v.immat, html);
 }
 
-
-function imprimerModalContent(){
-  var body = document.getElementById('modalImpressionBody');
-  if(!body) return;
-  // Créer une iframe cachée pour impression A4 propre
-  var iframe = document.createElement('iframe');
-  iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:210mm;height:297mm;border:none';
-  document.body.appendChild(iframe);
-  var doc = iframe.contentDocument || iframe.contentWindow.document;
-  doc.write('<!DOCTYPE html><html><head><meta charset="UTF-8">'
-    +'<style>'
-    +'*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}'
-    +'@page{size:A4 portrait;margin:15mm}'
-    +'html,body{width:210mm;font-size:11px;color:#1a1a1a;background:#fff}'
-    +'table{width:100%;border-collapse:collapse}'
-    +'footer{position:fixed;bottom:0;left:0;right:0;padding:6mm 15mm 4mm;border-top:2px solid #1a1a1a;text-align:center;font-size:9px;color:#555;background:#fff}'
-    +'button{display:none!important}'
-    +'</style></head><body>'
-    +body.innerHTML
-    +'</body></html>');
-  doc.close();
-  setTimeout(function(){
-    iframe.contentWindow.focus();
-    iframe.contentWindow.print();
-    setTimeout(function(){ document.body.removeChild(iframe); }, 2000);
-  }, 400);
-}
-
-function imprimerDocById(btn){
-  var vid = btn.getAttribute('data-vid');
-  if(!vid) return;
-  var v = vehicles.find(function(x){return x.id===vid;});
-  if(!v) return;
-  var STATUTS_FACT = ['vehicule_termine','en_lavage','client_contacte',
-    'facture_editee','facture_deposee','dossier_cloture','attente_client'];
-  var type = STATUTS_FACT.indexOf(v.status)>=0 ? 'FACTURE' : 'DEVIS';
-  imprimerDocument(vid, type);
-}
-
-function imprimerDetCourant(){
-  if(!detCurrentVid) return;
-  var v = vehicles.find(function(x){return x.id===detCurrentVid;});
-  if(!v) return;
-  // Fermer la fiche AVANT d'ouvrir la modale impression
-  // pour éviter deux overlays simultanés
-  var detModal = document.getElementById('modalDet');
-  if(detModal) detModal.style.display = 'none';
-  var STATUTS_FACTURE = ['vehicule_termine','en_lavage','client_contacte',
-    'facture_editee','facture_deposee','dossier_cloture','attente_client'];
-  var type = STATUTS_FACTURE.indexOf(v.status)>=0 ? 'FACTURE' : 'DEVIS';
-  imprimerDocument(detCurrentVid, type);
-}
-
-function imprimerFactureById(btn){ imprimerDocument(btn.getAttribute('data-vid'), 'FACTURE'); }
-function imprimerDevisById(btn){ imprimerDocument(btn.getAttribute('data-vid'), 'DEVIS'); }
 
 // Impression de la facture forfait mensuelle : meme mise en page que
 // imprimerDocument (devis/facture), mais SANS AUCUN PRIX par ligne — la
@@ -28228,10 +28164,6 @@ function exporterFactureForfaitExcel(periodeKey){
   XLSX.writeFile(wb, nom+'.xlsx');
 }
 
-function imprimerProspectById(btn){ imprimerDevisProspect(btn.getAttribute('data-vid')); }
-function enTravauxById(btn){ mettreEnTravauxProspect(btn.getAttribute('data-vid')); }
-function veilleById(btn){ mettreEnVeilleProspect(btn.getAttribute('data-vid')); }
-function annulerProspectById(btn){ annulerDevisProspect(btn.getAttribute('data-vid')); }
 function archiverProspectById(btn){ archiverDevisProspect(btn.getAttribute('data-vid')); }
 
 // ============================================================
