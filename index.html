@@ -6626,7 +6626,7 @@ function pageRentabiliteTKM(){
   }).map(function(v){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     var totalAchat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
-    var totalVente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var totalVente = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     var marge = totalVente - totalAchat;
     var tauxMarge = totalVente>0 ? (marge/totalVente*100) : 0;
     var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
@@ -6727,7 +6727,7 @@ function pageRentabiliteSinistres(){
   }).map(function(v){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     var totalAchat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
-    var totalVente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var totalVente = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     var marge = totalVente - totalAchat;
     var tauxMarge = totalVente>0 ? (marge/totalVente*100) : 0;
     var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
@@ -6829,7 +6829,7 @@ function pageRentabilite(){
     // reellement — coherent avec l'Exposition financiere.
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     var totalAchat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
-    var totalVente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var totalVente = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     var marge = totalVente - totalAchat;
     var tauxMarge = totalVente>0 ? (marge/totalVente*100) : 0;
     var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
@@ -7085,7 +7085,7 @@ function collecterCAParClientMois(modeFiltre){
     return v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;
   }).forEach(function(v){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
-    var totalVente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var totalVente = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     if(!totalVente) return;
     var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     if(!dateRef) return;
@@ -7133,7 +7133,7 @@ function calculerMetriquesFinancieres(borneDebut, borneFin){
     var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     if(dateFacture<borneDebut || dateFacture>borneFin) return;
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
-    var vente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var vente = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     var achat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
     if(v.typeClient==='forfait'){ caForfait+=vente; achatForfait+=achat; }
     else { caDevis+=vente; achatDevis+=achat; }
@@ -7175,7 +7175,7 @@ function calculerMetriquesFinancieres(borneDebut, borneFin){
     var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     if(dateFacture>=borneDebut && dateFacture<=borneFin){
       var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
-      factureSurPeriode += lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+      factureSurPeriode += lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     }
     // Encaissement realise : base sur la date REELLE de chaque versement,
     // pas sur la date de la facture — un paiement recu maintenant pour
@@ -7223,7 +7223,7 @@ function calculerMetriquesFinancieres(borneDebut, borneFin){
     var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     if(!dateFacture || dateFacture>borneFin) return;
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
-    var vente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var vente = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     var paye = parseFloat(v.montantPaye)||0;
     montantNonEncaisse += Math.max(0, vente-paye);
   });
@@ -7343,7 +7343,7 @@ function rapportKPIs(sectionId, bornes){
       var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
       return {
         client:v.client,
-        totalVente: lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0),
+        totalVente: lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0),
         totalAchat: lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0)
       };
     });
@@ -7444,7 +7444,7 @@ function rapportDetail(sectionId, bornes){
       if(!v.chiffrage || !v.chiffrage.lignes) return;
       if(estForfait ? v.typeClient!=='forfait' : v.typeClient==='forfait') return;
       var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
-      var vente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+      var vente = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
       var achat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
       if(!parClient[v.client]) parClient[v.client] = {client:v.client, nb:0, vente:0, achat:0};
       parClient[v.client].nb++; parClient[v.client].vente+=vente; parClient[v.client].achat+=achat;
@@ -7483,7 +7483,7 @@ function collecterCATotalParMois(){
   vehicles.forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
-    var vente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var vente = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     if(!vente) return;
     var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     if(!dateFacture) return;
@@ -9510,7 +9510,7 @@ function pageAnalysePieces(){
         prixAchat: parseFloat(cl.prixAchat)||0,
         prixVente: parseFloat(cl.prixVente)||0,
         montantAchat: (parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1),
-        montantVente: (parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1),
+        montantVente: montantChiffrageLigne(cl),
         source: cl.source||'commande',
         paiement: cl.paiement||'cash',
         fournisseurId: cl.fournisseurId||'',
@@ -9727,7 +9727,7 @@ function collecterFacturesNonDeposees(){
   vehicles.forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
-    var montantFacture = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var montantFacture = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     if(!montantFacture) return;
     var estDeposee = v.status==='facture_deposee' || v.status==='dossier_cloture';
     if(estDeposee) return;
@@ -9911,7 +9911,7 @@ function pageFacturation(){
   vehicles.forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes || v.typeClient!=='devis') return;
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
-    caDevisFacture += lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    caDevisFacture += lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
   });
   FORFAIT_FACTURES.forEach(function(f){ caForfaitFacture += f.montant||0; });
   var caTotalFacture = caDevisFacture+caForfaitFacture;
@@ -9970,7 +9970,7 @@ function pageCreances(){
     return v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length && LIV_ST.indexOf(v.status)>=0 && v.typeClient!=='forfait';
   }).map(function(v){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
-    var montantFacture = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var montantFacture = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     if(!montantFacture) return null;
     // Le decompte du delai de paiement ne demarre QUE si la facture a
     // reellement ete deposee — sinon le dossier apparait mais sans
@@ -10174,11 +10174,11 @@ function ouvrirSaisiePaiement(btn){
   var v = vehicles.find(function(x){return x.id===paiementVid;});
   if(!v) return;
   var lignes = v.chiffrage && v.chiffrage.lignes ? v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
-  var montantFacture = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+  var montantFacture = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
   document.getElementById('paiementVehInfo').textContent = v.immat+' — '+v.client+' — Facture : '+montantFacture.toLocaleString('fr-FR')+' FCFA';
   // Préremplir avec le montant de la facture (modifiable)
   var lignesPre = v.chiffrage && v.chiffrage.lignes ? v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
-  var montantFacturePre = lignesPre.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+  var montantFacturePre = lignesPre.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
   var dejaPaye = parseFloat(v.montantPaye)||0;
   var resteAPayer = montantFacturePre - dejaPaye;
   document.getElementById('paiementMontant').value = resteAPayer > 0 ? resteAPayer : montantFacturePre;
@@ -10215,7 +10215,7 @@ function validerPaiement(){
   var date    = document.getElementById('paiementDate').value;
   var note    = document.getElementById('paiementNote').value.trim();
   var lignes  = v.chiffrage && v.chiffrage.lignes ? v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
-  var total   = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+  var total   = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
   if(!montant){ alert('Saisissez un montant.'); return; }
   var dejaPaye = parseFloat(v.montantPaye)||0;
   if(dejaPaye + montant > total){
@@ -10820,7 +10820,7 @@ function exporterFacturesClientExcel(client){
     return v.client===client && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;
   }).forEach(function(v){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
-    var montantFacture = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var montantFacture = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     if(!montantFacture) return;
     var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     var montantPaye = parseFloat(v.montantPaye)||0;
@@ -11053,7 +11053,7 @@ function collecterToutesFacturesClient(client){
   vehicles.filter(function(v){return v.client===client && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;})
     .forEach(function(v){
       var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
-      var montant = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+      var montant = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
       if(!montant) return;
       var montantPaye = parseFloat(v.montantPaye)||0;
       var reste = montant - montantPaye;
@@ -11553,7 +11553,7 @@ function collecterExpositionFinanciere(){
     var dateOuverture = v.entree || 0;
     var dateEngagement = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || maintenant;
     var joursExposition = Math.floor((maintenant-dateEngagement)/86400000);
-    var montantFacture = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var montantFacture = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     var margePrevisionnelle = montantFacture - montantEngage;
 
     if(!buckets[v.client]) buckets[v.client] = {client:v.client, type:'devis', dossiers:[], totalExpose:0, totalFacture:0, totalMarge:0};
@@ -12885,7 +12885,7 @@ function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
     var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     if(dateFacture<bornesActivite.deb || dateFacture>bornesActivite.fin) return;
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
-    var vente = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var vente = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     var achat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
     if(v.typeClient==='forfait'){ caForfait+=vente; achatForfait+=achat; }
     else { caDevis+=vente; achatDevis+=achat; }
@@ -12944,7 +12944,7 @@ function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
     var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     if(dateFacture>=bornesTreso.deb && dateFacture<=bornesTreso.fin){
       var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
-      factureSurPeriode += lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+      factureSurPeriode += lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     }
     // Encaissement realise : base sur la date REELLE de chaque versement,
     // pas sur la date de la facture — un paiement recu maintenant pour
@@ -13939,7 +13939,7 @@ function annulerPaiementClientByEl(btn){
     v.paiementsClient.splice(idx,1);
     v.montantPaye = v.paiementsClient.reduce(function(s,p){return s+p.montant;},0);
     var lignes = v.chiffrage && v.chiffrage.lignes ? v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
-    var total = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var total = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     v.paiementStatut = v.montantPaye>=total ? 'paye' : (v.montantPaye>0 ? 'partiel' : null);
     saveV();
   } else {
@@ -14092,7 +14092,7 @@ function collecterEncaissementsAttendus(){
   vehicles.forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
-    var montantFacture = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var montantFacture = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     if(!montantFacture) return;
     // Un dossier n'est vraiment "en attente de paiement" qu'une fois
     // livre (LIV_ST : livre/facture_deposee/dossier_cloture) — avant
@@ -15823,7 +15823,7 @@ function factureLieeEstPayee(f){
     var v = vehicles.find(function(x){return x.id===f.vehId;});
     if(!v || !v.chiffrage || !v.chiffrage.lignes) return false;
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
-    var total = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var total = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     var paye = parseFloat(v.montantPaye)||0;
     return total>0 && paye>=total;
   }
@@ -15888,7 +15888,7 @@ function collecterFacturesEligibles(engagementIdExclu){
   vehicles.forEach(function(v){
     if(!v.factureDeposeeLe || !v.chiffrage || !v.chiffrage.lignes) return;
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
-    var total = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+    var total = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     var paye = parseFloat(v.montantPaye)||0;
     if(total<=0 || paye>=total) return;
     var refKey = refKeyFacture('devis', v.id);
@@ -16471,7 +16471,7 @@ function rentaVuePeriode(){
       toutesLignes.push({
         piece:cl.piece, qte:parseInt(cl.qte)||1,
         montant:(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1),
-        caLigne:(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1),
+        caLigne:montantChiffrageLigne(cl),
         source:(cl.paiement==='credit' ? 'credit_fourn' : (cl.paiement==='stock' ? 'stock' : (cl.sourceFinancement||''))),
         paiement:cl.paiement||'cash',
         date:dateRef,
@@ -16785,7 +16785,7 @@ function pageForfaitsTKM(){
   }
   html += '<div class="tw"><table><thead><tr><th>Forfait</th><th>Pieces</th><th>Total</th><th>Lie au stock</th><th></th></tr></thead><tbody>';
   FORFAITS_TKM.forEach(function(f){
-    var total = (f.lignes||[]).reduce(function(s,l){return s+(parseFloat(l.prixVente)||0)*(parseInt(l.qte)||1);},0);
+    var total = (f.lignes||[]).reduce(function(s,l){return s+montantChiffrageLigne(l);},0);
     var nbLiees = (f.lignes||[]).filter(function(l){return l.source==='stock' && l.stockArticleId;}).length;
     html += '<tr>';
     html += '<td class="fw7">'+f.nom+'</td>';
@@ -17210,7 +17210,7 @@ function pageDashDir(){
         html += '<th style="padding:3px 6px">Paiement</th>';
         html += '</tr></thead><tbody>';
         lignes.forEach(function(cl){
-          var tot = (v.typeClient==='forfait'||estDossierAssurance(v)) ? (parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1) : (parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);
+          var tot = (v.typeClient==='forfait'||estDossierAssurance(v)) ? (parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1) : montantChiffrageLigne(cl);
           var srcLabel = cl.source==='local'?'Local':'Import';
           var srcBadge = cl.source==='local'?'b-blue':'b-amber';
           var paieLabel = (!cl.paiement||cl.paiement==='cash')?'Cash':'Crédit';
@@ -17266,7 +17266,7 @@ function htmlTableauProspects(){
   html += '<div class="tw"><table><thead><tr><th>Véhicule</th><th>Client</th><th>Motif</th><th>Statut</th>'+(restreintCA?'':'<th>Montant estimé</th>')+'<th>Actions</th></tr></thead><tbody>';
   prospects.forEach(function(v){
     var montant = 0;
-    if(v.chiffrage && v.chiffrage.lignes) v.chiffrage.lignes.forEach(function(l){ montant += (parseFloat(l.prixVente)||0)*(parseInt(l.qte)||1); });
+    if(v.chiffrage && v.chiffrage.lignes) v.chiffrage.lignes.forEach(function(l){ montant += montantChiffrageLigne(l); });
     var statut = '<span class="badge b-gray">En saisie</span>';
     if(v.chiffrage && v.chiffrage.valide) statut = '<span class="badge b-green">Chiffre</span>';
     if(v.prospectStatut==='valide_client') statut = '<span class="badge b-green">&#x2714; Valide client</span>';
@@ -19191,6 +19191,12 @@ function toggleDevisEdit(){
 }
 
 // Genere le HTML de la rubrique Devis, integree dans la modale de visualisation standard
+// Montant d'une ligne de chiffrage (prix vente x qte), remise en % deja
+// deduite — reutilise partout ou un total de ligne doit refleter la
+// remise (chiffrage achats/direction, impression devis/facture...).
+function montantChiffrageLigne(cl){
+  return (parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1)*(1-(parseFloat(cl.remise)||0)/100);
+}
 function renderChiffrageSection(v){
   // isForfait masque les colonnes Prix vente/Total vente (paiement forfaitaire
   // fixe, pas au prix de vente par piece). Les dossiers assurance suivent
@@ -19209,10 +19215,10 @@ function renderChiffrageSection(v){
     var s0 = '<div style="margin-top:14px"><div class="sdiv">Devis chiffré</div>';
     // Afficher le chiffrage en lecture seule pour la réception
     if(v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length){
-      var totalGlobalR = v.chiffrage.lignes.reduce(function(sum,cl){return sum+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+      var totalGlobalR = v.chiffrage.lignes.reduce(function(sum,cl){return sum+montantChiffrageLigne(cl);},0);
       s0 += '<div class="tw"><table><thead><tr><th>Designation</th><th>Qte</th>'+(isForfait?''+'<th>Prix achat (FCFA)</th>':'<th>Prix vente (FCFA)</th>')+'<th>Total (FCFA)</th></tr></thead><tbody>';
       v.chiffrage.lignes.forEach(function(cl){
-        var tot = (parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);
+        var tot = montantChiffrageLigne(cl);
         s0 += '<tr><td>'+(cl.piece||'—')+'</td><td>'+cl.qte+'</td>';
         s0 += isForfait ? '' : '<td style="font-family:monospace">'+(cl.prixVente?parseFloat(cl.prixVente).toLocaleString('fr-FR'):'—')+'</td>';
         s0 += '<td style="font-family:monospace;color:#185FA5">'+(tot?tot.toLocaleString('fr-FR'):'—')+'</td></tr>';
@@ -19339,9 +19345,21 @@ function renderChiffrageSection(v){
     s += '</div>';
   }
 
+  // Remise globale : applique le meme pourcentage a toutes les lignes
+  // deja chiffrees en un clic, tout en restant modifiable ligne par
+  // ligne ensuite (le champ "Remise %" de chaque piece reste editable).
+  if(!isChiffreLocked && !_prospectMasquerPrix && !isForfait){
+    s += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;padding:8px 10px;background:#FAF9F7;border-radius:7px">';
+    s += '<span class="xs muted">Remise globale :</span>';
+    s += '<input type="number" min="0" max="100" class="inp" style="width:70px;font-size:11px" id="remiseGlobaleChiffrage" placeholder="Ex: 30">';
+    s += '<span class="xs muted">%</span>';
+    s += '<button class="btn btn-sm" onclick="appliquerRemiseGlobaleChiffrage()">Appliquer a toutes les pieces</button>';
+    s += '</div>';
+  }
+
   s += '<div class="tw" style="overflow-x:auto"><table><thead><tr>'
     +'<th style="background:#EAF3DE;color:#3B6D11">Pièce demandée</th><th>Qte</th><th>Désignation / Référence</th>'
-    +(_prospectMasquerPrix?'':'<th>Prix achat (FCFA)</th>'+(isForfait?'':'<th>Prix vente (FCFA)</th><th>Total vente</th>'))
+    +(_prospectMasquerPrix?'':'<th>Prix achat (FCFA)</th>'+(isForfait?'':'<th>Prix vente (FCFA)</th><th>Remise %</th><th>Total vente</th>'))
     +'<th>Fournisseur</th><th>Source</th><th>Paiement</th>'
     +(currentRole==='direction'?'<th>Validation</th>':'<th></th>')
     +'</tr></thead><tbody>';
@@ -19354,7 +19372,7 @@ function renderChiffrageSection(v){
     if(cl.fournisseurId){ var ff=FOURNISSEURS.find(function(x){return x.id===cl.fournisseurId;}); if(ff) fournNomDisplay=ff.nom; }
     var sourceLabel = cl.source==='local'?'Local':'Commande';
     var paieLabel = (!cl.paiement || cl.paiement==='cash') ? 'Cash' : 'Crédit';
-    var totVente = isForfait ? 0 : (parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);
+    var totVente = isForfait ? 0 : montantChiffrageLigne(cl);
 
     if(isChiffreLocked){
       var pieceOrig = '';
@@ -19365,7 +19383,8 @@ function renderChiffrageSection(v){
       s += '<td>'+cl.qte+'</td>';
       s += '<td style="font-family:monospace">'+(cl.prixAchat||'—')+'</td>';
       if(!isForfait) s += '<td style="font-family:monospace">'+(cl.prixVente||'—')+'</td>';
-      if(!isForfait) s += '<td style="font-family:monospace;color:#185FA5">'+(totVente?totVente.toLocaleString('fr-FR'):'—')+'</td>';
+      if(!isForfait) s += '<td style="font-family:monospace">'+(cl.remise?cl.remise+'%':'—')+'</td>';
+      if(!isForfait) s += '<td style="font-family:monospace;color:#185FA5">'+(totVente?Math.round(totVente).toLocaleString('fr-FR'):'—')+'</td>';
       s += '<td class="xs">'+(fournNomDisplay)+'</td>';
       s += '<td><span class="badge '+(cl.source==='local'?'b-blue':'b-amber')+'">'+sourceLabel+'</span></td>';
       s += '<td><span class="badge '+((!cl.paiement||cl.paiement==='cash')?'b-amber':'b-purple')+'">'+paieLabel+'</span></td>';
@@ -19424,7 +19443,8 @@ function renderChiffrageSection(v){
       if(!_prospectMasquerPrix){
       s += '<td><input type="number" min="0" class="inp" style="font-size:11px;width:100px'+(cl.prixReporte?';background:#FDF8EE':'')+'" value="'+(cl.prixAchat||'')+'" placeholder="Prix achat" data-clid="'+lineId+'" data-cfield="prixAchat" onchange="updateChiffrageLigneByEl(this)">'+indicRep+'</td>';
       if(!isForfait) s += '<td><input type="number" min="0" class="inp" style="font-size:11px;width:100px" value="'+(cl.prixVente||'')+'" placeholder="Prix vente" data-clid="'+lineId+'" data-cfield="prixVente" onchange="updateChiffrageLigneByEl(this)"></td>'; else s += '<td></td>';
-      s += '<td style="font-family:monospace;font-size:11px;color:#185FA5" id="chiff-tot-'+lineId+'">'+(cl.prixVente?((parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1)).toLocaleString('fr-FR'):'—')+'</td>';
+      if(!isForfait) s += '<td><input type="number" min="0" max="100" class="inp" style="font-size:11px;width:60px" value="'+(cl.remise||'')+'" placeholder="%" data-clid="'+lineId+'" data-cfield="remise" onchange="updateChiffrageLigneByEl(this)"></td>'; else s += '<td></td>';
+      s += '<td style="font-family:monospace;font-size:11px;color:#185FA5" id="chiff-tot-'+lineId+'">'+(cl.prixVente?Math.round(montantChiffrageLigne(cl)).toLocaleString('fr-FR'):'—')+'</td>';
       }
       // Colonne Fournisseur : en source Stock, elle affiche l'article choisi (selection via la designation)
       if(cl.source === 'stock'){
@@ -19463,19 +19483,18 @@ function renderChiffrageSection(v){
 
   // Total général
   var totalAchat = v.chiffrage.lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
-  var totalVente = v.chiffrage.lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
-  var totalAchat = v.chiffrage.lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
-  var totalVente = v.chiffrage.lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+  var totalVente = v.chiffrage.lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
   var totalMarge = totalVente - totalAchat;
   var margePct = totalAchat>0 ? Math.round((totalMarge/totalAchat)*100) : 0;
   s += '<tr style="background:#f5f4f1;font-weight:700">';
   s += '<td colspan="3" style="text-align:right">Totaux :</td>';
   if(!_prospectMasquerPrix){
-  s += '<td style="font-family:monospace" title="Total achat">'+totalAchat.toLocaleString('fr-FR')+'</td>';
+  s += '<td style="font-family:monospace" title="Total achat">'+Math.round(totalAchat).toLocaleString('fr-FR')+'</td>';
   if(!isForfait){
-    s += '<td style="font-family:monospace" title="Total vente">'+totalVente.toLocaleString('fr-FR')+'</td>';
-    s += '<td style="font-family:monospace;color:#185FA5">'+totalVente.toLocaleString('fr-FR')+' FCFA</td>';
-    s += '<td colspan="4" style="color:#3B6D11;font-weight:800">&#x1F4B0; Marge brute : <span style="font-family:monospace;color:'+(totalMarge>=0?'#3B6D11':'#A32D2D')+'">'+totalMarge.toLocaleString('fr-FR')+' FCFA ('+margePct+'%)</span></td>';
+    s += '<td style="font-family:monospace" title="Total vente">'+Math.round(totalVente).toLocaleString('fr-FR')+'</td>';
+    s += '<td></td>'; // colonne Remise % — pas de total agrege pertinent ici
+    s += '<td style="font-family:monospace;color:#185FA5">'+Math.round(totalVente).toLocaleString('fr-FR')+' FCFA</td>';
+    s += '<td colspan="4" style="color:#3B6D11;font-weight:800">&#x1F4B0; Marge brute : <span style="font-family:monospace;color:'+(totalMarge>=0?'#3B6D11':'#A32D2D')+'">'+Math.round(totalMarge).toLocaleString('fr-FR')+' FCFA ('+margePct+'%)</span></td>';
   } else {
     s += '<td colspan="4"></td>';
   }
@@ -19691,7 +19710,7 @@ function renderChiffrageProspect(v){
   s += '</tbody></table></div>';
 
   // Total
-  var total = v.chiffrage.lignes.reduce(function(acc,l){ return acc+(parseFloat(l.prixVente)||0)*(parseInt(l.qte)||1); }, 0);
+  var total = v.chiffrage.lignes.reduce(function(acc,l){ return acc+montantChiffrageLigne(l); }, 0);
   if(total && !masquerPrixCA){
     s += '<div style="text-align:right;font-weight:700;font-size:13px;margin-top:8px;color:#185FA5">Total estimé : '+total.toLocaleString('fr-FR')+' F CFA</div>';
   }
@@ -19882,6 +19901,9 @@ function updateChiffrageLigne(lineId, field, val){
   } else if(field==='prixAchat' || field==='prixVente'){
     var p = parseFloat(val);
     cl[field] = isNaN(p) ? 0 : p;
+  } else if(field==='remise'){
+    var r = parseFloat(val);
+    cl.remise = isNaN(r) ? 0 : Math.max(0, Math.min(100, r));
   } else {
     cl[field] = val;
   }
@@ -19923,12 +19945,28 @@ function updateChiffrageLigne(lineId, field, val){
     return;
   }
   // Recalculer le total de cette ligne en direct
-  if(field==='prixVente' || field==='qte'){
-    var tot = (parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);
+  if(field==='prixVente' || field==='qte' || field==='remise'){
+    var tot = montantChiffrageLigne(cl);
     var el = document.getElementById('chiff-tot-'+lineId);
-    if(el) el.textContent = tot ? tot.toLocaleString('fr-FR') : '—';
+    if(el) el.textContent = tot ? Math.round(tot).toLocaleString('fr-FR') : '—';
   }
   saveV();
+}
+
+// Applique un meme pourcentage de remise a toutes les lignes deja
+// chiffrees (piece renseignee) en un clic — chaque ligne reste ensuite
+// modifiable individuellement via son propre champ "Remise %".
+function appliquerRemiseGlobaleChiffrage(){
+  var v = vehicles.find(function(x){return x.id===detCurrentVid;});
+  if(!v || !v.chiffrage) return;
+  var champ = document.getElementById('remiseGlobaleChiffrage');
+  var val = parseFloat(champ ? champ.value : '');
+  if(isNaN(val) || val<0 || val>100){ alert('Saisissez un pourcentage de remise valide (entre 0 et 100).'); return; }
+  var nb = 0;
+  v.chiffrage.lignes.forEach(function(cl){ if((cl.piece||'').trim()){ cl.remise = val; nb++; } });
+  saveV();
+  afficherToastNotif('Remise appliquee', val+'% applique sur '+nb+' piece'+(nb>1?'s':'')+'.', 'ok');
+  openDetKeepEdit(detCurrentVid);
 }
 
 function addChiffrageLigne(){
@@ -20886,7 +20924,7 @@ function htmlRecapValidation(v){
   // Cout total du vehicule (pour la marge) : inclut le stock
   var totCoutReel = totVal + totValStock;
   // Vente et marge des pieces validees
-  var totValVente = lignesVal.reduce(function(sum,cl){return sum+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+  var totValVente = lignesVal.reduce(function(sum,cl){return sum+montantChiffrageLigne(cl);},0);
   // La marge se calcule sur le COUT REEL : le stock a bien coute de l'argent, meme s'il est deja paye
   var totValMarge = totValVente - totCoutReel;
   var margeValPct = totCoutReel>0 ? Math.round((totValMarge/totCoutReel)*100) : 0;
@@ -23087,7 +23125,7 @@ function achatsTableau(title, list, badgeClass, type){
     if(v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length){
       var vForfait = (v.typeClient==='forfait');
       var mAchat = v.chiffrage.lignes.reduce(function(sum,cl){return sum+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
-      var mVente = v.chiffrage.lignes.reduce(function(sum,cl){return sum+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+      var mVente = v.chiffrage.lignes.reduce(function(sum,cl){return sum+montantChiffrageLigne(cl);},0);
       if(vForfait){
         // Forfait : afficher seulement le cout d'achat (decaissement)
         if(mAchat>0){
@@ -23641,7 +23679,7 @@ function regrouperParImmatriculationVuePortail(liste){
       passages.forEach(function(p){
         if(p.chiffrage && p.chiffrage.lignes){
           coutTotal += p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();})
-            .reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+            .reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
         }
       });
     }
@@ -23852,7 +23890,7 @@ function pageVuePortailClient(){
     html += '<div class="tw"><table><thead><tr><th>Vehicule</th><th>Date</th><th style="text-align:right">Montant</th><th>Statut</th></tr></thead><tbody>';
     facturesAAfficher.forEach(function(v){
       var montantFacture = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();})
-        .reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
+        .reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
       var paye = parseFloat(v.montantPaye)||0;
       var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree;
       var statutLabel = paye>=montantFacture ? 'Payee' : (paye>0 ? 'Partiel' : 'En attente');
@@ -23991,7 +24029,7 @@ function ouvrirHistoriqueVuePortail(immat){
     if(lignes.length){
       html += '<div class="pieces-list" style="margin-top:4px">';
       lignes.forEach(function(cl){
-        var txt = cl.piece + (estForfait?'':' — '+((parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1)).toLocaleString('fr-FR')+' FCFA');
+        var txt = cl.piece + (estForfait?'':' — '+(montantChiffrageLigne(cl)).toLocaleString('fr-FR')+' FCFA');
         html += '<span class="badge b-gray" style="margin:2px">'+txt+'</span>';
       });
       html += '</div>';
@@ -24028,7 +24066,7 @@ function imprimerHistoriqueVuePortail(){
     if(p.motif) html += '<div>Motif : '+p.motif+'</div>';
     if(lignes.length){
       lignes.forEach(function(cl){
-        var txt = cl.piece + (estForfait?'':' — '+((parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1)).toLocaleString('fr-FR')+' FCFA');
+        var txt = cl.piece + (estForfait?'':' — '+(montantChiffrageLigne(cl)).toLocaleString('fr-FR')+' FCFA');
         html += '<span class="piece">'+txt+'</span>';
       });
     } else {
@@ -24202,7 +24240,7 @@ function vpImprimerToutHistorique(){
         html += '<table><thead><tr><th>Piece</th><th>Qte</th>'+(estForfait?'':'<th>Prix</th>')+'</tr></thead><tbody>';
         var total = 0;
         lignes.forEach(function(cl){
-          var lt = (parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);
+          var lt = montantChiffrageLigne(cl);
           total += lt;
           html += '<tr><td>'+cl.piece+'</td><td>'+(cl.qte||1)+'</td>'+(estForfait?'':'<td>'+lt.toLocaleString('fr-FR')+' FCFA</td>')+'</tr>';
         });
@@ -24378,7 +24416,7 @@ function ouvrirRapportVehicule(vid, immat){
       var lignes = (d.devis&&d.devis.lignes) ? d.devis.lignes.filter(function(l){return (l.piece||'').trim();})
                  : (d.chiffrage&&d.chiffrage.lignes) ? d.chiffrage.lignes.filter(function(l){return (l.piece||'').trim();}) : [];
       var pieces = lignes.map(function(l){return (l.piece||'')+' x'+(l.qte||1);}).join(', ');
-      var total = lignes.reduce(function(s,l){return s+(parseFloat(l.prixVente)||0)*(parseInt(l.qte)||1);},0);
+      var total = lignes.reduce(function(s,l){return s+montantChiffrageLigne(l);},0);
       var bg = idx%2===0 ? '' : 'background:#fafaf8';
       h += '<tr style="'+bg+'">';
       h += '<td>'+dateStr+'</td>';
@@ -24397,7 +24435,7 @@ function ouvrirRapportVehicule(vid, immat){
       var totalGen = tousLesDossiers.reduce(function(s,d){
         var lignes = (d.devis&&d.devis.lignes)||((d.chiffrage&&d.chiffrage.lignes)||[]);
         return s + lignes.filter(function(l){return (l.piece||'').trim();})
-                         .reduce(function(ss,l){return ss+(parseFloat(l.prixVente)||0)*(parseInt(l.qte)||1);},0);
+                         .reduce(function(ss,l){return ss+montantChiffrageLigne(l);},0);
       },0);
       if(totalGen) h += '<div style="text-align:right;font-weight:700;font-size:13px;margin-top:8px">Total général : '+totalGen.toLocaleString('fr-FR')+' F CFA</div>';
     }
@@ -24658,7 +24696,7 @@ function renderClientsListe(clients, q){
       // Prospects archivés — dans le même tableau
       prospectsArchives.forEach(function(p){
         var montant = 0;
-        if(p.chiffrage && p.chiffrage.lignes) p.chiffrage.lignes.forEach(function(l){ montant += (parseFloat(l.prixVente)||0)*(parseInt(l.qte)||1); });
+        if(p.chiffrage && p.chiffrage.lignes) p.chiffrage.lignes.forEach(function(l){ montant += montantChiffrageLigne(l); });
         html += '<div class="veh-sub" style="background:#FFF9F0;border-left:3px solid #854F0B">';
         html += '<div style="min-width:130px"><div class="fw7">'+p.immat+'</div><div class="xs muted">'+p.marque+' '+p.modele+'</div></div>';
         html += '<div style="min-width:130px"><span class="badge" style="background:#854F0B;color:#fff;font-size:10px">Devis archivé</span></div>';
@@ -27998,7 +28036,7 @@ function imprimerDocument(vid, type){
     lignes = v.chiffrage.lignes.filter(function(l){ return (l.piece||'').trim(); });
   }
   var total = lignes.reduce(function(s,l){
-    return s+(parseFloat(l.prixVente)||0)*(parseInt(l.qte)||1);
+    return s+montantChiffrageLigne(l);
   },0);
 
   var numDoc = genNumeroDoc(v, isFacture?'FACTURE':'DEVIS');
@@ -28012,14 +28050,15 @@ function imprimerDocument(vid, type){
   lignes.forEach(function(l, i){
     var pu = parseFloat(l.prixVente)||0;
     var qte = parseInt(l.qte)||1;
-    var mt = pu*qte;
+    var remise = parseFloat(l.remise)||0;
+    var mt = montantChiffrageLigne(l);
     rowsHtml += '<tr>'
       +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:center;font-size:11px">'+(i+1)+'</td>'
       +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+(l.piece||'')+'</td>'
       +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:center;font-size:11px">'+qte+'</td>'
       +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:right;font-size:11px">'+(pu?pu.toLocaleString('fr-FR'):'')+'</td>'
-      +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:right;font-size:11px"></td>'
-      +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:right;font-weight:700;font-size:11px">'+(mt?mt.toLocaleString('fr-FR'):'')+'</td>'
+      +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:right;font-size:11px">'+(remise?remise+'%':'')+'</td>'
+      +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:right;font-weight:700;font-size:11px">'+(mt?Math.round(mt).toLocaleString('fr-FR'):'')+'</td>'
       +'</tr>';
   });
 
@@ -28528,7 +28567,7 @@ function _imprimerDevisVehicule_html(vid){
   if(!lignes.length && v.devis && v.devis.lignes){
     lignes = v.devis.lignes.filter(function(l){return (l.piece||'').trim();});
   }
-  var total = lignes.reduce(function(a,l){ return a+(parseFloat(l.prixVente)||0)*(parseInt(l.qte)||1); }, 0);
+  var total = lignes.reduce(function(a,l){ return a+montantChiffrageLigne(l); }, 0);
   var mec = v.mec ? new Date(v.mec).toLocaleDateString('fr-FR') : (v.annee||'—');
   var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Devis — '+v.immat+'</title>';
   html += '<style>body{font-family:Arial,sans-serif;margin:30px;font-size:13px;background:#fff}';
