@@ -507,7 +507,7 @@ tr:hover td{background:#faf9f7}
 
 <!-- MODAL IMPRESSION DOCUMENT -->
 <div class="overlay" id="modalImpression" style="display:none;z-index:20000" onclick="if(event.target===this)fermerImpression()">
-<div class="modal" style="width:90vw;max-width:900px;max-height:90vh;overflow-y:auto">
+<div class="modal" style="width:90vw;max-width:900px;max-height:92vh;overflow-y:auto">
   <div class="mhead" style="position:sticky;top:0;z-index:1;background:#fff">
     <h2 id="modalImpressionTitle">Document</h2>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -518,7 +518,13 @@ tr:hover td{background:#faf9f7}
       <button class="btn btn-sm" onclick="fermerImpression()">X</button>
     </div>
   </div>
-  <div id="modalImpressionBody" style="padding:16px;background:#fff"></div>
+  <div style="padding:16px;background:#e8e6e1;display:flex;justify-content:center">
+    <!-- Iframe dimensionnee en A4 (210mm) : l'apercu affiche correspond
+         ainsi exactement a ce que produiront Imprimer/PDF/Word, au lieu
+         d'une simple div limitee a la largeur de la modale (~900px) qui
+         faussait completement la mise en page A4 du document source. -->
+    <iframe id="modalImpressionFrame" style="width:210mm;min-height:297mm;border:none;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.15)"></iframe>
+  </div>
 </div>
 </div>
 
@@ -27174,53 +27180,53 @@ function creerDevisProspect(){
 }
 
 function exporterPDF(){
-  var body = document.getElementById('modalImpressionBody');
+  var doc = _modalImpressionDoc();
   var title = document.getElementById('modalImpressionTitle');
-  if(!body) return;
+  if(!doc || !doc.body) return;
   var nom = (title?title.textContent:'document').replace(/[^a-zA-Z0-9_-]/g,'_');
-
-  // Construire un document HTML complet autonome (avec logo intégré)
-  var htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+nom+'</title>'
-    +'<style>'
-    +'*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}'
-    +'*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}'
-    +'@page{size:A4 portrait;margin:15mm}'
-    +'html,body{width:210mm;font-size:11px;color:#1a1a1a;background:#fff}'
-    +'body{padding:10mm}'
-    +'table{width:100%;border-collapse:collapse}'
-    +'button{display:none!important}'
-    +'footer{margin-top:20mm;border-top:2px solid #1a1a1a;padding-top:5px;text-align:center;font-size:9px;color:#555}'
-    +'@media print{*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}'
-    +'</style></head><body>'
-    +body.innerHTML
-    +'</body></html>';
 
   // Generation directe d'un vrai fichier PDF cote client (html2pdf.js,
   // charge via CDN). En cas d'echec de chargement de la bibliotheque
   // (pas de connexion au premier chargement de la page par exemple), on
   // se rabat sur l'ancien comportement : telecharger un HTML pret a
   // imprimer, avec instruction claire pour l'utilisateur.
-  //
-  // IMPORTANT : on capture directement l'element visible de la modale
-  // (body), PAS un clone place hors-ecran (left:-9999px) — html2canvas
-  // ne parvient pas a rendre correctement un element positionne hors du
-  // viewport dans ce contexte, ce qui produisait une page blanche.
   if(typeof html2pdf !== 'undefined'){
+    // Les documents impriment un footer en position:fixed (pour qu'il
+    // reste colle en bas de CHAQUE page reelle a l'impression) — mais la
+    // capture html2canvas ne "pagine" pas reellement, elle prend une
+    // seule image continue : un element fixe s'y comporte de facon
+    // imprevisible (duplique, ou flottant au milieu du document).
+    // On le neutralise temporairement le temps de la capture.
+    var footers = doc.querySelectorAll('footer');
+    var positionsOriginales = [];
+    footers.forEach(function(f){ positionsOriginales.push(f.style.position); f.style.position='static'; });
+
     afficherToastNotif('Generation du PDF...', 'Le telechargement demarre dans quelques secondes.', 'info');
     html2pdf().set({
       margin: 10,
       filename: nom+'.pdf',
       image: { type:'jpeg', quality:0.98 },
-      html2canvas: { scale:2, useCORS:true, backgroundColor:'#ffffff' },
+      html2canvas: { scale:3, useCORS:true, backgroundColor:'#ffffff' },
       jsPDF: { unit:'mm', format:'a4', orientation:'portrait' },
-      pagebreak: { mode:['avoid-all','css','legacy'] }
-    }).from(body).save().catch(function(){
+      // IMPORTANT : ne pas forcer l'evitement de coupure a l'interieur du
+      // tableau ('avoid-all') — avec un tableau de plusieurs lignes qui
+      // ne tient pas dans l'espace restant sur la premiere page, ce mode
+      // repoussait TOUT le tableau en page 2, laissant la premiere page
+      // quasiment vide. 'legacy' evite deja une coupure AU MILIEU d'une
+      // ligne (<tr>), ce qui est le seul point vraiment genant.
+      pagebreak: { mode:['css','legacy'] }
+    }).from(doc.body).save().then(function(){
+      footers.forEach(function(f,i){ f.style.position = positionsOriginales[i]; });
+    }).catch(function(){
+      footers.forEach(function(f,i){ f.style.position = positionsOriginales[i]; });
       afficherToastNotif('Echec de la generation PDF', 'Reessayez, ou utilisez Imprimer puis "Enregistrer en PDF" depuis la fenetre d\'impression.', 'alerte');
     });
     return;
   }
 
   // Repli : telecharger comme fichier HTML (ouvrable dans tous les navigateurs → Imprimer → PDF)
+  var htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+nom+'</title></head><body>'
+    +doc.body.innerHTML+'</body></html>';
   var blob = new Blob([htmlDoc], {type:'text/html;charset=utf-8'});
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
@@ -27247,9 +27253,9 @@ function exporterPDF(){
 }
 
 function exporterWord(){
-  var body = document.getElementById('modalImpressionBody');
+  var doc = _modalImpressionDoc();
   var title = document.getElementById('modalImpressionTitle');
-  if(!body) return;
+  if(!doc || !doc.body) return;
   var nom = (title?title.textContent:'document').replace(/[^a-zA-Z0-9_-]/g,'_');
 
   // Word (moteur mshtml) ne comprend ni flexbox/grid, ni position, ni les
@@ -27258,7 +27264,7 @@ function exporterWord(){
   // les chiffres deviennent invisibles ou que le contenu soit coupe. On
   // travaille sur une COPIE du contenu pour nettoyer ces proprietes sans
   // toucher a l'apercu affiche a l'ecran.
-  var clone = body.cloneNode(true);
+  var clone = doc.body.cloneNode(true);
   var proprietesARetirer = ['position','top','left','right','bottom','display',
     'flex','flexDirection','flexWrap','justifyContent','alignItems','gap',
     'transform','float','zIndex','minWidth','maxWidth'];
@@ -27305,8 +27311,8 @@ function exporterExcel(){
   var title = document.getElementById('modalImpressionTitle');
   var nom = (title?title.textContent:'document').replace(/[^a-zA-Z0-9_-]/g,'_');
 
-  var body = document.getElementById('modalImpressionBody');
-  if(!body) return;
+  var doc = _modalImpressionDoc();
+  if(!doc || !doc.body) return;
 
   if(typeof XLSX === 'undefined'){
     afficherToastNotif('Module Excel indisponible', 'Rechargez la page (connexion internet requise au premier chargement).', 'alerte');
@@ -27318,7 +27324,7 @@ function exporterExcel(){
   // (HTML deguise en .xls) declenchait une alerte "format de fichier
   // suspect" dans Excel et affichait un contenu incoherent une fois
   // ouverte malgre tout — un .xlsx genuine n'a ni l'un ni l'autre probleme.
-  var tables = body.querySelectorAll('table');
+  var tables = doc.body.querySelectorAll('table');
   if(!tables.length){
     afficherToastNotif('Aucun tableau', 'Ce document ne contient pas de tableau exploitable en Excel.', 'alerte');
     return;
@@ -27341,18 +27347,49 @@ function exporterExcel(){
 
 
 
+// Renvoie le document de l'iframe d'apercu (contenu A4 complet), ou null
+// si la modale n'est pas ouverte. Utilise par toutes les actions
+// Imprimer / PDF / Word / Excel pour travailler sur EXACTEMENT ce qui
+// est affiche a l'ecran.
+function _modalImpressionDoc(){
+  var f = document.getElementById('modalImpressionFrame');
+  if(!f) return null;
+  return f.contentDocument || f.contentWindow.document;
+}
+
 // Point d'entree commun : affiche un document dans la modale d'apercu
 // (Imprimer / PDF / Word / Excel) au lieu de forcer un telechargement
 // direct. htmlContenu est le fragment de corps du document (sans
 // <html>/<head>), tel que deja produit par les fonctions imprimerXxx().
+//
+// IMPORTANT : le contenu est ecrit dans une VRAIE iframe dimensionnee en
+// A4 (210mm), pas dans une simple <div> limitee a la largeur de la
+// modale (~900px) — sans ca, la mise en page du document (concue pour
+// du A4) etait completement faussee dans l'apercu, et cette meme mise
+// en page faussee se retrouvait dans le PDF/Word/Excel generes ensuite.
 function ouvrirModaleImpression(titre, htmlContenu){
   var t = document.getElementById('modalImpressionTitle');
-  var b = document.getElementById('modalImpressionBody');
   var m = document.getElementById('modalImpression');
-  if(!t || !b || !m) return;
+  var frame = document.getElementById('modalImpressionFrame');
+  if(!t || !m || !frame) return;
   t.textContent = titre;
-  b.innerHTML = htmlContenu;
   m.style.display = 'flex';
+  var doc = frame.contentDocument || frame.contentWindow.document;
+  doc.open();
+  doc.write('<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">'
+    +'<meta name="viewport" content="width=device-width, initial-scale=1">'
+    +'<title>'+titre+'</title>'
+    +'<style>'
+    +'*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}'
+    +'*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}'
+    +'@page{size:A4 portrait;margin:15mm}'
+    +'html,body{width:210mm;font-size:11px;color:#1a1a1a;background:#fff}'
+    +'table{width:100%;border-collapse:collapse}'
+    +'footer{margin-top:20mm;border-top:2px solid #1a1a1a;padding-top:5px;text-align:center;font-size:9px;color:#555}'
+    +'</style></head><body>'
+    +htmlContenu
+    +'</body></html>');
+  doc.close();
 }
 function fermerImpression(){
   var m = document.getElementById('modalImpression');
@@ -27365,31 +27402,14 @@ function fermerImpression(){
 
 }
 
+// Imprime directement l'iframe d'apercu deja affichee — plus besoin de
+// recreer une seconde iframe cachee avec sa propre copie du contenu
+// (source d'incoherences entre ce qui etait vu et ce qui etait imprime).
 function imprimerModalContent(){
-  var body = document.getElementById('modalImpressionBody');
-  if(!body) return;
-  // Créer une iframe cachée pour impression A4 propre
-  var iframe = document.createElement('iframe');
-  iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:210mm;height:297mm;border:none';
-  document.body.appendChild(iframe);
-  var doc = iframe.contentDocument || iframe.contentWindow.document;
-  doc.write('<!DOCTYPE html><html><head><meta charset="UTF-8">'
-    +'<style>'
-    +'*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}'
-    +'@page{size:A4 portrait;margin:15mm}'
-    +'html,body{width:210mm;font-size:11px;color:#1a1a1a;background:#fff}'
-    +'table{width:100%;border-collapse:collapse}'
-    +'footer{position:fixed;bottom:0;left:0;right:0;padding:6mm 15mm 4mm;border-top:2px solid #1a1a1a;text-align:center;font-size:9px;color:#555;background:#fff}'
-    +'button{display:none!important}'
-    +'</style></head><body>'
-    +body.innerHTML
-    +'</body></html>');
-  doc.close();
-  setTimeout(function(){
-    iframe.contentWindow.focus();
-    iframe.contentWindow.print();
-    setTimeout(function(){ document.body.removeChild(iframe); }, 2000);
-  }, 400);
+  var frame = document.getElementById('modalImpressionFrame');
+  if(!frame || !frame.contentWindow) return;
+  frame.contentWindow.focus();
+  frame.contentWindow.print();
 }
 
 function imprimerDocById(btn){
