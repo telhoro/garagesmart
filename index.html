@@ -27184,9 +27184,43 @@ function creerDevisProspect(){
 // cause des mises en page en flexbox (logo + titre cote a cote,
 // colonnes client/vehicule) : le moteur de capture d'image ne les gere
 // pas correctement, provoquant des decalages tantot a droite, tantot a
-// gauche selon les reglages. On aplati donc temporairement ces mises en
-// page (comme deja fait avec succes pour l'export Word) juste le temps
-// de la capture, SANS toucher a l'apercu affiche a l'ecran.
+// gauche selon les reglages. On convertit donc temporairement ces
+// rangees flex en vrais tableaux HTML (fiables a la capture) qui
+// recreent la meme disposition cote-a-cote — juste le temps de la
+// capture, SANS toucher a l'apercu affiche a l'ecran.
+function _convertirFlexEnTable(doc, conteneur){
+  var candidats = [];
+  conteneur.querySelectorAll('*').forEach(function(el){
+    if(el.style && el.style.display === 'flex') candidats.push(el);
+  });
+  // Du plus profond au moins profond, pour ne pas re-traiter un
+  // conteneur flex imbrique dans un autre deja converti.
+  candidats.reverse().forEach(function(el){
+    var enfants = Array.prototype.slice.call(el.children);
+    if(enfants.length < 2){ el.style.display = ''; return; }
+    var table = doc.createElement('table');
+    table.style.cssText = 'width:100%;border-collapse:collapse';
+    var tr = doc.createElement('tr');
+    enfants.forEach(function(enfant, idx){
+      var td = doc.createElement('td');
+      td.style.cssText = 'vertical-align:top;padding:0;border:none';
+      // Sur une rangee a 2 colonnes (le cas le plus frequent : logo/titre,
+      // vehicule/date...), la 1ere colonne colle a gauche (comme avant),
+      // la 2e est poussee a droite — ce qui reproduit fidelement l'effet
+      // "justify-content:space-between" de la mise en page flex d'origine.
+      if(enfants.length===2){
+        if(idx===0){ td.style.width='1%'; td.style.whiteSpace='nowrap'; }
+        else { td.style.textAlign='right'; }
+      }
+      td.appendChild(enfant); // deplace l'enfant (conserve son propre style)
+      tr.appendChild(td);
+    });
+    table.appendChild(tr);
+    el.innerHTML='';
+    el.appendChild(table);
+    el.style.display = '';
+  });
+}
 function exporterPDF(){
   var frame = document.getElementById('modalImpressionFrame');
   var doc = _modalImpressionDoc();
@@ -27202,17 +27236,12 @@ function exporterPDF(){
   // Sauvegarder le contenu original de l'iframe pour le restaurer apres capture.
   var htmlOriginal = doc.body.innerHTML;
 
-  // Aplatir les mises en page flexbox/position sur une copie du contenu.
+  // Convertir les rangees flex en tableaux sur une copie du contenu.
   var clone = doc.body.cloneNode(true);
+  _convertirFlexEnTable(doc, clone);
   clone.querySelectorAll('*').forEach(function(el){
-    if(!el.style) return;
-    if(el.style.display === 'flex') el.style.display = 'block';
-    if(el.style.position === 'fixed') el.style.position = 'static';
+    if(el.style && el.style.position === 'fixed') el.style.position = 'static';
   });
-  // Les colonnes cote a cote (client/vehicule, logo/titre) redeviennent
-  // des blocs empiles verticalement — visuellement different de
-  // l'apercu, mais fiable a 100% pour la capture (contrairement au
-  // rendu flex qui provoquait les decalages).
 
   doc.body.innerHTML = clone.innerHTML;
 
