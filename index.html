@@ -27327,69 +27327,73 @@ function _paginerPourPdf(doc, body){
   var tfoot = tablePieces.querySelector('tfoot');
   var tbody = tablePieces.querySelector('tbody') || tablePieces;
   var lignes = Array.prototype.slice.call(tbody.children).filter(function(el){ return el.tagName==='TR'; });
-  if(lignes.length <= LIGNES_PAR_PAGE) return; // tout tient sur une seule page, rien a faire
 
-  // Regrouper les lignes par page de LIGNES_PAR_PAGE.
-  var groupes = [];
-  for(var i=0;i<lignes.length;i+=LIGNES_PAR_PAGE){
-    groupes.push(lignes.slice(i, i+LIGNES_PAR_PAGE));
-  }
-
-  if(tfoot) tfoot.parentNode.removeChild(tfoot); // retire le total de la 1ere page, rattache plus bas a la derniere
-
-  // Reconstruire : table (groupe 1) -> pied de page -> table (groupe 2)
-  // -> pied de page -> ... -> table (dernier groupe). Le pied de page
-  // ORIGINAL, deja present en fin de document, sert pour la derniere
-  // page ; on ne le duplique qu'entre les pages intermediaires.
-  var pointInsertion = tablePieces.nextSibling;
   var derniereTable = tablePieces;
-  var dernierWrapper = null; // le conteneur de la toute derniere page generee
-  for(var g=1; g<groupes.length; g++){
-    if(footer){
-      var piedCopie = footer.cloneNode(true);
-      tablePieces.parentNode.insertBefore(piedCopie, pointInsertion);
+  var dernierWrapper = null; // reste null si tout tient sur une seule page (la page demarre alors au tout debut du body)
+
+  if(lignes.length > LIGNES_PAR_PAGE){
+    // Regrouper les lignes par page de LIGNES_PAR_PAGE.
+    var groupes = [];
+    for(var i=0;i<lignes.length;i+=LIGNES_PAR_PAGE){
+      groupes.push(lignes.slice(i, i+LIGNES_PAR_PAGE));
     }
-    // Point de coupure sur un WRAPPER (pas directement sur le tableau) :
-    // l'algorithme de pagination mesure la position du bord du wrapper
-    // pour decider ou couper — une marge sur le tableau lui-meme pouvait
-    // finir absorbee en bas de la PRECEDENTE page plutot que d'apparaitre
-    // en haut de la nouvelle. Le padding du wrapper, lui, est toujours
-    // rendu apres le point de coupure.
-    var wrapperPage = doc.createElement('div');
-    wrapperPage.style.pageBreakBefore = 'always';
-    wrapperPage.style.paddingTop = '10mm';
-    var nouvelleTable = doc.createElement('table');
-    if(tablePieces.getAttribute('style')) nouvelleTable.setAttribute('style', tablePieces.getAttribute('style'));
-    nouvelleTable.className = tablePieces.className;
-    if(thead) nouvelleTable.appendChild(thead.cloneNode(true));
-    var nouveauTbody = doc.createElement('tbody');
-    groupes[g].forEach(function(tr){ nouveauTbody.appendChild(tr); }); // deplace les <tr> hors de l'ancien tbody
-    nouvelleTable.appendChild(nouveauTbody);
-    wrapperPage.appendChild(nouvelleTable);
-    tablePieces.parentNode.insertBefore(wrapperPage, pointInsertion);
-    derniereTable = nouvelleTable;
-    dernierWrapper = wrapperPage;
+
+    if(tfoot) tfoot.parentNode.removeChild(tfoot); // retire le total de la 1ere page, rattache plus bas a la derniere
+
+    // Reconstruire : table (groupe 1) -> pied de page -> table (groupe 2)
+    // -> pied de page -> ... -> table (dernier groupe). Le pied de page
+    // ORIGINAL, deja present en fin de document, sert pour la derniere
+    // page ; on ne le duplique qu'entre les pages intermediaires.
+    var pointInsertion = tablePieces.nextSibling;
+    for(var g=1; g<groupes.length; g++){
+      if(footer){
+        var piedCopie = footer.cloneNode(true);
+        tablePieces.parentNode.insertBefore(piedCopie, pointInsertion);
+      }
+      // Point de coupure sur un WRAPPER (pas directement sur le tableau) :
+      // l'algorithme de pagination mesure la position du bord du wrapper
+      // pour decider ou couper — une marge sur le tableau lui-meme pouvait
+      // finir absorbee en bas de la PRECEDENTE page plutot que d'apparaitre
+      // en haut de la nouvelle. Le padding du wrapper, lui, est toujours
+      // rendu apres le point de coupure.
+      var wrapperPage = doc.createElement('div');
+      wrapperPage.style.pageBreakBefore = 'always';
+      wrapperPage.style.paddingTop = '10mm';
+      var nouvelleTable = doc.createElement('table');
+      if(tablePieces.getAttribute('style')) nouvelleTable.setAttribute('style', tablePieces.getAttribute('style'));
+      nouvelleTable.className = tablePieces.className;
+      if(thead) nouvelleTable.appendChild(thead.cloneNode(true));
+      var nouveauTbody = doc.createElement('tbody');
+      groupes[g].forEach(function(tr){ nouveauTbody.appendChild(tr); }); // deplace les <tr> hors de l'ancien tbody
+      nouvelleTable.appendChild(nouveauTbody);
+      wrapperPage.appendChild(nouvelleTable);
+      tablePieces.parentNode.insertBefore(wrapperPage, pointInsertion);
+      derniereTable = nouvelleTable;
+      dernierWrapper = wrapperPage;
+    }
+
+    // Le total suit desormais la derniere page, juste apres ses dernieres
+    // lignes de pieces — exactement comme sur un document a une seule page.
+    if(tfoot) derniereTable.appendChild(tfoot);
+    // NOTE : le bloc final (mention en lettres, signature, pied de page)
+    // reste volontairement en flux normal apres la derniere table — le
+    // forcer a rester groupe (page-break-inside:avoid) le poussait en
+    // entier sur une page supplementaire des qu'il ne restait plus assez
+    // de place en bas de la derniere page de pieces, faisant "disparaitre"
+    // la signature et le pied de page de la page attendue.
   }
 
-  // Le total suit desormais la derniere page, juste apres ses dernieres
-  // lignes de pieces — exactement comme sur un document a une seule page.
-  if(tfoot) derniereTable.appendChild(tfoot);
-  // NOTE : le bloc final (mention en lettres, signature, pied de page)
-  // reste volontairement en flux normal apres la derniere table — le
-  // forcer a rester groupe (page-break-inside:avoid) le poussait en
-  // entier sur une page supplementaire des qu'il ne restait plus assez
-  // de place en bas de la derniere page de pieces, faisant "disparaitre"
-  // la signature et le pied de page de la page attendue.
-
-  // Pousser le pied de page jusqu'au bas de cette derniere page : sans
-  // ca, il suit immediatement la signature, avec tout le blanc restant
-  // de la page EN DESSOUS de lui au lieu d'au-dessus — d'ou l'impression
-  // qu'il "flotte" au milieu de la page plutot que d'etre en bas.
-  if(footer && dernierWrapper){
+  // Pousser le pied de page jusqu'au bas de cette derniere page — que le
+  // document tienne sur une seule page ou plusieurs. Sans ca, il suit
+  // immediatement la signature, avec tout le blanc restant de la page EN
+  // DESSOUS de lui au lieu d'au-dessus (d'ou l'impression qu'il "flotte"
+  // au milieu de la page, y compris sur un devis tenant sur une seule
+  // page, plutot que d'etre plaque en bas).
+  if(footer){
     var PAGE_HAUTEUR_PX = 1122; // A4 ~297mm a 96dpi, mesure en px CSS
     var MARGE_BAS = 15;
     var rectBody = body.getBoundingClientRect();
-    var hautDernierePage = dernierWrapper.getBoundingClientRect().top - rectBody.top;
+    var hautDernierePage = dernierWrapper ? (dernierWrapper.getBoundingClientRect().top - rectBody.top) : 0;
     var basFooterAvant = footer.getBoundingClientRect().bottom - rectBody.top;
     var hauteurUtilisee = basFooterAvant - hautDernierePage;
     var espaceRestant = PAGE_HAUTEUR_PX - hauteurUtilisee - MARGE_BAS;
