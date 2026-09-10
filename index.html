@@ -143,6 +143,7 @@ tr:hover td{background:#faf9f7}
 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </head>
@@ -511,7 +512,7 @@ tr:hover td{background:#faf9f7}
     <h2 id="modalImpressionTitle">Document</h2>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <button class="btn btn-sm" onclick="imprimerModalContent()" title="Envoyer à l'imprimante">&#x1F5A8; Imprimer</button>
-      <button class="btn btn-primary" onclick="exporterPDF()" title="Enregistrer en PDF (via la fenetre d'impression)">&#x1F4C5; PDF</button>
+      <button class="btn btn-primary" onclick="exporterPDF()" title="Télécharger en PDF">&#x1F4C5; PDF</button>
       <button class="btn btn-sm" style="background:#2B579A;color:#fff;border-color:#2B579A" onclick="exporterWord()">&#x1F4C4; Word</button>
       <button class="btn btn-sm" style="background:#217346;color:#fff;border-color:#217346" onclick="exporterExcel()">&#x1F4CA; Excel</button>
       <button class="btn btn-sm" onclick="fermerImpression()">X</button>
@@ -27178,21 +27179,63 @@ function creerDevisProspect(){
   openDet(id);
 }
 
-// Le bouton PDF s'appuie sur l'impression NATIVE du navigateur (la meme
-// que le bouton "Imprimer"), en invitant a choisir "Enregistrer en PDF"
-// comme destination. C'est du rendu vectoriel qui respecte fidelement
-// la mise en page A4 du document — contrairement a une capture d'image
-// (testee precedemment), qui restait fragile sur ce document complexe :
-// selon les reglages, le contenu se retrouvait coupe tantot a droite,
-// tantot a gauche, jamais correctement centre.
+// Generation PDF directe (un clic, pas d'etape manuelle). Le rendu par
+// capture d'image (html2canvas) donnait des resultats erratiques a
+// cause des mises en page en flexbox (logo + titre cote a cote,
+// colonnes client/vehicule) : le moteur de capture d'image ne les gere
+// pas correctement, provoquant des decalages tantot a droite, tantot a
+// gauche selon les reglages. On aplati donc temporairement ces mises en
+// page (comme deja fait avec succes pour l'export Word) juste le temps
+// de la capture, SANS toucher a l'apercu affiche a l'ecran.
 function exporterPDF(){
   var frame = document.getElementById('modalImpressionFrame');
-  if(!frame || !frame.contentWindow) return;
-  afficherToastNotif('Impression en PDF', 'Dans la fenetre qui s\'ouvre, choisissez "Enregistrer en PDF" (ou "Microsoft Print to PDF") comme destination.', 'info');
-  setTimeout(function(){
-    frame.contentWindow.focus();
-    frame.contentWindow.print();
-  }, 300);
+  var doc = _modalImpressionDoc();
+  var title = document.getElementById('modalImpressionTitle');
+  if(!frame || !doc || !doc.body) return;
+  var nom = (title?title.textContent:'document').replace(/[^a-zA-Z0-9_-]/g,'_');
+
+  if(typeof html2pdf === 'undefined'){
+    afficherToastNotif('Module PDF indisponible', 'Rechargez la page (connexion internet requise au premier chargement), ou utilisez Imprimer puis "Enregistrer en PDF".', 'alerte');
+    return;
+  }
+
+  // Sauvegarder le contenu original de l'iframe pour le restaurer apres capture.
+  var htmlOriginal = doc.body.innerHTML;
+
+  // Aplatir les mises en page flexbox/position sur une copie du contenu.
+  var clone = doc.body.cloneNode(true);
+  clone.querySelectorAll('*').forEach(function(el){
+    if(!el.style) return;
+    if(el.style.display === 'flex') el.style.display = 'block';
+    if(el.style.position === 'fixed') el.style.position = 'static';
+  });
+  // Les colonnes cote a cote (client/vehicule, logo/titre) redeviennent
+  // des blocs empiles verticalement — visuellement different de
+  // l'apercu, mais fiable a 100% pour la capture (contrairement au
+  // rendu flex qui provoquait les decalages).
+
+  doc.body.innerHTML = clone.innerHTML;
+
+  afficherToastNotif('Generation du PDF...', 'Le telechargement demarre dans quelques secondes.', 'info');
+
+  html2pdf().set({
+    margin: 0, // le contenu a deja sa propre marge interne (.page{padding})
+    filename: nom+'.pdf',
+    image: { type:'jpeg', quality:0.98 },
+    html2canvas: {
+      scale: 2, useCORS: true, backgroundColor: '#ffffff',
+      x: 0, y: 0,
+      width: doc.body.scrollWidth, height: doc.body.scrollHeight,
+      windowWidth: doc.body.scrollWidth, windowHeight: doc.body.scrollHeight
+    },
+    jsPDF: { unit:'mm', format:'a4', orientation:'portrait' },
+    pagebreak: { mode:['css','legacy'] }
+  }).from(doc.body).save().then(function(){
+    doc.body.innerHTML = htmlOriginal;
+  }).catch(function(){
+    doc.body.innerHTML = htmlOriginal;
+    afficherToastNotif('Echec de la generation PDF', 'Reessayez, ou utilisez Imprimer puis "Enregistrer en PDF" depuis la fenetre d\'impression.', 'alerte');
+  });
 }
 
 function exporterWord(){
