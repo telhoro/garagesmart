@@ -1226,13 +1226,22 @@ tr:hover td{background:#faf9f7}
   <div class="mbody">
     <div class="xs muted" style="margin-bottom:10px">Cree une facture directement, sans passer par le workflow habituel de dossier vehicule. Utile pour une regularisation ou un cas particulier.</div>
 
-    <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:10px">
-      <div class="fr">
-        <label class="fl">Vehicule existant (optionnel)</label>
-        <select class="inp" id="fmVehiculeExistant" onchange="onChangeFmVehiculeExistant()">
-          <option value="">— Saisir une immatriculation libre —</option>
-        </select>
+    <div class="fr" style="margin-bottom:10px">
+      <label class="fl">Client</label>
+      <div style="display:flex;gap:16px;margin-bottom:8px">
+        <label class="xs" style="display:flex;align-items:center;gap:4px"><input type="radio" name="fmModeClient" value="nouveau" checked onchange="toggleFmModeClient()"> Nouveau client</label>
+        <label class="xs" style="display:flex;align-items:center;gap:4px"><input type="radio" name="fmModeClient" value="existant" onchange="toggleFmModeClient()"> Client existant</label>
       </div>
+      <div id="fmClientExistantWrap" style="display:none">
+        <div id="fmClientChip" style="display:none;margin-bottom:8px"></div>
+        <div id="fmClientSearchWrap" style="position:relative">
+          <input class="inp" id="fmClientRecherche" placeholder="Rechercher par nom, immatriculation, marque ou modele..." oninput="rechercherClientFM(this.value)" autocomplete="off">
+          <div id="fmClientResults" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:1000;background:#fff;border:1px solid #ccc;border-radius:0 0 7px 7px;max-height:260px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.12)"></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px">
       <div class="fr">
         <label class="fl">Immatriculation <span style="color:red">*</span></label>
         <input class="inp" id="fmImmat" placeholder="Ex: 1234AB01">
@@ -1244,15 +1253,6 @@ tr:hover td{background:#faf9f7}
       <div class="fr">
         <label class="fl">Type / Modele (optionnel)</label>
         <input class="inp" id="fmModele" placeholder="Ex: Hilux">
-      </div>
-    </div>
-
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
-      <div class="fr">
-        <label class="fl">Client existant (optionnel)</label>
-        <select class="inp" id="fmClientExistant" onchange="onChangeFmClientExistant()">
-          <option value="">— Saisir un nom de client —</option>
-        </select>
       </div>
       <div class="fr">
         <label class="fl">Nom du client <span style="color:red">*</span></label>
@@ -2026,6 +2026,9 @@ function loadCommandesSpeciales(){
 function saveCommandesSpeciales(){
   marquerCollectionModifieAuto('commandes_speciales', COMMANDES_SPECIALES);
   localStorage.setItem('gos_commandes_speciales', JSON.stringify(COMMANDES_SPECIALES));
+  // Voir saveDettesManuelles() : meme protection contre un ecrasement
+  // premature de Firebase avant la 1ere synchronisation.
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_commandes_speciales').set(JSON.stringify(COMMANDES_SPECIALES)).catch(function(e){
       console.error('Firebase commandes speciales save error:', e);
@@ -2057,6 +2060,9 @@ function loadStock(){
 function saveStock(){
   marquerCollectionModifieAuto('stock', STOCK);
   localStorage.setItem('gos_stock', JSON.stringify(STOCK));
+  // Voir saveDettesManuelles() : meme protection contre un ecrasement
+  // premature de Firebase avant la 1ere synchronisation.
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_stock').set(JSON.stringify(STOCK)).catch(function(e){
       console.error('Firebase stock save error:', e);
@@ -2583,6 +2589,14 @@ var DETTES_MANUELLES = [];
 function saveDettesManuelles(){
   marquerCollectionModifieAuto('dettes_manuelles', DETTES_MANUELLES);
   localStorage.setItem('gos_dettes_manuelles', JSON.stringify(DETTES_MANUELLES));
+  // IMPORTANT : meme protection que saveVFirebase() pour les vehicules —
+  // tant que la 1ere synchronisation Firebase n'est pas confirmee recue,
+  // un appareil qui vient de se rouvrir (localStorage potentiellement
+  // incomplet ou perime) ne doit jamais ecraser en bloc ('.set()') ce
+  // qu'un AUTRE appareil a deja enregistre entre-temps. Sans ce garde,
+  // c'est exactement ce qui pouvait faire "disparaitre" des dettes
+  // saisies ailleurs.
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_dettes_manuelles').set(JSON.stringify(DETTES_MANUELLES)).catch(function(e){
       console.error('Firebase dettes manuelles save error:', e);
@@ -10395,25 +10409,13 @@ var fmLigneCounter = 0;
 function openFactureManuelleForm(){
   fmLigneCounter = 0;
 
-  // Peupler la liste des véhicules existants (immat + client + marque/modele)
-  var selVeh = document.getElementById('fmVehiculeExistant');
-  var htmlVeh = '<option value="">— Saisir une immatriculation libre —</option>';
-  vehicles.filter(function(v){return v.immat;}).forEach(function(v){
-    htmlVeh += '<option value="'+v.id+'">'+v.immat+' — '+(v.marque||'')+' '+(v.modele||'')+' ('+v.client+')</option>';
-  });
-  selVeh.innerHTML = htmlVeh;
-
-  // Peupler la liste des clients existants (noms uniques) — le VRAI
-  // proprietaire prime sur client, qui peut avoir ete remplace par le nom
-  // d'un assureur pour un dossier sinistre.
-  var selClient = document.getElementById('fmClientExistant');
-  var clientsUniques = {};
-  vehicles.forEach(function(v){ var nomReel=v.proprietaireVehicule||v.client; if(nomReel) clientsUniques[nomReel]=true; });
-  var htmlClient = '<option value="">— Saisir un nom de client —</option>';
-  Object.keys(clientsUniques).sort().forEach(function(c){
-    htmlClient += '<option value="'+c.replace(/"/g,'&quot;')+'">'+c+'</option>';
-  });
-  selClient.innerHTML = htmlClient;
+  // Reinitialiser le mode client (nouveau par defaut) et la recherche.
+  _fmVehSelection = null;
+  var radioNouveau = document.querySelector('input[name="fmModeClient"][value="nouveau"]');
+  if(radioNouveau) radioNouveau.checked = true;
+  toggleFmModeClient();
+  var champRechFm = document.getElementById('fmClientRecherche'); if(champRechFm) champRechFm.value='';
+  var resFm = document.getElementById('fmClientResults'); if(resFm){ resFm.style.display='none'; resFm.innerHTML=''; }
 
   // Peupler la liste des assureurs deja connus (noms uniques), pour
   // l'autocompletion ET le prerempissage de leurs coordonnees.
@@ -10529,11 +10531,71 @@ function onChangeFmTypeOuEntite(){
   }
 }
 
-function onChangeFmVehiculeExistant(){
-  var vid = document.getElementById('fmVehiculeExistant').value;
-  if(!vid){ return; }
-  var v = vehicles.find(function(x){return x.id===vid;});
+// ============================================================
+// FACTURE MANUELLE — recherche client existant (nom/immat/marque/modele)
+// ============================================================
+var _fmVehSelection = null; // id du vehicule existant selectionne (ou null en mode "nouveau client")
+
+function toggleFmModeClient(){
+  var radio = document.querySelector('input[name="fmModeClient"]:checked');
+  var mode = radio ? radio.value : 'nouveau';
+  var wrap = document.getElementById('fmClientExistantWrap');
+  if(wrap) wrap.style.display = (mode==='existant') ? 'block' : 'none';
+  if(mode==='nouveau'){
+    // Vider les champs pre-remplis par la selection precedente — sinon
+    // revenir sur "Nouveau client" laissait a tort les infos de l'ancien
+    // client existant selectionne.
+    if(_fmVehSelection){
+      document.getElementById('fmImmat').value = '';
+      document.getElementById('fmMarque').value = '';
+      document.getElementById('fmModele').value = '';
+      document.getElementById('fmClientNom').value = '';
+      document.getElementById('fmTypeClient').value = 'devis';
+      document.getElementById('fmEntite').value = 'Particulier';
+      onChangeFmTypeOuEntite();
+    }
+    _fmVehSelection = null;
+    majAffichageClientFM();
+  }
+}
+function rechercherClientFM(texte){
+  var wrap = document.getElementById('fmClientResults');
+  if(!wrap) return;
+  var q = (texte||'').trim().toLowerCase();
+  if(q.length<2){ wrap.innerHTML=''; wrap.style.display='none'; return; }
+  var seen = {}; var results = [];
+  vehicles.forEach(function(v){
+    if(v.isProspect || !v.immat) return;
+    var nomReel = v.proprietaireVehicule||v.client;
+    var key = v.immat.toUpperCase();
+    if(seen[key]) return;
+    var hay = ((nomReel||'')+' '+(v.immat||'')+' '+(v.marque||'')+' '+(v.modele||'')).toLowerCase();
+    if(hay.indexOf(q)<0) return;
+    seen[key]=true;
+    results.push(v);
+  });
+  results = results.slice(0,8);
+  if(!results.length){
+    wrap.innerHTML = '<div style="padding:10px;color:#999;font-size:12px">Aucun resultat</div>';
+    wrap.style.display = 'block';
+    return;
+  }
+  var html = '';
+  results.forEach(function(v){
+    var nomReel = v.proprietaireVehicule||v.client;
+    html += '<div class="prospect-item" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #f0ede8" data-vid="'+v.id+'" onclick="selectionnerClientFM(this)">'
+      +'<div style="font-weight:700;font-size:12px">'+v.immat+' — '+(v.marque||'')+' '+(v.modele||'')+'</div>'
+      +'<div class="xs muted">'+(nomReel||'')+'</div>'
+      +'</div>';
+  });
+  wrap.innerHTML = html;
+  wrap.style.display = 'block';
+}
+function selectionnerClientFM(el){
+  var vid = el.getAttribute('data-vid');
+  var v = vehicles.find(function(x){ return x.id===vid; });
   if(!v) return;
+  _fmVehSelection = v.id;
   var nomReel = v.proprietaireVehicule||v.client;
   document.getElementById('fmImmat').value = v.immat||'';
   document.getElementById('fmMarque').value = v.marque||'';
@@ -10541,24 +10603,34 @@ function onChangeFmVehiculeExistant(){
   document.getElementById('fmClientNom').value = nomReel||'';
   document.getElementById('fmTypeClient').value = v.typeClient||'devis';
   document.getElementById('fmEntite').value = (v.entite && v.entite.toLowerCase()!=='particulier') ? 'Entreprise' : 'Particulier';
-  // Refleter aussi dans le select client si ce client existe dans la liste
-  var selClient = document.getElementById('fmClientExistant');
-  if(nomReel){
-    var opt = Array.prototype.find.call(selClient.options, function(o){return o.value===nomReel;});
-    if(opt) selClient.value = nomReel;
-  }
-}
-function onChangeFmClientExistant(){
-  var client = document.getElementById('fmClientExistant').value;
-  if(!client) return;
-  document.getElementById('fmClientNom').value = client;
-  // Reprendre entite/type du premier vehicule trouve pour ce client, comme valeur par defaut
-  var v0 = vehicles.find(function(x){return (x.proprietaireVehicule||x.client)===client;});
-  if(v0){
-    document.getElementById('fmTypeClient').value = v0.typeClient||'devis';
-    document.getElementById('fmEntite').value = (v0.entite && v0.entite.toLowerCase()!=='particulier') ? 'Entreprise' : 'Particulier';
-  }
   onChangeFmTypeOuEntite(); // reprend aussi le delai deja retenu pour ce client, si connu
+  majAffichageClientFM();
+  var res = document.getElementById('fmClientResults'); if(res){ res.style.display='none'; res.innerHTML=''; }
+  var champ = document.getElementById('fmClientRecherche'); if(champ) champ.value='';
+}
+function retirerClientFM(){
+  _fmVehSelection = null;
+  majAffichageClientFM();
+}
+function majAffichageClientFM(){
+  var chip = document.getElementById('fmClientChip');
+  var searchWrap = document.getElementById('fmClientSearchWrap');
+  if(!chip||!searchWrap) return;
+  if(_fmVehSelection){
+    var v = vehicles.find(function(x){return x.id===_fmVehSelection;});
+    var nomReel = v ? (v.proprietaireVehicule||v.client) : '';
+    chip.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;background:#EBF3FB;border:1px solid #B5D4F4;border-radius:7px;padding:8px 12px">'
+      +'<div><div class="fw7" style="font-size:12px">&#x1F697; '+(v?v.immat:'')+' — '+(v?(v.marque||''):'')+' '+(v?(v.modele||''):'')+'</div>'
+      +'<div class="xs muted">'+(nomReel||'—')+'</div></div>'
+      +'<button type="button" class="btn btn-sm" onclick="retirerClientFM()">Changer</button>'
+      +'</div>';
+    chip.style.display = 'block';
+    searchWrap.style.display = 'none';
+  } else {
+    chip.style.display = 'none';
+    chip.innerHTML = '';
+    searchWrap.style.display = 'block';
+  }
 }
 
 function ajouterLigneFactureManuelle(){
@@ -10674,7 +10746,7 @@ function validerFactureManuelle(){
   // les champs (immat/client/type) : la facture manuelle cree TOUJOURS un
   // nouveau vehicule distinct, pour ne jamais ecraser un chiffrage ou un
   // dossier deja en cours sur le vehicule existant.
-  var vidExistant = document.getElementById('fmVehiculeExistant').value;
+  var vidExistant = _fmVehSelection;
   var vRef = vidExistant ? vehicles.find(function(x){return x.id===vidExistant;}) : null;
   var marqueSaisie = document.getElementById('fmMarque').value.trim();
   var modeleSaisie = document.getElementById('fmModele').value.trim();
@@ -32206,7 +32278,23 @@ function tryInitFirebase(){
     // Filet de securite : si la 1ere reponse Firebase (gos_data) n'arrive
     // jamais (ex: vraiment hors ligne), debloquer quand meme la sauvegarde
     // apres 8s pour ne pas bloquer indefiniment l'usage hors-ligne.
-    setTimeout(function(){ firstSyncReceived = true; }, 8000);
+    // IMPORTANT : ce filet de securite ne doit debloquer les sauvegardes
+    // que si l'appareil est VRAIMENT hors-ligne (fbConnected false) — pas
+    // simplement parce que 8 secondes se sont ecoulees. Sur une connexion
+    // lente ou un gros volume de donnees, la vraie reponse Firebase peut
+    // legitimement mettre plus de 8s a arriver : la debloquer quand meme
+    // a ce moment-la revient a autoriser une sauvegarde avec des donnees
+    // locales encore incompletes, qui peut alors ecraser sur Firebase ce
+    // qu'un autre appareil avait deja enregistre entretemps (perte de
+    // donnees). Si la connexion est active, on continue d'attendre la
+    // vraie synchronisation, quel que soit le temps que ca prend.
+    (function attendreOuDebloquer(){
+      setTimeout(function(){
+        if(firstSyncReceived) return; // deja debloque par la vraie reponse Firebase
+        if(!fbConnected){ firstSyncReceived = true; return; } // vraiment hors-ligne : debloquer
+        attendreOuDebloquer(); // toujours en attente d'une connexion active : on continue de patienter
+      }, 8000);
+    })();
     // Sync personnel et comptes depuis Firebase après connexion
     setTimeout(function(){
       syncStockFromFirebase();
