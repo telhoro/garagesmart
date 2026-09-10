@@ -143,7 +143,6 @@ tr:hover td{background:#faf9f7}
 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </head>
@@ -512,7 +511,7 @@ tr:hover td{background:#faf9f7}
     <h2 id="modalImpressionTitle">Document</h2>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <button class="btn btn-sm" onclick="imprimerModalContent()" title="Envoyer à l'imprimante">&#x1F5A8; Imprimer</button>
-      <button class="btn btn-primary" onclick="exporterPDF()" title="Télécharger en PDF">&#x1F4C5; PDF</button>
+      <button class="btn btn-primary" onclick="exporterPDF()" title="Enregistrer en PDF (via la fenetre d'impression)">&#x1F4C5; PDF</button>
       <button class="btn btn-sm" style="background:#2B579A;color:#fff;border-color:#2B579A" onclick="exporterWord()">&#x1F4C4; Word</button>
       <button class="btn btn-sm" style="background:#217346;color:#fff;border-color:#217346" onclick="exporterExcel()">&#x1F4CA; Excel</button>
       <button class="btn btn-sm" onclick="fermerImpression()">X</button>
@@ -27179,82 +27178,21 @@ function creerDevisProspect(){
   openDet(id);
 }
 
+// Le bouton PDF s'appuie sur l'impression NATIVE du navigateur (la meme
+// que le bouton "Imprimer"), en invitant a choisir "Enregistrer en PDF"
+// comme destination. C'est du rendu vectoriel qui respecte fidelement
+// la mise en page A4 du document — contrairement a une capture d'image
+// (testee precedemment), qui restait fragile sur ce document complexe :
+// selon les reglages, le contenu se retrouvait coupe tantot a droite,
+// tantot a gauche, jamais correctement centre.
 function exporterPDF(){
-  var doc = _modalImpressionDoc();
-  var title = document.getElementById('modalImpressionTitle');
-  if(!doc || !doc.body) return;
-  var nom = (title?title.textContent:'document').replace(/[^a-zA-Z0-9_-]/g,'_');
-
-  // Generation directe d'un vrai fichier PDF cote client (html2pdf.js,
-  // charge via CDN). En cas d'echec de chargement de la bibliotheque
-  // (pas de connexion au premier chargement de la page par exemple), on
-  // se rabat sur l'ancien comportement : telecharger un HTML pret a
-  // imprimer, avec instruction claire pour l'utilisateur.
-  if(typeof html2pdf !== 'undefined'){
-    // Les documents impriment un footer en position:fixed (pour qu'il
-    // reste colle en bas de CHAQUE page reelle a l'impression) — mais la
-    // capture html2canvas ne "pagine" pas reellement, elle prend une
-    // seule image continue : un element fixe s'y comporte de facon
-    // imprevisible (duplique, ou flottant au milieu du document).
-    // On le neutralise temporairement le temps de la capture.
-    var footers = doc.querySelectorAll('footer');
-    var positionsOriginales = [];
-    footers.forEach(function(f){ positionsOriginales.push(f.style.position); f.style.position='static'; });
-
-    afficherToastNotif('Generation du PDF...', 'Le telechargement demarre dans quelques secondes.', 'info');
-    html2pdf().set({
-      margin: 10,
-      filename: nom+'.pdf',
-      image: { type:'jpeg', quality:0.98 },
-      // IMPORTANT : sans windowWidth/windowHeight explicites, la capture
-      // se base par defaut sur les dimensions de la fenetre PRINCIPALE
-      // (beaucoup plus large que l'iframe A4) au lieu du contenu reel a
-      // capturer — decalant et coupant le tableau sur le cote droit.
-      html2canvas: { scale:3, useCORS:true, backgroundColor:'#ffffff',
-        windowWidth: doc.body.scrollWidth, windowHeight: doc.body.scrollHeight },
-      jsPDF: { unit:'mm', format:'a4', orientation:'portrait' },
-      // IMPORTANT : ne pas forcer l'evitement de coupure a l'interieur du
-      // tableau ('avoid-all') — avec un tableau de plusieurs lignes qui
-      // ne tient pas dans l'espace restant sur la premiere page, ce mode
-      // repoussait TOUT le tableau en page 2, laissant la premiere page
-      // quasiment vide. 'legacy' evite deja une coupure AU MILIEU d'une
-      // ligne (<tr>), ce qui est le seul point vraiment genant.
-      pagebreak: { mode:['css','legacy'] }
-    }).from(doc.body).save().then(function(){
-      footers.forEach(function(f,i){ f.style.position = positionsOriginales[i]; });
-    }).catch(function(){
-      footers.forEach(function(f,i){ f.style.position = positionsOriginales[i]; });
-      afficherToastNotif('Echec de la generation PDF', 'Reessayez, ou utilisez Imprimer puis "Enregistrer en PDF" depuis la fenetre d\'impression.', 'alerte');
-    });
-    return;
-  }
-
-  // Repli : telecharger comme fichier HTML (ouvrable dans tous les navigateurs → Imprimer → PDF)
-  var htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+nom+'</title></head><body>'
-    +doc.body.innerHTML+'</body></html>';
-  var blob = new Blob([htmlDoc], {type:'text/html;charset=utf-8'});
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url;
-  a.download = nom+'.html';
-  a.style.display = 'none';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
-
-  // Message d'instruction
-  var msg = document.createElement('div');
-  msg.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);'
-    +'background:#1a1a1a;color:#fff;padding:12px 20px;border-radius:8px;'
-    +'font-size:12px;z-index:99999;max-width:400px;text-align:center;line-height:1.5';
-  msg.innerHTML = '<strong>Module PDF indisponible (hors-ligne) — fichier telecharge a la place.</strong><br>Ouvrez-le dans votre navigateur → Imprimer → Enregistrer en PDF';
-  document.body.appendChild(msg);
+  var frame = document.getElementById('modalImpressionFrame');
+  if(!frame || !frame.contentWindow) return;
+  afficherToastNotif('Impression en PDF', 'Dans la fenetre qui s\'ouvre, choisissez "Enregistrer en PDF" (ou "Microsoft Print to PDF") comme destination.', 'info');
   setTimeout(function(){
-    msg.style.transition = 'opacity 0.5s';
-    msg.style.opacity = '0';
-    setTimeout(function(){ if(msg.parentNode) msg.parentNode.removeChild(msg); }, 600);
-  }, 5000);
+    frame.contentWindow.focus();
+    frame.contentWindow.print();
+  }, 300);
 }
 
 function exporterWord(){
