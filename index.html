@@ -27215,11 +27215,18 @@ function _convertirFlexEnTable(doc, conteneur){
     }
     // "Clearfix" : sans ca, un conteneur ne contenant QUE des enfants
     // flottants se retrouverait de hauteur nulle (les flottants sont
-    // retires du flux normal), ecrasant tout ce qui suit.
+    // retires du flux normal), ecrasant tout ce qui suit. Double
+    // protection : le div clear:both (classique) ET overflow:hidden sur
+    // le conteneur lui-meme (technique moderne, contient les flottants
+    // de facon plus fiable) — une contention imparfaite ici sous-estime
+    // la hauteur totale du document mesuree plus loin, ce qui coupait
+    // purement et simplement la toute fin du document (signature, pied
+    // de page) de la capture.
     var clear = doc.createElement('div');
     clear.style.cssText = 'clear:both;height:0;font-size:0;line-height:0';
     el.appendChild(clear);
     el.style.display = '';
+    el.style.overflow = 'hidden';
   });
 }
 // Pagination manuelle pour l'export PDF : au-dela d'un certain nombre
@@ -27273,6 +27280,11 @@ function _paginerPourPdf(doc, body){
     if(tablePieces.getAttribute('style')) nouvelleTable.setAttribute('style', tablePieces.getAttribute('style'));
     nouvelleTable.className = tablePieces.className;
     nouvelleTable.style.pageBreakBefore = 'always';
+    // Espace en haut de la nouvelle page : sans ca, le tableau colle
+    // directement au bord superieur (seule la 1ere page beneficie du
+    // padding du conteneur .page — un tableau insere en milieu de flux
+    // n'en herite pas automatiquement).
+    nouvelleTable.style.marginTop = '10mm';
     if(thead) nouvelleTable.appendChild(thead.cloneNode(true));
     var nouveauTbody = doc.createElement('tbody');
     groupes[g].forEach(function(tr){ nouveauTbody.appendChild(tr); }); // deplace les <tr> hors de l'ancien tbody
@@ -27339,8 +27351,11 @@ function exporterPDF(){
     html2canvas: {
       scale: 2.5, useCORS: true, backgroundColor: '#ffffff',
       x: 0, y: 0,
-      width: doc.body.scrollWidth, height: doc.body.scrollHeight,
-      windowWidth: doc.body.scrollWidth, windowHeight: doc.body.scrollHeight
+      // +60px de marge de securite sur la hauteur : evite qu'un leger
+      // sous-calcul (par ex. lie aux colonnes en flottant) ne tronque la
+      // toute fin du document (signature, pied de page).
+      width: doc.body.scrollWidth, height: doc.body.scrollHeight+60,
+      windowWidth: doc.body.scrollWidth, windowHeight: doc.body.scrollHeight+60
     },
     jsPDF: { unit:'mm', format:'a4', orientation:'portrait' },
     pagebreak: { mode:['css','legacy'] }
