@@ -12737,6 +12737,7 @@ function collecterDettesFournisseurs(){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     v.chiffrage.lignes.forEach(function(cl){
       if(!(cl.piece||'').trim()) return;
+      if(cl.differe) return; // piece mise de cote : achat pas engage, aucune dette a prevoir pour l'instant
       if(cl.paiement!=='credit') return; // seul le credit fournisseur cree une dette
       if(!cl.fournisseurId) return;
       var reste = resteDuDette(cl);
@@ -13626,7 +13627,7 @@ function marquerFournisseurPayeByEl(el){
   vehicles.forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     v.chiffrage.lignes.forEach(function(cl){
-      if(cl.fournisseurId===fid && cl.paiement==='credit') totalDu += resteDuDette(cl);
+      if(cl.fournisseurId===fid && cl.paiement==='credit' && !cl.differe) totalDu += resteDuDette(cl);
     });
   });
   DETTES_MANUELLES.forEach(function(dm){
@@ -13727,7 +13728,7 @@ function confirmerPaiementFournisseur(){
     vehicles.forEach(function(v){
       if(!v.chiffrage || !v.chiffrage.lignes) return;
       v.chiffrage.lignes.forEach(function(cl){
-        if(cl.fournisseurId===fid && cl.paiement==='credit' && resteDuDette(cl)>0){
+        if(cl.fournisseurId===fid && cl.paiement==='credit' && !cl.differe && resteDuDette(cl)>0){
           items.push({ref:cl, dateAchat: v.chiffrage.valideDirLe||v.chiffrage.soumisLe||v.entree||0, prixAchat:cl.prixAchat, qte:cl.qte, paiementsFourn:cl.paiementsFourn});
         }
       });
@@ -17159,6 +17160,7 @@ function pageDashDir(){
       var dejaValide = (v.status==='valide_fin');
       var lignes = (v.chiffrage && v.chiffrage.lignes) ? v.chiffrage.lignes.filter(function(cl){
         if(!(cl.piece||'').trim()) return false;
+        if(cl.differe) return false; // piece mise de cote : rien a valider pour l'instant
         if(dejaValide && cl.valideDir) return false; // pieces deja traitees : masquees
         return true;
       }) : [];
@@ -19195,6 +19197,11 @@ function toggleDevisEdit(){
 // deduite — reutilise partout ou un total de ligne doit refleter la
 // remise (chiffrage achats/direction, impression devis/facture...).
 function montantChiffrageLigne(cl){
+  // Une piece mise de cote (differe) ne compte pour rien dans les
+  // calculs/l'impression tant qu'elle n'est pas reactivee — retirer ce
+  // cas ici suffit a l'exclure de TOUS les totaux qui passent par ce
+  // helper (chiffrage, devis/facture imprimes, rentabilite, creances...).
+  if(cl.differe) return 0;
   return (parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1)*(1-(parseFloat(cl.remise)||0)/100);
 }
 function renderChiffrageSection(v){
@@ -19357,10 +19364,19 @@ function renderChiffrageSection(v){
     s += '</div>';
   }
 
+  // Case a cocher pour mettre une piece de cote (hors calcul/impression,
+  // recuperee automatiquement dans "Travaux a prevoir" a la sortie du
+  // vehicule — voir creerTravauxAPrevoir). Le libelle de la colonne
+  // s'adapte au type de client ; togglable tant que le vehicule n'a pas
+  // ete livre.
+  var labelDiffere = (v.typeClient==='forfait') ? 'Travaux à prévoir' : 'Devis différés';
+  var vehiculeLivre = LIV_ST.indexOf(v.status)>=0;
+
   s += '<div class="tw" style="overflow-x:auto"><table><thead><tr>'
     +'<th style="background:#EAF3DE;color:#3B6D11">Pièce demandée</th><th>Qte</th><th>Désignation / Référence</th>'
     +(_prospectMasquerPrix?'':'<th>Prix achat (FCFA)</th>'+(isForfait?'':'<th>Prix vente (FCFA)</th><th>Remise %</th><th>Total vente</th>'))
     +'<th>Fournisseur</th><th>Source</th><th>Paiement</th>'
+    +'<th style="background:#FAEEDA;color:#854F0B">'+labelDiffere+'</th>'
     +(currentRole==='direction'?'<th>Validation</th>':'<th></th>')
     +'</tr></thead><tbody>';
 
@@ -19377,7 +19393,8 @@ function renderChiffrageSection(v){
     if(isChiffreLocked){
       var pieceOrig = '';
       if(cl.devisId && v.devis && v.devis.lignes){ var dlx=v.devis.lignes.find(function(x){return x.id===cl.devisId;}); if(dlx) pieceOrig=dlx.piece||''; }
-      s += '<tr'+(isLibre?' style="background:#fafcff"':'')+'>';
+      var lidDif = cl.devisId||cl.libreId||'';
+      s += '<tr'+(cl.differe?' style="background:#EDEBE7;opacity:0.65"':(isLibre?' style="background:#fafcff"':''))+'>';
       s += '<td style="background:#f5fbf0;font-size:11px;font-weight:600;color:#3B6D11">'+(pieceOrig||'—')+'</td>';
       s += '<td>'+(isLibre?'<span class="badge b-gray" style="font-size:9px;margin-right:4px">+</span>':'')+'<span class="fw7">'+cl.piece+'</span></td>';
       s += '<td>'+cl.qte+'</td>';
@@ -19388,6 +19405,9 @@ function renderChiffrageSection(v){
       s += '<td class="xs">'+(fournNomDisplay)+'</td>';
       s += '<td><span class="badge '+(cl.source==='local'?'b-blue':'b-amber')+'">'+sourceLabel+'</span></td>';
       s += '<td><span class="badge '+((!cl.paiement||cl.paiement==='cash')?'b-amber':'b-purple')+'">'+paieLabel+'</span></td>';
+      s += '<td style="text-align:center">'+(vehiculeLivre
+        ? '<span class="xs muted" title="Vehicule deja livre, non modifiable">'+(cl.differe?'&#x2714;':'—')+'</span>'
+        : '<input type="checkbox" data-lid="'+lidDif+'" '+(cl.differe?'checked':'')+' onchange="toggleDiffereChiffrageLigne(this)" style="width:16px;height:16px;cursor:pointer">')+'</td>';
       // Colonne validation direction
       if(currentRole==='direction'){
         var isValPiece = !!(cl.valideDir);
@@ -19430,21 +19450,22 @@ function renderChiffrageSection(v){
         var dl = v.devis.lignes.find(function(x){return x.id===cl.devisId;});
         if(dl) pieceOriginale = dl.piece||'';
       }
-      s += '<tr'+(isLibre?' style="background:#fafcff"':'')+'>';
+      s += '<tr'+(cl.differe?' style="background:#EDEBE7"':(isLibre?' style="background:#fafcff"':''))+'>';
+      var dis = cl.differe ? ' disabled' : '';
       // Colonne pièce demandée (lecture seule)
       s += '<td style="background:#f5fbf0;padding:6px;font-size:11px;font-weight:600;color:#3B6D11;vertical-align:middle">'+(pieceOriginale||'<span style="color:#aaa">—</span>')+'</td>';
       // Achats peut modifier/supprimer toutes les lignes
-      s += '<td><div style="display:flex;gap:3px;align-items:center"><input class="inp" id="catPiece_'+lineId+'" style="flex:1;font-size:11px;min-width:100px" value="'+(cl.piece||'').replace(/"/g,'&quot;')+'" placeholder="Designation..." data-clid="'+lineId+'" data-cfield="piece" onchange="updateChiffrageLigneByEl(this)"><button type="button" class="btn btn-sm" style="padding:2px 5px;font-size:11px;white-space:nowrap" onclick="ouvrirCatPieces(\''+lineId+'\')" title="Rechercher dans le catalogue">&#x1F50D;</button></div></td>';
-      s += '<td><input type="number" min="1" class="inp" style="font-size:11px;width:55px" value="'+(cl.qte||1)+'" data-clid="'+lineId+'" data-cfield="qte" onchange="updateChiffrageLigneByEl(this)"></td>';
+      s += '<td><div style="display:flex;gap:3px;align-items:center"><input class="inp" id="catPiece_'+lineId+'" style="flex:1;font-size:11px;min-width:100px" value="'+(cl.piece||'').replace(/"/g,'&quot;')+'" placeholder="Designation..." data-clid="'+lineId+'" data-cfield="piece" onchange="updateChiffrageLigneByEl(this)"'+dis+'><button type="button" class="btn btn-sm" style="padding:2px 5px;font-size:11px;white-space:nowrap" onclick="ouvrirCatPieces(\''+lineId+'\')" title="Rechercher dans le catalogue"'+dis+'>&#x1F50D;</button></div></td>';
+      s += '<td><input type="number" min="1" class="inp" style="font-size:11px;width:55px" value="'+(cl.qte||1)+'" data-clid="'+lineId+'" data-cfield="qte" onchange="updateChiffrageLigneByEl(this)"'+dis+'></td>';
       var indicRep = '';
       if(cl.prixReporte && cl.dateOrigine){
         indicRep = '<div class="xs" style="color:#854F0B;font-size:9px;margin-top:1px" title="Prix du passage precedent - a verifier">&#x23F3; prix du '+new Date(cl.dateOrigine).toLocaleDateString('fr-FR')+'</div>';
       }
       if(!_prospectMasquerPrix){
-      s += '<td><input type="number" min="0" class="inp" style="font-size:11px;width:100px'+(cl.prixReporte?';background:#FDF8EE':'')+'" value="'+(cl.prixAchat||'')+'" placeholder="Prix achat" data-clid="'+lineId+'" data-cfield="prixAchat" onchange="updateChiffrageLigneByEl(this)">'+indicRep+'</td>';
-      if(!isForfait) s += '<td><input type="number" min="0" class="inp" style="font-size:11px;width:100px" value="'+(cl.prixVente||'')+'" placeholder="Prix vente" data-clid="'+lineId+'" data-cfield="prixVente" onchange="updateChiffrageLigneByEl(this)"></td>'; else s += '<td></td>';
-      if(!isForfait) s += '<td><input type="number" min="0" max="100" class="inp" style="font-size:11px;width:60px" value="'+(cl.remise||'')+'" placeholder="%" data-clid="'+lineId+'" data-cfield="remise" onchange="updateChiffrageLigneByEl(this)"></td>'; else s += '<td></td>';
-      s += '<td style="font-family:monospace;font-size:11px;color:#185FA5" id="chiff-tot-'+lineId+'">'+(cl.prixVente?Math.round(montantChiffrageLigne(cl)).toLocaleString('fr-FR'):'—')+'</td>';
+      s += '<td><input type="number" min="0" class="inp" style="font-size:11px;width:100px'+(cl.prixReporte?';background:#FDF8EE':'')+'" value="'+(cl.prixAchat||'')+'" placeholder="Prix achat" data-clid="'+lineId+'" data-cfield="prixAchat" onchange="updateChiffrageLigneByEl(this)"'+dis+'>'+indicRep+'</td>';
+      if(!isForfait) s += '<td><input type="number" min="0" class="inp" style="font-size:11px;width:100px" value="'+(cl.prixVente||'')+'" placeholder="Prix vente" data-clid="'+lineId+'" data-cfield="prixVente" onchange="updateChiffrageLigneByEl(this)"'+dis+'></td>'; else s += '<td></td>';
+      if(!isForfait) s += '<td><input type="number" min="0" max="100" class="inp" style="font-size:11px;width:60px" value="'+(cl.remise||'')+'" placeholder="%" data-clid="'+lineId+'" data-cfield="remise" onchange="updateChiffrageLigneByEl(this)"'+dis+'></td>'; else s += '<td></td>';
+      s += '<td style="font-family:monospace;font-size:11px;color:#185FA5" id="chiff-tot-'+lineId+'">'+(cl.differe?'<span class="xs muted">mise de cote</span>':(cl.prixVente?Math.round(montantChiffrageLigne(cl)).toLocaleString('fr-FR'):'—'))+'</td>';
       }
       // Colonne Fournisseur : en source Stock, elle affiche l'article choisi (selection via la designation)
       if(cl.source === 'stock'){
@@ -19462,27 +19483,30 @@ function renderChiffrageSection(v){
         }
         s += '</td>';
       } else {
-        s += '<td><select class="inp" style="font-size:11px" data-clid="'+lineId+'" data-cfield="fournisseurId" onchange="updateChiffrageLigneByEl(this)"><option value="">-- Fournisseur</option>';
+        s += '<td><select class="inp" style="font-size:11px" data-clid="'+lineId+'" data-cfield="fournisseurId" onchange="updateChiffrageLigneByEl(this)"'+dis+'><option value="">-- Fournisseur</option>';
         FOURNISSEURS.filter(function(f){return f.actif;}).forEach(function(f){ s += '<option value="'+f.id+'"'+(cl.fournisseurId===f.id?' selected':'')+'>'+f.nom+'</option>'; });
         s += '</select></td>';
       }
       // Source : toujours modifiable (choisir un article stock la met sur "Stock", mais on peut revenir)
       var srcVerrou = (cl.source==='stock' && cl.stockArticleId);
-      s += '<td><select class="inp" style="font-size:11px'+(srcVerrou?';background:#EAF1FA;color:#185FA5;font-weight:600':'')+'" data-clid="'+lineId+'" data-cfield="source" onchange="updateChiffrageLigneByEl(this)"'+(srcVerrou?' title="Article pris dans le stock — changez la source pour le retirer"':'')+'><option value="local"'+((!cl.source||cl.source==='local')?' selected':'')+'>Local</option><option value="commande"'+(cl.source==='commande'?' selected':'')+'>Commande</option><option value="stock"'+(cl.source==='stock'?' selected':'')+'>Stock</option></select></td>';
+      s += '<td><select class="inp" style="font-size:11px'+(srcVerrou?';background:#EAF1FA;color:#185FA5;font-weight:600':'')+'" data-clid="'+lineId+'" data-cfield="source" onchange="updateChiffrageLigneByEl(this)"'+(srcVerrou?' title="Article pris dans le stock — changez la source pour le retirer"':'')+dis+'><option value="local"'+((!cl.source||cl.source==='local')?' selected':'')+'>Local</option><option value="commande"'+(cl.source==='commande'?' selected':'')+'>Commande</option><option value="stock"'+(cl.source==='stock'?' selected':'')+'>Stock</option></select></td>';
       if(!cl.paiement) cl.paiement = 'cash'; // initialiser la valeur par defaut
       // Paiement : verrouille "Stock" si la piece vient du stock (deja payee a l'entree)
       if(srcVerrou){
         s += '<td><select class="inp" style="font-size:11px;background:#EAF1FA;color:#185FA5;font-weight:600" disabled title="Deja paye a l entree en stock — changez la source pour modifier"><option>Stock</option></select></td>';
       } else {
-        s += '<td><select class="inp" style="font-size:11px" data-clid="'+lineId+'" data-cfield="paiement" onchange="updateChiffrageLigneByEl(this)"><option value="cash"'+(cl.paiement==='cash'?' selected':'')+'>Cash</option><option value="credit"'+(cl.paiement==='credit'?' selected':'')+'>Credit</option></select></td>';
+        s += '<td><select class="inp" style="font-size:11px" data-clid="'+lineId+'" data-cfield="paiement" onchange="updateChiffrageLigneByEl(this)"'+dis+'><option value="cash"'+(cl.paiement==='cash'?' selected':'')+'>Cash</option><option value="credit"'+(cl.paiement==='credit'?' selected':'')+'>Credit</option></select></td>';
       }
-      s += '<td><button class="btn btn-danger btn-sm" onclick="removeChiffrageLigne(\''+lineId+'\')">&#x1F5D1;</button></td>';
+      s += '<td style="text-align:center">'+(vehiculeLivre
+        ? '<span class="xs muted" title="Vehicule deja livre, non modifiable">'+(cl.differe?'&#x2714;':'—')+'</span>'
+        : '<input type="checkbox" data-lid="'+lineId+'" '+(cl.differe?'checked':'')+' onchange="toggleDiffereChiffrageLigne(this)" style="width:16px;height:16px;cursor:pointer">')+'</td>';
+      s += '<td><button class="btn btn-danger btn-sm" onclick="removeChiffrageLigne(\''+lineId+'\')"'+dis+'>&#x1F5D1;</button></td>';
       s += '</tr>';
     }
   });
 
   // Total général
-  var totalAchat = v.chiffrage.lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
+  var totalAchat = v.chiffrage.lignes.reduce(function(s,cl){return s+(cl.differe?0:(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1));},0);
   var totalVente = v.chiffrage.lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
   var totalMarge = totalVente - totalAchat;
   var margePct = totalAchat>0 ? Math.round((totalMarge/totalAchat)*100) : 0;
@@ -19494,12 +19518,12 @@ function renderChiffrageSection(v){
     s += '<td style="font-family:monospace" title="Total vente">'+Math.round(totalVente).toLocaleString('fr-FR')+'</td>';
     s += '<td></td>'; // colonne Remise % — pas de total agrege pertinent ici
     s += '<td style="font-family:monospace;color:#185FA5">'+Math.round(totalVente).toLocaleString('fr-FR')+' FCFA</td>';
-    s += '<td colspan="4" style="color:#3B6D11;font-weight:800">&#x1F4B0; Marge brute : <span style="font-family:monospace;color:'+(totalMarge>=0?'#3B6D11':'#A32D2D')+'">'+Math.round(totalMarge).toLocaleString('fr-FR')+' FCFA ('+margePct+'%)</span></td>';
+    s += '<td colspan="5" style="color:#3B6D11;font-weight:800">&#x1F4B0; Marge brute : <span style="font-family:monospace;color:'+(totalMarge>=0?'#3B6D11':'#A32D2D')+'">'+Math.round(totalMarge).toLocaleString('fr-FR')+' FCFA ('+margePct+'%)</span></td>';
   } else {
-    s += '<td colspan="4"></td>';
+    s += '<td colspan="5"></td>';
   }
   } else {
-    s += '<td colspan="4" class="xs muted">(prix masques pour ce profil)</td>';
+    s += '<td colspan="5" class="xs muted">(prix masques pour ce profil)</td>';
   }
   s += '</tr>';
   s += '</tbody></table></div>';
@@ -19956,6 +19980,33 @@ function updateChiffrageLigne(lineId, field, val){
 // Applique un meme pourcentage de remise a toutes les lignes deja
 // chiffrees (piece renseignee) en un clic — chaque ligne reste ensuite
 // modifiable individuellement via son propre champ "Remise %".
+// Met une piece de cote (ou la reactive) : elle sort alors du calcul et
+// de l'impression du devis/facture et du bon de livraison, sans etre
+// perdue pour autant — a la sortie du vehicule, le mecanisme existant
+// (creerTravauxAPrevoir) la recupere automatiquement dans "Travaux a
+// prevoir" comme n'importe quelle piece non validee. Togglable tant que
+// le vehicule n'a pas ete livre.
+function toggleDiffereChiffrageLigne(el){
+  var v = vehicles.find(function(x){return x.id===detCurrentVid;});
+  if(!v || !v.chiffrage) return;
+  if(LIV_ST.indexOf(v.status)>=0){
+    afficherToastNotif('Vehicule deja livre', 'Cette piece ne peut plus etre mise de cote ou reactivee.', 'alerte');
+    openDetKeepEdit(detCurrentVid);
+    return;
+  }
+  var lid = el.getAttribute('data-lid');
+  var cl = v.chiffrage.lignes.find(function(x){return x.devisId===lid || x.libreId===lid;});
+  if(!cl) return;
+  cl.differe = el.checked;
+  // Une piece mise de cote alors qu'elle avait deja ete validee (direction)
+  // ne doit plus compter dans les decaissements prevus — retirer sa
+  // validation ici couvre les calculs qui filtrent specifiquement sur
+  // cl.valideDir (recapitulatif des pieces validees, dettes fournisseurs).
+  if(cl.differe) cl.valideDir = false;
+  saveV();
+  openDetKeepEdit(detCurrentVid);
+}
+
 function appliquerRemiseGlobaleChiffrage(){
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v || !v.chiffrage) return;
@@ -22539,6 +22590,7 @@ function openFournDetail(btn){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     v.chiffrage.lignes.forEach(function(cl){
       if(cl.fournisseurId!==id) return;
+      if(cl.differe) return; // piece mise de cote : achat pas engage, ne compte pas dans l'historique
       lignes.push({
         piece: cl.piece||'—',
         qte: parseInt(cl.qte)||1,
@@ -28033,7 +28085,7 @@ function imprimerDocument(vid, type){
 
   var lignes = [];
   if(v.chiffrage && v.chiffrage.lignes){
-    lignes = v.chiffrage.lignes.filter(function(l){ return (l.piece||'').trim(); });
+    lignes = v.chiffrage.lignes.filter(function(l){ return (l.piece||'').trim() && !l.differe; });
   }
   var total = lignes.reduce(function(s,l){
     return s+montantChiffrageLigne(l);
@@ -28186,7 +28238,7 @@ function imprimerBonLivraison(vid){
 
   var lignes = [];
   if(v.chiffrage && v.chiffrage.lignes){
-    lignes = v.chiffrage.lignes.filter(function(l){ return (l.piece||'').trim(); });
+    lignes = v.chiffrage.lignes.filter(function(l){ return (l.piece||'').trim() && !l.differe; });
   }
   var travauxHtml = lignes.length
     ? lignes.map(function(l){ return '<div style="margin-bottom:3px">- '+(l.piece||'')+'</div>'; }).join('')
