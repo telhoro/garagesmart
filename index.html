@@ -5316,6 +5316,7 @@ function supprimerCommentaire(vid, idx){
   if(!v || !v.commentaires) return;
   v.commentaires.splice(idx, 1);
   saveV();
+  renderPage();
   ouvrirCommentaires(vid);
 }
 
@@ -5344,6 +5345,7 @@ function sauvegarderModifComm(vid, idx){
   v.commentaires[idx].texte = newTexte;
   v.commentaires[idx].modifie = Date.now();
   saveV();
+  renderPage();
   ouvrirCommentaires(vid);
 }
 
@@ -5359,6 +5361,11 @@ function ajouterCommentaire(vid){
     texte: texte
   });
   saveV();
+  // IMPORTANT : rafraichir le tableau de bord en arriere-plan, sinon les
+  // badges "dernier commentaire" (dernierCommentaireHtml) affiches dans
+  // les differents tableaux de bord restent figes sur l'etat d'avant
+  // l'ajout tant que la page n'est pas rechargee/naviguee autrement.
+  renderPage();
   ouvrirCommentaires(vid); // Rafraîchir la modale
 }
 
