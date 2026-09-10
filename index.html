@@ -27200,23 +27200,21 @@ function exporterPDF(){
   // (pas de connexion au premier chargement de la page par exemple), on
   // se rabat sur l'ancien comportement : telecharger un HTML pret a
   // imprimer, avec instruction claire pour l'utilisateur.
+  //
+  // IMPORTANT : on capture directement l'element visible de la modale
+  // (body), PAS un clone place hors-ecran (left:-9999px) — html2canvas
+  // ne parvient pas a rendre correctement un element positionne hors du
+  // viewport dans ce contexte, ce qui produisait une page blanche.
   if(typeof html2pdf !== 'undefined'){
-    var conteneur = document.createElement('div');
-    conteneur.style.cssText = 'position:fixed;left:-9999px;top:0;width:210mm;background:#fff;padding:10mm;font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#1a1a1a';
-    conteneur.innerHTML = body.innerHTML;
-    document.body.appendChild(conteneur);
     afficherToastNotif('Generation du PDF...', 'Le telechargement demarre dans quelques secondes.', 'info');
     html2pdf().set({
       margin: 10,
       filename: nom+'.pdf',
       image: { type:'jpeg', quality:0.98 },
-      html2canvas: { scale:2, useCORS:true },
+      html2canvas: { scale:2, useCORS:true, backgroundColor:'#ffffff' },
       jsPDF: { unit:'mm', format:'a4', orientation:'portrait' },
       pagebreak: { mode:['avoid-all','css','legacy'] }
-    }).from(conteneur).save().then(function(){
-      document.body.removeChild(conteneur);
-    }).catch(function(){
-      document.body.removeChild(conteneur);
+    }).from(body).save().catch(function(){
       afficherToastNotif('Echec de la generation PDF', 'Reessayez, ou utilisez Imprimer puis "Enregistrer en PDF" depuis la fenetre d\'impression.', 'alerte');
     });
     return;
@@ -27253,17 +27251,48 @@ function exporterWord(){
   var title = document.getElementById('modalImpressionTitle');
   if(!body) return;
   var nom = (title?title.textContent:'document').replace(/[^a-zA-Z0-9_-]/g,'_');
+
+  // Word (moteur mshtml) ne comprend ni flexbox/grid, ni position, ni les
+  // largeurs en mm/vw pensees pour l'ecran/impression A4 — laissees
+  // telles quelles, elles ecrasent les colonnes du tableau au point que
+  // les chiffres deviennent invisibles ou que le contenu soit coupe. On
+  // travaille sur une COPIE du contenu pour nettoyer ces proprietes sans
+  // toucher a l'apercu affiche a l'ecran.
+  var clone = body.cloneNode(true);
+  var proprietesARetirer = ['position','top','left','right','bottom','display',
+    'flex','flexDirection','flexWrap','justifyContent','alignItems','gap',
+    'transform','float','zIndex','minWidth','maxWidth'];
+  function nettoyerStyle(el){
+    if(!el.style) return;
+    proprietesARetirer.forEach(function(p){ el.style[p] = ''; });
+    // Une largeur en mm/vw n'a aucun sens dans Word : on la remplace par
+    // une largeur relative qui, elle, est correctement interpretee.
+    if(el.style.width && /mm|vw/.test(el.style.width)) el.style.width = '100%';
+  }
+  nettoyerStyle(clone);
+  clone.querySelectorAll('*').forEach(nettoyerStyle);
+  // Bordures/largeur explicites sur chaque tableau : le CSS seul
+  // (border-collapse) n'est pas toujours repris fidelement par Word,
+  // d'ou le tableau qui apparaissait decale ou sans quadrillage.
+  clone.querySelectorAll('table').forEach(function(t){
+    t.setAttribute('border','1');
+    t.setAttribute('cellspacing','0');
+    t.setAttribute('cellpadding','5');
+    t.style.width = '100%';
+    t.style.borderCollapse = 'collapse';
+  });
+
   var html = '<!DOCTYPE html><html xmlns:o="urn:schemas-microsoft-com:office:office" '
     +'xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">'
     +'<head><meta charset="UTF-8">'
     +'<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>90</w:Zoom>'
     +'<w:DoNotOptimizeForBrowser/></w:WordDocument></xml><![endif]-->'
-    +'<style>body{font-family:Arial,sans-serif;font-size:11pt;margin:2cm}'
-    +'table{border-collapse:collapse;width:100%}'
-    +'th,td{border:1px solid #bbb;padding:5pt}'
+    +'<style>body{font-family:Arial,sans-serif;font-size:11pt;margin:1.5cm}'
+    +'table{border-collapse:collapse;width:100%;margin:8pt 0}'
+    +'th,td{border:1px solid #999;padding:5pt;font-size:10pt}'
     +'@page{size:A4;margin:2cm}</style>'
-    +'</head><body>'+body.innerHTML+'</body></html>';
-  var blob = new Blob([html], {type:'application/msword'});
+    +'</head><body>'+clone.innerHTML+'</body></html>';
+  var blob = new Blob(['\ufeff', html], {type:'application/msword'});
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
   a.href = url; a.download = nom+'.doc';
@@ -27273,39 +27302,41 @@ function exporterWord(){
 }
 
 function exporterExcel(){
-  // Récupérer les données du véhicule courant pour export Excel
   var title = document.getElementById('modalImpressionTitle');
   var nom = (title?title.textContent:'document').replace(/[^a-zA-Z0-9_-]/g,'_');
-  
-  // Chercher le tableau DETAILS dans la modale
+
   var body = document.getElementById('modalImpressionBody');
   if(!body) return;
-  
-  // Construire un tableau Excel depuis les données
-  var tables = body.querySelectorAll('table');
-  var detailTable = null;
-  for(var i=0;i<tables.length;i++){
-    var rows = tables[i].querySelectorAll('tr');
-    if(rows.length > 1) { detailTable = tables[i]; break; }
+
+  if(typeof XLSX === 'undefined'){
+    afficherToastNotif('Module Excel indisponible', 'Rechargez la page (connexion internet requise au premier chargement).', 'alerte');
+    return;
   }
-  
-  var html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" '
-    +'xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">'
-    +'<head><meta charset="UTF-8">'
-    +'<style>th{background:#e8e8e8;font-weight:bold;border:1px solid #bbb;padding:4pt}'
-    +'td{border:1px solid #bbb;padding:4pt}'
-    +'body{font-family:Arial;font-size:10pt}</style>'
-    +'</head><body>'
-    +(detailTable ? detailTable.outerHTML : body.innerHTML)
-    +'</body></html>';
-  
-  var blob = new Blob([html], {type:'application/vnd.ms-excel'});
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url; a.download = nom+'.xls';
-  document.body.appendChild(a); a.click();
-  document.body.removeChild(a);
-  setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+
+  // Generation d'un VRAI fichier .xlsx (binaire) via SheetJS, deja
+  // utilise avec succes ailleurs dans l'app. L'ancienne methode
+  // (HTML deguise en .xls) declenchait une alerte "format de fichier
+  // suspect" dans Excel et affichait un contenu incoherent une fois
+  // ouverte malgre tout — un .xlsx genuine n'a ni l'un ni l'autre probleme.
+  var tables = body.querySelectorAll('table');
+  if(!tables.length){
+    afficherToastNotif('Aucun tableau', 'Ce document ne contient pas de tableau exploitable en Excel.', 'alerte');
+    return;
+  }
+  var wb = XLSX.utils.book_new();
+  var nbFeuilles = 0;
+  tables.forEach(function(t){
+    var rows = t.querySelectorAll('tr');
+    if(!rows.length) return;
+    nbFeuilles++;
+    var ws = XLSX.utils.table_to_sheet(t);
+    XLSX.utils.book_append_sheet(wb, ws, 'Feuille'+nbFeuilles);
+  });
+  if(!nbFeuilles){
+    afficherToastNotif('Aucun tableau', 'Ce document ne contient pas de tableau exploitable en Excel.', 'alerte');
+    return;
+  }
+  XLSX.writeFile(wb, nom+'.xlsx');
 }
 
 
