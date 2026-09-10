@@ -715,30 +715,44 @@ tr:hover td{background:#faf9f7}
   <div class="mhead"><h2 id="cs_modal_titre">&#x1F4E6; Demande de commande speciale</h2><button class="btn btn-sm" onclick="fermerNouvelleCS()">X</button></div>
   <div class="mbody">
     <input type="hidden" id="cs_edit_id" value="">
-    <div class="g3" style="margin-bottom:10px">
-      <div class="fr" style="grid-column:span 2"><label class="fl">Designation de la piece *</label><input class="inp" id="cs_piece" placeholder="Ex: Turbo compresseur"></div>
-      <div class="fr"><label class="fl">Quantite *</label><input type="number" min="1" class="inp" id="cs_qte" value="1"></div>
-    </div>
-    <div class="g3" style="margin-bottom:10px">
-      <div class="fr"><label class="fl">Marque <span class="xs muted">(vide = universel)</span></label><input class="inp" id="cs_marque" placeholder="Ex: Toyota"></div>
-      <div class="fr"><label class="fl">Modele</label><input class="inp" id="cs_modele" placeholder="Ex: Hilux"></div>
-      <div class="fr"><label class="fl">Prix estime</label><input type="number" min="0" class="inp" id="cs_prix" placeholder="0"></div>
-    </div>
-    <div class="fr" style="margin-bottom:10px">
-      <label class="fl">Vehicule concerne <span class="xs muted">(optionnel)</span></label>
-      <div style="display:flex;gap:16px;margin-bottom:6px">
+    <input type="hidden" id="cs_edit_group" value="">
+
+    <div class="fr" style="margin-bottom:12px">
+      <label class="fl">Vehicule concerne</label>
+      <div style="display:flex;gap:16px;margin-bottom:6px;flex-wrap:wrap">
         <label class="xs" style="display:flex;align-items:center;gap:4px"><input type="radio" name="cs_veh_type" value="existant" checked onchange="toggleCsVehiculeType()"> Vehicule existant</label>
         <label class="xs" style="display:flex;align-items:center;gap:4px"><input type="radio" name="cs_veh_type" value="autre" onchange="toggleCsVehiculeType()"> Autre vehicule</label>
+        <label class="xs" style="display:flex;align-items:center;gap:4px"><input type="radio" name="cs_veh_type" value="aucun" onchange="toggleCsVehiculeType()"> Piece universelle (sans vehicule)</label>
       </div>
       <div id="cs_veh_existant_wrap">
-        <input class="inp" id="cs_veh_immat_existant" placeholder="Rechercher par immatriculation..." list="cs_veh_list" autocomplete="off">
-        <datalist id="cs_veh_list"></datalist>
+        <div id="csVehChip" style="display:none;margin-bottom:6px"></div>
+        <div id="csVehSearchWrap" style="position:relative">
+          <input class="inp" id="cs_veh_recherche" placeholder="Rechercher par client, immatriculation, marque ou modele..." oninput="rechercherVehiculeCS(this.value)" autocomplete="off">
+          <div id="csVehResults" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:1000;background:#fff;border:1px solid #ccc;border-radius:0 0 7px 7px;max-height:260px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.12)"></div>
+        </div>
       </div>
       <div id="cs_veh_autre_wrap" style="display:none">
-        <input class="inp" id="cs_veh_immat_autre" placeholder="Immatriculation (vehicule non enregistre)">
+        <div class="g2" style="gap:8px">
+          <input class="inp" id="cs_veh_immat_autre" placeholder="Immatriculation">
+          <input class="inp" id="cs_veh_client_autre" placeholder="Nom du client">
+        </div>
       </div>
     </div>
-    <div class="fr" style="margin-bottom:10px"><label class="fl">Fournisseur envisage</label><select class="inp" id="cs_fourn"><option value="">-- Aucun / a determiner</option></select></div>
+
+    <div class="g3" style="margin-bottom:12px">
+      <div class="fr"><label class="fl">Marque <span class="xs muted">(vide = universel)</span></label><input class="inp" id="cs_marque" placeholder="Ex: Toyota"></div>
+      <div class="fr"><label class="fl">Modele</label><input class="inp" id="cs_modele" placeholder="Ex: Hilux"></div>
+      <div class="fr"><label class="fl">Fournisseur envisage</label><select class="inp" id="cs_fourn"><option value="">-- Aucun / a determiner</option></select></div>
+    </div>
+
+    <div class="fr" style="margin-bottom:10px">
+      <label class="fl">Pieces a commander *</label>
+      <div class="tw"><table style="width:100%"><thead><tr>
+        <th>Designation</th><th style="width:65px">Qte</th><th style="width:130px">Reference</th><th style="width:120px">Prix local</th><th style="width:30px"></th>
+      </tr></thead><tbody id="cs_pieces_body"></tbody></table></div>
+      <button type="button" class="btn btn-sm" style="margin-top:6px" onclick="csAjouterLigne()">+ Ajouter une piece</button>
+    </div>
+
     <div class="fr"><label class="fl">Note / precisions</label><textarea class="inp" id="cs_note" rows="2" placeholder="Reference constructeur, urgence..."></textarea></div>
   </div>
   <div class="mfoot">
@@ -2197,6 +2211,7 @@ var dashFilter = 'all';
 var openClientKeys = {}; // multi-ouverture : plusieurs clients ouverts simultanement
 var openVehKey = null;
 var openPlusKey = null;
+var histIntervOpenVid = null; // vid dont la section "Historique d'intervention" (fiche detail) est depliee
 var detCurrentVid = null; // ID du vehicule ouvert dans la modale detail
 var eqPeriod = {p:'month', f:'', t:''}; // Periode pour le tableau equipes
 var openTechName = null; // Nom du technicien dont on affiche les vehicules
@@ -21474,26 +21489,145 @@ function reapprovisionnerArticleByEl(btn){
 // Ouvre la meme modale que "Nouvelle demande", mais en mode modification
 // — preremplie avec les donnees existantes, pour corriger une erreur de
 // saisie sans perdre le statut ni les dates de la demande.
+// ============================================================
+// COMMANDE SPECIALE — recherche vehicule (client/immat/marque/modele)
+// ============================================================
+var _csVehSelection = null; // {immat, client, marque, modele} vehicule existant selectionne
+
+function rechercherVehiculeCS(texte){
+  var wrap = document.getElementById('csVehResults');
+  if(!wrap) return;
+  var q = (texte||'').trim().toLowerCase();
+  if(q.length<2){ wrap.innerHTML=''; wrap.style.display='none'; return; }
+  var seen = {}; var results = [];
+  vehicles.forEach(function(v){
+    if(v.isProspect || !v.immat) return;
+    var key = v.immat.toUpperCase();
+    if(seen[key]) return;
+    var hay = ((v.client||'')+' '+(v.immat||'')+' '+(v.marque||'')+' '+(v.modele||'')).toLowerCase();
+    if(hay.indexOf(q)<0) return;
+    seen[key]=true;
+    results.push(v);
+  });
+  results = results.slice(0,8);
+  if(!results.length){
+    wrap.innerHTML = '<div style="padding:10px;color:#999;font-size:12px">Aucun vehicule trouve</div>';
+    wrap.style.display = 'block';
+    return;
+  }
+  var html = '';
+  results.forEach(function(v){
+    html += '<div class="prospect-item" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #f0ede8" data-immat="'+v.immat.replace(/"/g,'&quot;')+'" onclick="selectionnerVehiculeCS(this)">'
+      +'<div style="font-weight:700;font-size:12px">'+v.immat+' — '+(v.marque||'')+' '+(v.modele||'')+'</div>'
+      +'<div class="xs muted">'+(v.client||'')+'</div>'
+      +'</div>';
+  });
+  wrap.innerHTML = html;
+  wrap.style.display = 'block';
+}
+function selectionnerVehiculeCS(el){
+  var immat = el.getAttribute('data-immat');
+  var v = vehicles.find(function(x){ return !x.isProspect && (x.immat||'').toUpperCase()===immat.toUpperCase(); });
+  if(!v) return;
+  _csVehSelection = {immat:v.immat, client:v.client||'', marque:v.marque||'', modele:v.modele||''};
+  majAffichageVehiculeCS();
+  var res = document.getElementById('csVehResults'); if(res){ res.style.display='none'; res.innerHTML=''; }
+  var champ = document.getElementById('cs_veh_recherche'); if(champ) champ.value='';
+}
+function retirerVehiculeCS(){
+  _csVehSelection = null;
+  majAffichageVehiculeCS();
+}
+function majAffichageVehiculeCS(){
+  var chip = document.getElementById('csVehChip');
+  var searchWrap = document.getElementById('csVehSearchWrap');
+  if(!chip||!searchWrap) return;
+  if(_csVehSelection){
+    chip.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;background:#EBF3FB;border:1px solid #B5D4F4;border-radius:7px;padding:8px 12px">'
+      +'<div><div class="fw7" style="font-size:12px">&#x1F697; '+_csVehSelection.immat+' — '+_csVehSelection.marque+' '+_csVehSelection.modele+'</div>'
+      +'<div class="xs muted">'+(_csVehSelection.client||'—')+'</div></div>'
+      +'<button type="button" class="btn btn-sm" onclick="retirerVehiculeCS()">Changer</button>'
+      +'</div>';
+    chip.style.display = 'block';
+    searchWrap.style.display = 'none';
+  } else {
+    chip.style.display = 'none';
+    chip.innerHTML = '';
+    searchWrap.style.display = 'block';
+  }
+}
+
+// ============================================================
+// COMMANDE SPECIALE — lignes de pieces multiples (meme vehicule)
+// ============================================================
+var _csLignes = [];
+var _csLigneSeq = 0;
+function csNouvelleLigneVide(){
+  _csLigneSeq++;
+  return {localId:'l'+_csLigneSeq, existingId:null, piece:'', qte:1, reference:'', prixEstime:''};
+}
+function renderCsLignes(){
+  var body = document.getElementById('cs_pieces_body');
+  if(!body) return;
+  var html = '';
+  _csLignes.forEach(function(l){
+    html += '<tr data-lid="'+l.localId+'">'
+      +'<td style="padding:4px"><input class="inp" style="font-size:12px" placeholder="Ex: Turbo compresseur" value="'+(l.piece||'').replace(/"/g,'&quot;')+'" onchange="csMajLigne(\''+l.localId+'\',\'piece\',this.value)"></td>'
+      +'<td style="padding:4px"><input type="number" min="1" class="inp" style="font-size:12px" value="'+(l.qte||1)+'" onchange="csMajLigne(\''+l.localId+'\',\'qte\',this.value)"></td>'
+      +'<td style="padding:4px"><input class="inp" style="font-size:12px" placeholder="Reference" value="'+(l.reference||'').replace(/"/g,'&quot;')+'" onchange="csMajLigne(\''+l.localId+'\',\'reference\',this.value)"></td>'
+      +'<td style="padding:4px"><input type="number" min="0" class="inp" style="font-size:12px" placeholder="Prix local" value="'+(l.prixEstime||'')+'" onchange="csMajLigne(\''+l.localId+'\',\'prixEstime\',this.value)"></td>'
+      +'<td style="padding:4px">'+(_csLignes.length>1?'<button type="button" class="btn btn-danger btn-sm" onclick="csSupprimerLigne(\''+l.localId+'\')">&#x2715;</button>':'')+'</td>'
+      +'</tr>';
+  });
+  body.innerHTML = html;
+}
+function csMajLigne(localId, field, val){
+  var l = _csLignes.find(function(x){return x.localId===localId;});
+  if(!l) return;
+  if(field==='qte') val = parseInt(val,10)||1;
+  l[field] = val;
+}
+function csAjouterLigne(){
+  _csLignes.push(csNouvelleLigneVide());
+  renderCsLignes();
+}
+function csSupprimerLigne(localId){
+  _csLignes = _csLignes.filter(function(x){return x.localId!==localId;});
+  if(!_csLignes.length) _csLignes.push(csNouvelleLigneVide());
+  renderCsLignes();
+}
+
 function ouvrirModifCommandeSpecialeByEl(btn){
   var id = btn.getAttribute('data-csid');
   var c = COMMANDES_SPECIALES.find(function(x){return x.id===id;});
   if(!c) return;
-  ouvrirNouvelleCS(); // pose les listes fournisseurs/vehicules et l'etat par defaut
+  ouvrirNouvelleCS(); // pose les listes fournisseurs et l'etat par defaut (vide)
   document.getElementById('cs_edit_id').value = c.id;
-  document.getElementById('cs_piece').value = c.piece||'';
+  document.getElementById('cs_edit_group').value = c.groupId||'';
   document.getElementById('cs_marque').value = c.marque||'';
   document.getElementById('cs_modele').value = c.modele||'';
-  document.getElementById('cs_qte').value = c.qte||1;
-  document.getElementById('cs_prix').value = c.prixAchatEstime||'';
   document.getElementById('cs_fourn').value = c.fournisseurId||'';
   document.getElementById('cs_note').value = c.note||'';
-  if(c.immat){
-    var radioType = document.querySelector('input[name="cs_veh_type"][value="'+(c.vehiculeType||'existant')+'"]');
-    if(radioType) radioType.checked = true;
-    if(c.vehiculeType==='autre') document.getElementById('cs_veh_immat_autre').value = c.immat;
-    else document.getElementById('cs_veh_immat_existant').value = c.immat;
-    toggleCsVehiculeType();
+
+  var vehiculeType = c.immat ? (c.vehiculeType||'existant') : 'aucun';
+  var radioType = document.querySelector('input[name="cs_veh_type"][value="'+vehiculeType+'"]');
+  if(radioType) radioType.checked = true;
+  if(vehiculeType==='autre'){
+    document.getElementById('cs_veh_immat_autre').value = c.immat||'';
+    document.getElementById('cs_veh_client_autre').value = c.client||'';
+  } else if(vehiculeType==='existant' && c.immat){
+    _csVehSelection = {immat:c.immat, client:c.client||'', marque:c.marque||'', modele:c.modele||''};
+    majAffichageVehiculeCS();
   }
+  toggleCsVehiculeType();
+
+  _csLignes = [{
+    localId:'l1', existingId:c.id, piece:c.piece||'', qte:c.qte||1,
+    reference:c.reference||'',
+    prixEstime:(c.prixAchatEstime!==undefined && c.prixAchatEstime!==null) ? c.prixAchatEstime : ''
+  }];
+  renderCsLignes();
+
   document.getElementById('cs_modal_titre').innerHTML = '&#x270F; Modifier la demande';
   document.getElementById('cs_modal_bouton').innerHTML = '&#x2714; Enregistrer les modifications';
 }
@@ -21506,33 +21640,29 @@ function ouvrirNouvelleCS(){
     });
     sel.innerHTML = opts;
   }
-  // Liste des immatriculations existantes, pour la recherche "vehicule existant"
-  var dl = document.getElementById('cs_veh_list');
-  if(dl){
-    var seen = {}; var optsV = '';
-    vehicles.forEach(function(v){
-      if(!v.immat || v.isProspect) return;
-      var k = v.immat.toUpperCase();
-      if(seen[k]) return; seen[k]=true;
-      optsV += '<option value="'+v.immat+'">'+(v.marque||'')+' '+(v.modele||'')+' — '+(v.client||'')+'</option>';
-    });
-    dl.innerHTML = optsV;
-  }
-  ['cs_piece','cs_marque','cs_modele','cs_prix','cs_note','cs_veh_immat_existant','cs_veh_immat_autre'].forEach(function(id){
+  _csVehSelection = null;
+  majAffichageVehiculeCS();
+  _csLigneSeq = 0;
+  _csLignes = [csNouvelleLigneVide()];
+  renderCsLignes();
+  var champRech = document.getElementById('cs_veh_recherche'); if(champRech) champRech.value='';
+  var resWrap = document.getElementById('csVehResults'); if(resWrap){ resWrap.style.display='none'; resWrap.innerHTML=''; }
+  ['cs_marque','cs_modele','cs_note','cs_veh_immat_autre','cs_veh_client_autre'].forEach(function(id){
     var e = document.getElementById(id); if(e) e.value = '';
   });
-  var qteEl = document.getElementById('cs_qte'); if(qteEl) qteEl.value = 1;
   var radioExistant = document.querySelector('input[name="cs_veh_type"][value="existant"]');
   if(radioExistant) radioExistant.checked = true;
   toggleCsVehiculeType();
   document.getElementById('cs_edit_id').value = '';
+  document.getElementById('cs_edit_group').value = '';
   document.getElementById('cs_modal_titre').innerHTML = '&#x1F4E6; Demande de commande speciale';
   document.getElementById('cs_modal_bouton').innerHTML = '&#x2714; Enregistrer la demande';
   var m = document.getElementById('modalNouvelleCS');
   if(m) m.style.display = 'flex';
 }
-// Bascule entre la recherche d'un vehicule deja enregistre et la saisie
-// libre d'une immatriculation pour un vehicule non enregistre dans l'app.
+// Bascule entre la recherche d'un vehicule deja enregistre, la saisie
+// libre d'une immatriculation/client, et une piece universelle sans
+// vehicule (aucun des deux blocs n'est affiche dans ce dernier cas).
 function toggleCsVehiculeType(){
   var radio = document.querySelector('input[name="cs_veh_type"]:checked');
   var type = radio ? radio.value : 'existant';
@@ -21548,43 +21678,79 @@ function fermerNouvelleCS(){
 function enregistrerCommandeSpeciale(){
   var g = function(id){ var e = document.getElementById(id); return e ? e.value : ''; };
   var editId = g('cs_edit_id');
-  var piece = (g('cs_piece')||'').trim();
-  var qte = parseInt(g('cs_qte'),10);
+  var editGroup = g('cs_edit_group');
   var marque = (g('cs_marque')||'').trim();
   var modele = (g('cs_modele')||'').trim();
-  var prix = parseFloat(g('cs_prix'));
   var fournisseurId = g('cs_fourn');
   var note = (g('cs_note')||'').trim();
+
   var radio = document.querySelector('input[name="cs_veh_type"]:checked');
   var vehiculeType = radio ? radio.value : 'existant';
-  var immat = (vehiculeType==='existant' ? g('cs_veh_immat_existant') : g('cs_veh_immat_autre')).trim().toUpperCase();
-
-  if(!piece){ afficherToastNotif('Designation manquante', 'Saisissez le nom de la piece.', 'alerte'); return; }
-  if(isNaN(qte) || qte<1){ afficherToastNotif('Quantite invalide', 'La quantite doit etre au moins 1.', 'alerte'); return; }
-
-  if(editId){
-    // Correction d'une demande deja enregistree — conserve son statut,
-    // ses dates et son identifiant, seuls les details de la piece
-    // changent.
-    var existante = COMMANDES_SPECIALES.find(function(x){return x.id===editId;});
-    if(!existante){ afficherToastNotif('Introuvable', 'Cette commande n\'existe plus.', 'alerte'); return; }
-    existante.piece = piece; existante.marque = marque; existante.modele = modele; existante.qte = qte;
-    existante.fournisseurId = fournisseurId; existante.prixAchatEstime = isNaN(prix)?'':prix; existante.note = note;
-    existante.immat = immat; existante.vehiculeType = immat ? vehiculeType : '';
-    saveCommandesSpeciales();
-    afficherToastNotif('Demande modifiee', piece+' — modifications enregistrees.', 'ok');
-  } else {
-    COMMANDES_SPECIALES.push({
-      id: 'cs_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
-      piece: piece, marque: marque, modele: modele, qte: qte,
-      fournisseurId: fournisseurId, prixAchatEstime: isNaN(prix)?'':prix, note: note,
-      immat: immat, vehiculeType: immat ? vehiculeType : '',
-      demandeur: currentUser ? (currentUser.login||currentUser.nom) : currentRole,
-      dateDemande: Date.now(), statut: 'demande', dateCommande: null, dateLivraison: null
-    });
-    saveCommandesSpeciales();
-    afficherToastNotif('Demande enregistree', piece+' — en attente de lancement de commande.', 'ok');
+  var immat = '', client = '';
+  if(vehiculeType==='existant'){
+    if(!_csVehSelection){ afficherToastNotif('Vehicule non selectionne', 'Recherchez et selectionnez un vehicule dans la liste, ou choisissez une autre option.', 'alerte'); return; }
+    immat = _csVehSelection.immat; client = _csVehSelection.client;
+    if(!marque) marque = _csVehSelection.marque;
+    if(!modele) modele = _csVehSelection.modele;
+  } else if(vehiculeType==='autre'){
+    immat = (g('cs_veh_immat_autre')||'').trim().toUpperCase();
+    client = (g('cs_veh_client_autre')||'').trim();
   }
+  // 'aucun' : piece universelle, immat/client restent vides
+
+  // Relire les lignes depuis le DOM (capture une saisie en cours non
+  // encore validee par onchange, comme pour les autres tableaux de
+  // saisie de l'app).
+  document.querySelectorAll('#cs_pieces_body tr').forEach(function(tr){
+    var lid = tr.getAttribute('data-lid');
+    var l = _csLignes.find(function(x){return x.localId===lid;});
+    if(!l) return;
+    var inputs = tr.querySelectorAll('input');
+    l.piece = inputs[0].value.trim();
+    l.qte = parseInt(inputs[1].value,10)||1;
+    l.reference = inputs[2].value.trim();
+    l.prixEstime = inputs[3].value;
+  });
+
+  var lignesValides = _csLignes.filter(function(l){ return (l.piece||'').trim(); });
+  if(!lignesValides.length){ afficherToastNotif('Aucune piece', 'Ajoutez au moins une piece avec une designation.', 'alerte'); return; }
+
+  var groupId = editGroup || ('csg_'+Date.now()+'_'+Math.random().toString(36).slice(2,7));
+  var nbCreees = 0, nbModifiees = 0, premierePiece = lignesValides[0].piece;
+
+  lignesValides.forEach(function(l){
+    var prix = parseFloat(l.prixEstime);
+    if(l.existingId){
+      var existante = COMMANDES_SPECIALES.find(function(x){return x.id===l.existingId;});
+      if(existante){
+        existante.piece = l.piece; existante.qte = l.qte; existante.reference = l.reference;
+        existante.prixAchatEstime = isNaN(prix)?'':prix;
+        existante.marque = marque; existante.modele = modele;
+        existante.fournisseurId = fournisseurId; existante.note = note;
+        existante.immat = immat; existante.client = client; existante.vehiculeType = immat ? vehiculeType : '';
+        nbModifiees++;
+      }
+    } else {
+      COMMANDES_SPECIALES.push({
+        id: 'cs_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+        groupId: groupId,
+        piece: l.piece, marque: marque, modele: modele, qte: l.qte,
+        reference: l.reference,
+        fournisseurId: fournisseurId, prixAchatEstime: isNaN(prix)?'':prix, note: note,
+        immat: immat, client: client, vehiculeType: immat ? vehiculeType : '',
+        demandeur: currentUser ? (currentUser.login||currentUser.nom) : currentRole,
+        dateDemande: Date.now(), statut: 'demande', dateCommande: null, dateLivraison: null,
+        archivee: false, dateArchivage: null
+      });
+      nbCreees++;
+    }
+  });
+
+  saveCommandesSpeciales();
+  var msg = [];
+  if(nbCreees) msg.push(nbCreees+' piece'+(nbCreees>1?'s':'')+' ajoutee'+(nbCreees>1?'s':''));
+  if(nbModifiees) msg.push(nbModifiees+' modifiee'+(nbModifiees>1?'s':''));
+  afficherToastNotif(editId?'Demande mise a jour':'Demande enregistree', (msg.join(', ')||premierePiece)+'.', 'ok');
   fermerNouvelleCS();
   ouvrirCommandesSpeciales();
 }
@@ -21604,10 +21770,11 @@ function fermerCommandesSpeciales(){
   var m = document.getElementById('modalCommandesSpeciales');
   if(m) m.style.display = 'none';
 }
-// Separe commandes "en cours" (demande + commande) et "historique" (livree).
+// Separe commandes "en cours" (demande + commande, non archivees) et
+// "historique" (livrees OU archivees manuellement).
 function filtrerCsParOnglet(liste){
-  if(csOnglet==='historique') return liste.filter(function(c){return c.statut==='livree';});
-  return liste.filter(function(c){return c.statut!=='livree';});
+  if(csOnglet==='historique') return liste.filter(function(c){return c.statut==='livree' || c.archivee===true;});
+  return liste.filter(function(c){return c.statut!=='livree' && !c.archivee;});
 }
 function majOngletsCsUI(){
   var bEnCours = document.getElementById('csOngletBtnEnCours');
@@ -21632,6 +21799,8 @@ function rechercherCommandesSpeciales(texte){
         (c.marque||'').toLowerCase().indexOf(q)>=0 ||
         (c.modele||'').toLowerCase().indexOf(q)>=0 ||
         (c.immat||'').toLowerCase().indexOf(q)>=0 ||
+        (c.client||'').toLowerCase().indexOf(q)>=0 ||
+        (c.reference||'').toLowerCase().indexOf(q)>=0 ||
         (f && f.nom.toLowerCase().indexOf(q)>=0);
     });
   }
@@ -21647,56 +21816,96 @@ function tempsEcouleCS(c){
 }
 function htmlTableauCommandesSpeciales(liste){
   if(!liste.length) return '<div class="empty">Aucune commande speciale enregistree.</div>';
-  // Tri : en cours d'abord (demande puis commande), livrees en dernier, plus recentes en premier dans chaque groupe
-  var ordreStatut = {demande:0, commande:1, livree:2};
-  liste = liste.slice().sort(function(a,b){
-    var oa = ordreStatut[a.statut]||0, ob = ordreStatut[b.statut]||0;
-    if(oa!==ob) return oa-ob;
-    return (b.dateDemande||0)-(a.dateDemande||0);
-  });
-  var html = '<div class="tw"><table><thead><tr>'
-    +'<th>Piece</th><th>Destination</th><th>Qte</th><th>Fournisseur</th>'
-    +'<th>Statut</th><th>Temps ecoule</th><th></th>'
-    +'</tr></thead><tbody>';
+
+  // Regroupement par vehicule (immat), sinon par client (si pas de
+  // vehicule lie mais un nom de client saisi), sinon chaque piece
+  // "universelle" (ni vehicule ni client) forme son propre groupe.
+  var groupes = {}; var ordreGroupes = [];
   liste.forEach(function(c){
-    var f = FOURNISSEURS.find(function(x){return x.id===c.fournisseurId;});
-    var badgeStatut = c.statut==='demande' ? '<span class="badge b-amber">Demandee</span>'
-      : c.statut==='commande' ? '<span class="badge b-blue">Commandee</span>'
-      : '<span class="badge b-green">Livree</span>';
-    html += '<tr>';
-    html += '<td><div class="fw7">'+(c.piece||'')+'</div>'
-      +(c.immat?'<div class="xs" style="color:#185FA5">&#x1F697; '+c.immat+(c.vehiculeType==='autre'?' <span class="muted">(hors dossier)</span>':'')+'</div>':'')
-      +(c.note?'<div class="xs muted">'+c.note+'</div>':'')+'</td>';
-    html += '<td class="xs">'+((c.marque||c.modele)?((c.marque||'')+' '+(c.modele||'')).trim():'<span class="badge b-blue" style="font-size:9px">Universel</span>')+'</td>';
-    html += '<td style="text-align:center">'+(c.qte||1)+'</td>';
-    html += '<td class="xs">'+(f?f.nom:'<span class="muted">—</span>')+'</td>';
-    html += '<td>'+badgeStatut+'</td>';
-    html += '<td class="xs" style="font-family:monospace">'+tempsEcouleCS(c)+(c.statut==='livree'?'':' <span class="muted">(en cours)</span>')+'</td>';
-    html += '<td style="white-space:nowrap">';
-    // Achats ET Direction peuvent lancer/receptionner une commande — les
-    // autres roles (ex: chef d'atelier, qui peut faire la demande) n'ont
-    // qu'une vue en lecture seule du statut de leur demande.
-    if(currentRole==='achats' || currentRole==='direction'){
-      if(c.statut==='demande'){
-        html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="ouvrirModifCommandeSpecialeByEl(this)" title="Corriger cette demande" style="color:#185FA5;border-color:#B5D4F4">&#x270F;</button> ';
-        html += '<button class="btn btn-sm btn-primary" data-csid="'+c.id+'" onclick="lancerCommandeSpecialeByEl(this)">&#x1F6D2; Lancer commande</button> ';
-        html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="supprimerCommandeSpecialeByEl(this)" title="Annuler la demande" style="color:#A32D2D">&#x2715;</button>';
-      } else if(c.statut==='commande'){
-        html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="ouvrirModifCommandeSpecialeByEl(this)" title="Corriger cette demande" style="color:#185FA5;border-color:#B5D4F4">&#x270F;</button> ';
-        html += '<button class="btn btn-sm btn-success" data-csid="'+c.id+'" onclick="livrerCommandeSpecialeByEl(this)">&#x2714; Piece livree</button>';
-      } else {
-        html += '<span class="xs muted">Entree en stock le '+new Date(c.dateLivraison).toLocaleDateString('fr-FR')+'</span>';
-      }
-    } else {
-      var suiviTxt = c.statut==='demande' ? 'En attente de lancement'
-        : c.statut==='commande' ? 'Commande en cours — livraison a venir'
-        : 'Livree — entree en stock le '+new Date(c.dateLivraison).toLocaleDateString('fr-FR');
-      html += '<span class="xs muted">'+suiviTxt+'</span>';
-    }
-    html += '</td>';
-    html += '</tr>';
+    var key = c.immat ? ('v:'+c.immat.toUpperCase()) : (c.client ? ('c:'+c.client.toLowerCase()) : ('u:'+c.id));
+    if(!groupes[key]){ groupes[key] = []; ordreGroupes.push(key); }
+    groupes[key].push(c);
   });
-  html += '</tbody></table></div>';
+
+  var ordreStatut = {demande:0, commande:1, livree:2};
+  var groupesArr = ordreGroupes.map(function(key){
+    var pieces = groupes[key].slice().sort(function(a,b){
+      if(!!a.archivee !== !!b.archivee) return (a.archivee?1:0)-(b.archivee?1:0);
+      var oa = ordreStatut[a.statut]||0, ob = ordreStatut[b.statut]||0;
+      if(oa!==ob) return oa-ob;
+      return (b.dateDemande||0)-(a.dateDemande||0);
+    });
+    var dateRecente = pieces.reduce(function(m,p){ return Math.max(m, p.dateDemande||0); }, 0);
+    return { pieces:pieces, dateRecente:dateRecente };
+  });
+  groupesArr.sort(function(a,b){ return b.dateRecente - a.dateRecente; });
+
+  var peutAgir = (currentRole==='achats' || currentRole==='direction');
+  var html = '';
+  groupesArr.forEach(function(gr){
+    var premier = gr.pieces[0];
+    var typeStr = (premier.marque||premier.modele) ? ((premier.marque||'')+' '+(premier.modele||'')).trim() : '<span class="badge b-blue" style="font-size:9px">Universel</span>';
+    html += '<div style="border:1px solid #e8e6e1;border-radius:8px;margin-bottom:10px;overflow:hidden">';
+    html += '<div style="background:#faf9f7;padding:8px 12px;display:flex;flex-wrap:wrap;gap:16px;align-items:center;border-bottom:1px solid #e8e6e1">';
+    html += '<div><div class="xs muted">Client</div><div class="fw7" style="font-size:12px">'+(premier.client||'<span class="muted">—</span>')+'</div></div>';
+    html += '<div><div class="xs muted">Type</div><div class="xs">'+typeStr+'</div></div>';
+    if(premier.immat) html += '<div><div class="xs muted">Immatriculation</div><div class="xs" style="color:#185FA5;font-weight:700">'+premier.immat+(premier.vehiculeType==='autre'?' <span class="muted" style="font-weight:400">(hors dossier)</span>':'')+'</div></div>';
+    html += '<div class="xs muted" style="margin-left:auto">'+gr.pieces.length+' piece'+(gr.pieces.length>1?'s':'')+'</div>';
+    html += '</div>';
+
+    html += '<div class="tw"><table><thead><tr>'
+      +'<th>Piece</th><th>Reference</th><th>Qte</th><th>Prix local</th><th>Fournisseur</th>'
+      +'<th>Statut</th><th>Temps ecoule</th><th></th>'
+      +'</tr></thead><tbody>';
+    gr.pieces.forEach(function(c){
+      var f = FOURNISSEURS.find(function(x){return x.id===c.fournisseurId;});
+      var badgeStatut = c.archivee ? '<span class="badge" style="background:#8a8680;color:#fff">Archivee</span>'
+        : c.statut==='demande' ? '<span class="badge b-amber">Demandee</span>'
+        : c.statut==='commande' ? '<span class="badge b-blue">Commandee</span>'
+        : '<span class="badge b-green">Livree</span>';
+      html += '<tr>';
+      html += '<td><div class="fw7">'+(c.piece||'')+'</div>'+(c.note?'<div class="xs muted">'+c.note+'</div>':'')+'</td>';
+      html += '<td class="xs">'+(c.reference?c.reference:'<span class="muted">—</span>')+'</td>';
+      html += '<td style="text-align:center">'+(c.qte||1)+'</td>';
+      html += '<td class="xs">'+(c.prixAchatEstime?parseFloat(c.prixAchatEstime).toLocaleString('fr-FR')+' F':'—')+'</td>';
+      html += '<td class="xs">'+(f?f.nom:'<span class="muted">—</span>')+'</td>';
+      html += '<td>'+badgeStatut+'</td>';
+      html += '<td class="xs" style="font-family:monospace">'+tempsEcouleCS(c)+((c.statut!=='livree'&&!c.archivee)?' <span class="muted">(en cours)</span>':'')+'</td>';
+      html += '<td style="white-space:nowrap">';
+      if(peutAgir){
+        if(c.archivee){
+          html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="annulerHistoriqueCommandeSpecialeByEl(this)" title="Remettre en commande en cours" style="color:#185FA5;border-color:#B5D4F4">&#x21BA; Annuler</button> ';
+          html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="recommanderCommandeSpecialeByEl(this)" title="Creer une nouvelle demande identique" style="color:#3B6D11;border-color:#C3DDA0">&#x1F6D2; Commander a nouveau</button> ';
+          html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="supprimerCommandeSpecialeByEl(this)" title="Supprimer" style="color:#A32D2D">&#x2715;</button>';
+        } else if(c.statut==='demande'){
+          html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="ouvrirModifCommandeSpecialeByEl(this)" title="Corriger cette piece" style="color:#185FA5;border-color:#B5D4F4">&#x270F;</button> ';
+          html += '<button class="btn btn-sm btn-primary" data-csid="'+c.id+'" onclick="lancerCommandeSpecialeByEl(this)">&#x1F6D2; Lancer</button> ';
+          html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="archiverCommandeSpecialeByEl(this)" title="Archiver" style="color:#854F0B">&#x1F5C4;</button> ';
+          html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="supprimerCommandeSpecialeByEl(this)" title="Supprimer" style="color:#A32D2D">&#x2715;</button>';
+        } else if(c.statut==='commande'){
+          html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="ouvrirModifCommandeSpecialeByEl(this)" title="Corriger cette piece" style="color:#185FA5;border-color:#B5D4F4">&#x270F;</button> ';
+          html += '<button class="btn btn-sm btn-success" data-csid="'+c.id+'" onclick="livrerCommandeSpecialeByEl(this)">&#x2714; Livree</button> ';
+          html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="archiverCommandeSpecialeByEl(this)" title="Archiver" style="color:#854F0B">&#x1F5C4;</button> ';
+          html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="supprimerCommandeSpecialeByEl(this)" title="Supprimer" style="color:#A32D2D">&#x2715;</button>';
+        } else {
+          html += '<span class="xs muted">Entree en stock le '+new Date(c.dateLivraison).toLocaleDateString('fr-FR')+'</span> ';
+          html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="annulerHistoriqueCommandeSpecialeByEl(this)" title="Remettre en commande en cours (retire la quantite ajoutee au stock)" style="color:#185FA5;border-color:#B5D4F4">&#x21BA; Annuler</button> ';
+          html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="recommanderCommandeSpecialeByEl(this)" title="Creer une nouvelle demande identique" style="color:#3B6D11;border-color:#C3DDA0">&#x1F6D2; Commander a nouveau</button> ';
+          html += '<button class="btn btn-sm" data-csid="'+c.id+'" onclick="supprimerCommandeSpecialeByEl(this)" title="Supprimer" style="color:#A32D2D">&#x2715;</button>';
+        }
+      } else {
+        var suiviTxt = c.archivee ? 'Archivee'
+          : c.statut==='demande' ? 'En attente de lancement'
+          : c.statut==='commande' ? 'Commande en cours — livraison a venir'
+          : 'Livree — entree en stock le '+new Date(c.dateLivraison).toLocaleDateString('fr-FR');
+        html += '<span class="xs muted">'+suiviTxt+'</span>';
+      }
+      html += '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    html += '</div>';
+  });
   return html;
 }
 function lancerCommandeSpecialeByEl(btn){
@@ -21715,17 +21924,99 @@ function supprimerCommandeSpecialeByEl(btn){
   var c = COMMANDES_SPECIALES.find(function(x){return x.id===id;});
   if(!c) return;
   demanderConfirmation(
-    'Annuler cette demande ?',
-    '"'+c.piece+'" sera retiree de la liste des commandes speciales.',
+    'Supprimer cette piece ?',
+    '"'+c.piece+'" sera definitivement retiree de la liste des commandes speciales.',
     function(){
       COMMANDES_SPECIALES = COMMANDES_SPECIALES.filter(function(x){return x.id!==id;});
       saveCommandesSpeciales();
-      afficherToastNotif('Demande annulee', c.piece+' retiree.', 'info');
+      afficherToastNotif('Piece supprimee', c.piece+' retiree.', 'info');
       rechercherCommandesSpeciales((document.getElementById('csRecherche')||{value:''}).value);
       renderPage();
     },
-    { icone:'&#x2715;', libelleOk:'Annuler la demande', danger:true }
+    { icone:'&#x2715;', libelleOk:'Supprimer', danger:true }
   );
+}
+// Archive une piece (quel que soit son statut, demandee ou commandee) :
+// elle bascule directement dans l'onglet Historique sans passer par une
+// reception reelle en stock (contrairement a "Piece livree").
+function archiverCommandeSpecialeByEl(btn){
+  var id = btn.getAttribute('data-csid');
+  var c = COMMANDES_SPECIALES.find(function(x){return x.id===id;});
+  if(!c) return;
+  demanderConfirmation(
+    'Archiver cette piece ?',
+    '"'+c.piece+'" sera deplacee vers l\'historique, sans passer par une reception en stock.',
+    function(){
+      c.archivee = true;
+      c.dateArchivage = Date.now();
+      saveCommandesSpeciales();
+      afficherToastNotif('Piece archivee', c.piece+' — deplacee vers l\'historique.', 'info');
+      rechercherCommandesSpeciales((document.getElementById('csRecherche')||{value:''}).value);
+      renderPage();
+    },
+    { icone:'&#x1F5C4;', libelleOk:'Archiver' }
+  );
+}
+// Remet dans les commandes en cours une piece archivee ou deja livree
+// (en cas d'erreur). Pour une piece livree, retire aussi la quantite qui
+// avait ete ajoutee automatiquement au stock lors de la livraison.
+function annulerHistoriqueCommandeSpecialeByEl(btn){
+  var id = btn.getAttribute('data-csid');
+  var c = COMMANDES_SPECIALES.find(function(x){return x.id===id;});
+  if(!c) return;
+  var etaitLivree = (c.statut==='livree');
+  demanderConfirmation(
+    'Remettre en commande en cours ?',
+    '"'+c.piece+'" sera remise dans les commandes en cours.'+(etaitLivree?' La quantite deja ajoutee au stock lors de la livraison sera retiree.':''),
+    function(){
+      if(etaitLivree){
+        var art = STOCK.find(function(a){ return a.commandeSpecialeId===c.id; });
+        if(!art){
+          art = STOCK.find(function(a){
+            return _normStk(a.nom)===_normStk(c.piece)
+              && _normStk(a.marque)===_normStk(c.marque)
+              && _normStk(a.modele)===_normStk(c.modele);
+          });
+        }
+        if(art){
+          art.qte = Math.max(0, (parseInt(art.qte,10)||0) - (parseInt(c.qte,10)||1));
+          saveStock();
+        }
+        c.statut = 'commande';
+        c.dateLivraison = null;
+      }
+      c.archivee = false;
+      c.dateArchivage = null;
+      saveCommandesSpeciales();
+      afficherToastNotif('Remise en cours', c.piece+' — remise dans les commandes en cours.', 'info');
+      rechercherCommandesSpeciales((document.getElementById('csRecherche')||{value:''}).value);
+      renderPage();
+    },
+    { icone:'&#x21BA;', libelleOk:'Remettre en cours' }
+  );
+}
+// Cree une toute nouvelle demande, en reprenant les caracteristiques
+// d'une piece de l'historique (archivee ou livree) — pratique pour
+// recommander la meme piece sans tout ressaisir.
+function recommanderCommandeSpecialeByEl(btn){
+  var id = btn.getAttribute('data-csid');
+  var c = COMMANDES_SPECIALES.find(function(x){return x.id===id;});
+  if(!c) return;
+  COMMANDES_SPECIALES.push({
+    id: 'cs_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+    groupId: 'csg_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+    piece: c.piece, marque: c.marque, modele: c.modele, qte: c.qte,
+    reference: c.reference||'', fournisseurId: c.fournisseurId||'',
+    prixAchatEstime: c.prixAchatEstime, note: c.note||'',
+    immat: c.immat||'', client: c.client||'', vehiculeType: c.vehiculeType||'',
+    demandeur: currentUser ? (currentUser.login||currentUser.nom) : currentRole,
+    dateDemande: Date.now(), statut: 'demande', dateCommande: null, dateLivraison: null,
+    archivee: false, dateArchivage: null
+  });
+  saveCommandesSpeciales();
+  afficherToastNotif('Nouvelle demande creee', c.piece+' — remise en commande.', 'ok');
+  rechercherCommandesSpeciales((document.getElementById('csRecherche')||{value:''}).value);
+  renderPage();
 }
 // Marque la commande speciale comme livree ET fait entrer la piece en
 // stock automatiquement (cumulee sur un article existant identique, sinon
@@ -21767,7 +22058,7 @@ function pageStock(){
   var sousSeuil = STOCK.filter(stockSousSeuil).length;
   var totalReserve = STOCK.reduce(function(s,a){ return s + (parseInt(a.reserve,10)||0); },0);
   var aCommander = STOCK.filter(function(a){ return stockDispo(a)===0; }).length;
-  var csEnCours = COMMANDES_SPECIALES.filter(function(c){ return c.statut!=='livree'; }).length;
+  var csEnCours = COMMANDES_SPECIALES.filter(function(c){ return c.statut!=='livree' && !c.archivee; }).length;
 
   var html = '';
   html += '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">';
@@ -23023,6 +23314,25 @@ function statutEcheanceCt(dateEcheance){
 function estEcheanceCeMois(dateEcheance){
   var statut = statutEcheanceCt(dateEcheance);
   return statut==='ce_mois' || statut==='retard';
+}
+
+// Badge "jours restants" pour la visite technique (ct_echeance), pense
+// pour la fiche detail d'un vehicule precis (contrairement au KPI flotte
+// ci-dessous, granularite mensuelle). Ne s'affiche que dans les 7 jours
+// precedant l'echeance, et bascule en rouge des que la date est depassee.
+function htmlBadgeEcheanceCT(dateEcheance){
+  if(!dateEcheance) return '';
+  var d = new Date(dateEcheance);
+  if(isNaN(d.getTime())) return '';
+  var maintenant = new Date();
+  var joursRestants = Math.ceil((d - maintenant) / 86400000);
+  if(joursRestants < 0){
+    return ' <span class="badge" style="background:#A32D2D;color:#fff;font-size:10px" title="Visite technique echue">&#x26A0; En retard de '+Math.abs(joursRestants)+' jour'+(Math.abs(joursRestants)>1?'s':'')+'</span>';
+  }
+  if(joursRestants <= 7){
+    return ' <span class="badge" style="background:#E8A44A;color:#fff;font-size:10px" title="Echeance proche">&#x23F3; J-'+joursRestants+'</span>';
+  }
+  return '';
 }
 
 // Construit le HTML d'un KPI detaillant separement "X ce mois" et "Y en
@@ -24796,6 +25106,10 @@ function openEdit(id, prefill){
   editingId=id;document.getElementById('recTitle').textContent='Modifier - '+v.immat;
   var s=function(id,val){var el=document.getElementById(id);if(el)el.value=val||'';};
   s('f_immat',v.immat);s('f_modele',v.modele);s('f_vin',v.vin);s('f_km',v.km);s('f_mec',v.mec);s('f_vt',v.vt);
+  // IMPORTANT : sans ce pre-remplissage, le champ repartait vide a chaque
+  // edition d'une fiche existante et ecrasait silencieusement la date de
+  // visite technique deja enregistree lors de l'enregistrement.
+  s('f_ct_echeance',v.ct_echeance);
   if(v.livraison)s('f_livraison',new Date(v.livraison).toISOString().split('T')[0]);
   s('f_client',v.proprietaireVehicule||v.client);s('f_tel',v.tel);s('f_email',v.email);s('f_motif',v.motif);s('f_symp',v.symptomes);
   s('f_sin',v.sinistre);s('f_assureur',v.assureur);s('f_contact_ass',v.contactAssurance);s('f_expert',v.expert);s('f_contact_exp',v.contactExpert);s('f_date_sin',v.dateSinistre);
@@ -24869,7 +25183,7 @@ function showTab(id){
 }
 
 function resetForm(){
-  ['f_immat','f_modele','f_vin','f_km','f_mec','f_livraison','f_client','f_tel','f_email','f_motif','f_symp','f_sin','f_assureur','f_contact_ass','f_expert','f_contact_exp','f_date_sin'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
+  ['f_immat','f_modele','f_vin','f_km','f_mec','f_ct_echeance','f_livraison','f_client','f_tel','f_email','f_motif','f_symp','f_sin','f_assureur','f_contact_ass','f_expert','f_contact_exp','f_date_sin'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
   // Reinitialiser l'etat "reprise des travaux a prevoir" — sans cela, une
   // reprise selectionnee puis abandonnee (fenetre fermee sans valider)
   // restait affichee tel quel a la prochaine ouverture du formulaire,
@@ -25424,7 +25738,7 @@ function openDet(id){
     }
     b += '</div></div>';
   }
-  b+='<div class="g2" style="gap:14px"><div><div class="sdiv">Vehicule</div><div class="drow"><span class="dlbl">Immat</span><strong>'+v.immat+'</strong></div><div class="drow"><span class="dlbl">Marque/Modele</span>'+v.marque+' '+v.modele+'</div><div class="drow"><span class="dlbl">VIN</span>'+(v.vin||'—')+'</div><div class="drow"><span class="dlbl">Kilometrage</span>'+(v.km?v.km.toLocaleString('fr-FR')+' km':'—')+'</div>'+(v.energie?'<div class="drow"><span class="dlbl">Energie</span>'+v.energie+'</div>':'')+(v.vignette?'<div class="drow"><span class="dlbl">Vignette</span>'+parseFloat(v.vignette).toLocaleString('fr-FR')+' F</div>':'')+'</div>';
+  b+='<div class="g2" style="gap:14px"><div><div class="sdiv">Vehicule</div><div class="drow"><span class="dlbl">Immat</span><strong>'+v.immat+'</strong></div><div class="drow"><span class="dlbl">Marque/Modele</span>'+v.marque+' '+v.modele+'</div><div class="drow"><span class="dlbl">VIN</span>'+(v.vin||'—')+'</div><div class="drow"><span class="dlbl">Kilometrage</span>'+(v.km?v.km.toLocaleString('fr-FR')+' km':'—')+'</div><div class="drow"><span class="dlbl">1ere mise en circulation</span>'+(v.mec?new Date(v.mec).toLocaleDateString('fr-FR'):'—')+'</div><div class="drow"><span class="dlbl">Visite technique</span>'+(v.ct_echeance?new Date(v.ct_echeance).toLocaleDateString('fr-FR'):'—')+htmlBadgeEcheanceCT(v.ct_echeance)+'</div>'+(v.energie?'<div class="drow"><span class="dlbl">Energie</span>'+v.energie+'</div>':'')+(v.vignette?'<div class="drow"><span class="dlbl">Vignette</span>'+parseFloat(v.vignette).toLocaleString('fr-FR')+' F</div>':'')+'</div>';
   b+='<div><div class="sdiv">Client</div><div class="drow"><span class="dlbl">Nom</span><strong>'+v.client+'</strong></div>'+(v.proprietaireVehicule && v.proprietaireVehicule!==v.client ? '<div class="drow"><span class="dlbl">Proprietaire reel</span><span style="color:#3B6D11;font-weight:600">'+v.proprietaireVehicule+'</span></div>' : '')+'<div class="drow"><span class="dlbl">Tel</span>'+v.tel+'</div><div class="drow"><span class="dlbl">Email</span>'+(v.email||'—')+'</div><div class="drow"><span class="dlbl">Type</span>'+tbadge(v.typeClient)+assuranceBadge(v)+'</div><div class="drow"><span class="dlbl">Priorite</span>'+pbadge(v.priorite)+'</div></div></div>';
   b += htmlSectionSinistre(v);
   b += htmlSequenceFinTravauxAssurance(v);
@@ -25629,6 +25943,9 @@ function openDet(id){
       b += renderDevisComplSection(v);
     }
   }
+
+  // ── Historique d'intervention — juste au-dessus du Chiffrage ──────────────
+  b += renderHistoIntervention(v);
 
   // ── Section CHIFFRAGE — visible pour achats, direction, ET réception (pour demande modif) ────
   var _chiffrageStatuts = ['attente_chiffrage','modifier_devis','devis_termine',
@@ -25840,6 +26157,74 @@ function openDetKeepEdit(id){
   _chiffrageEditPreserve = chiffrageEditMode;
   _devisComplEditPreserve = devisComplEditMode;
   openDet(id);
+}
+
+// ============================================================
+// HISTORIQUE D'INTERVENTION — fiche detail (juste au-dessus du Chiffrage)
+// Tableau depliant listant les passages precedents du meme vehicule
+// (meme immatriculation), a la maniere du tableau depliant de la page
+// Clients et vehicules (voir toggleVehHistory ci-dessous).
+// ============================================================
+function renderHistoIntervention(v){
+  var immat = (v.immat||'').toUpperCase();
+  if(!immat) return '';
+  var autres = vehicles.filter(function(x){
+    return x.id!==v.id && !x.isProspect && (x.immat||'').toUpperCase()===immat;
+  }).sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+  if(!autres.length) return '';
+
+  var isOpen = (histIntervOpenVid === v.id);
+  var s = '<div style="margin-top:14px">';
+  s += '<div class="sdiv" style="cursor:pointer;display:flex;align-items:center;gap:6px" data-vid="'+v.id+'" onclick="toggleHistoIntervention(this)">'
+     + '<span style="font-size:10px">'+(isOpen?'&#x25BC;':'&#x25B6;')+'</span>'
+     + '&#x1F553; Historique d\'intervention'
+     + ' <span class="xs muted" style="font-weight:400">('+autres.length+' passage'+(autres.length>1?'s':'')+' precedent'+(autres.length>1?'s':'')+')</span>'
+     + '</div>';
+
+  if(isOpen){
+    s += '<div class="tw"><table><thead><tr>'
+      +'<th style="width:15%">Date</th>'
+      +'<th style="width:15%">Immobilisation</th>'
+      +'<th style="width:15%">Kilometrage</th>'
+      +'<th>Pieces remplacees</th>'
+      +'</tr></thead><tbody>';
+    autres.forEach(function(d){
+      var dateStr = d.entree ? new Date(d.entree).toLocaleDateString('fr-FR') : '-';
+      var immobStr;
+      if(d.livraison && d.entree){
+        var jours = Math.max(0, Math.round((d.livraison-d.entree)/86400000));
+        immobStr = jours+' jour'+(jours>1?'s':'');
+      } else if(LIV_ST.indexOf(d.status)>=0){
+        immobStr = '-';
+      } else {
+        immobStr = '<span class="xs muted">En cours</span>';
+      }
+      var kmStr = d.km ? d.km.toLocaleString('fr-FR')+' km' : '-';
+      var pieces = [];
+      if(d.chiffrage && d.chiffrage.lignes){
+        d.chiffrage.lignes.forEach(function(l){ if((l.piece||'').trim()) pieces.push(l.piece+(l.qte>1?' x'+l.qte:'')); });
+      }
+      if(d.interventions){
+        d.interventions.forEach(function(iv){ (iv.pieces||[]).forEach(function(p){ if((p||'').trim()) pieces.push(p); }); });
+      }
+      var piecesStr = pieces.length ? pieces.join(', ') : '<span class="xs muted">—</span>';
+      s += '<tr>'
+        +'<td>'+dateStr+'</td>'
+        +'<td>'+immobStr+'</td>'
+        +'<td>'+kmStr+'</td>'
+        +'<td class="xs">'+piecesStr+'</td>'
+        +'</tr>';
+    });
+    s += '</tbody></table></div>';
+  }
+  s += '</div>';
+  return s;
+}
+
+function toggleHistoIntervention(btn){
+  var vid = btn.getAttribute('data-vid');
+  histIntervOpenVid = (histIntervOpenVid===vid) ? null : vid;
+  openDetKeepEdit(vid);
 }
 
 // ============================================================
