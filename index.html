@@ -27250,9 +27250,12 @@ function exporterPDF(){
   html2pdf().set({
     margin: 0, // le contenu a deja sa propre marge interne (.page{padding})
     filename: nom+'.pdf',
-    image: { type:'jpeg', quality:0.98 },
+    // PNG (sans perte) plutot que JPEG : plus net sur du texte et des
+    // traits de tableau, la compression JPEG a tendance a les adoucir.
+    // Resolution de capture augmentee (scale) pour un rendu plus fin.
+    image: { type:'png' },
     html2canvas: {
-      scale: 2, useCORS: true, backgroundColor: '#ffffff',
+      scale: 4, useCORS: true, backgroundColor: '#ffffff',
       x: 0, y: 0,
       width: doc.body.scrollWidth, height: doc.body.scrollHeight,
       windowWidth: doc.body.scrollWidth, windowHeight: doc.body.scrollHeight
