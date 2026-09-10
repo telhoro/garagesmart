@@ -27241,6 +27241,11 @@ function _paginerPourPdf(doc, body){
   if(!tablePieces) return;
 
   var thead = tablePieces.querySelector('thead');
+  // IMPORTANT : le total est dans un <tfoot> (jamais dans le <tbody> qui
+  // contient les lignes de pieces) — sans le deplacer explicitement, il
+  // restait accroche a la table de la 1ere page au lieu de suivre sur
+  // la derniere page generee.
+  var tfoot = tablePieces.querySelector('tfoot');
   var tbody = tablePieces.querySelector('tbody') || tablePieces;
   var lignes = Array.prototype.slice.call(tbody.children).filter(function(el){ return el.tagName==='TR'; });
   if(lignes.length <= LIGNES_PAR_PAGE) return; // tout tient sur une seule page, rien a faire
@@ -27251,11 +27256,14 @@ function _paginerPourPdf(doc, body){
     groupes.push(lignes.slice(i, i+LIGNES_PAR_PAGE));
   }
 
+  if(tfoot) tfoot.parentNode.removeChild(tfoot); // retire le total de la 1ere page, rattache plus bas a la derniere
+
   // Reconstruire : table (groupe 1) -> pied de page -> table (groupe 2)
   // -> pied de page -> ... -> table (dernier groupe). Le pied de page
   // ORIGINAL, deja present en fin de document, sert pour la derniere
   // page ; on ne le duplique qu'entre les pages intermediaires.
   var pointInsertion = tablePieces.nextSibling;
+  var derniereTable = tablePieces;
   for(var g=1; g<groupes.length; g++){
     if(footer){
       var piedCopie = footer.cloneNode(true);
@@ -27270,6 +27278,26 @@ function _paginerPourPdf(doc, body){
     groupes[g].forEach(function(tr){ nouveauTbody.appendChild(tr); }); // deplace les <tr> hors de l'ancien tbody
     nouvelleTable.appendChild(nouveauTbody);
     tablePieces.parentNode.insertBefore(nouvelleTable, pointInsertion);
+    derniereTable = nouvelleTable;
+  }
+
+  // Le total suit desormais la derniere page, juste apres ses dernieres
+  // lignes de pieces — exactement comme sur un document a une seule page.
+  if(tfoot) derniereTable.appendChild(tfoot);
+
+  // Regrouper tout ce qui suit la derniere table (mention en lettres,
+  // signature, numero de page, pied de page) dans un bloc dont la
+  // coupure entre deux pages est explicitement evitee — sinon ce petit
+  // bloc final pouvait se retrouver scinde entre la derniere page de
+  // pieces et une page suivante presque vide.
+  var suite = [];
+  var n = derniereTable.nextSibling;
+  while(n){ var suivant = n.nextSibling; suite.push(n); n = suivant; }
+  if(suite.length){
+    var blocFinal = doc.createElement('div');
+    blocFinal.style.pageBreakInside = 'avoid';
+    derniereTable.parentNode.insertBefore(blocFinal, derniereTable.nextSibling);
+    suite.forEach(function(el){ blocFinal.appendChild(el); });
   }
 }
 
