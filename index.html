@@ -148,6 +148,15 @@ tr:hover td{background:#faf9f7}
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </head>
 <body>
+<!-- INDICATEUR DE CHARGEMENT — visible tant que la 1ere synchronisation
+     Firebase n'est pas confirmee recue (firstSyncReceived). Ce qui
+     s'affiche avant ca vient du cache local et peut etre perime :
+     un simple sablier discret en coin suffit a le signaler, sans
+     bandeau intrusif. -->
+<div id="bandeauChargementSync" style="position:fixed;top:10px;right:14px;z-index:99998;font-size:20px;display:none;animation:sablierPulse 1.4s ease-in-out infinite" title="Chargement des donnees a jour...">
+  &#x23F3;
+</div>
+<style>@keyframes sablierPulse{0%,100%{opacity:0.35;transform:scale(0.92)}50%{opacity:1;transform:scale(1.08)}}</style>
 <!-- ECRAN LOGIN -->
 <div id="loginScreen" style="position:fixed;inset:0;background:#f5f4f1;z-index:99999;display:flex;align-items:center;justify-content:center">
   <div style="background:#fff;border-radius:13px;border:1px solid #e8e5e0;padding:32px 36px;width:340px">
@@ -1702,6 +1711,9 @@ var FORFAIT_FACTURES = []; // factures forfait generees
 function saveForfaitFactures(){
   marquerCollectionModifieAuto('forfait_factures', FORFAIT_FACTURES);
   localStorage.setItem('gos_forfait_factures', JSON.stringify(FORFAIT_FACTURES));
+  // Voir saveDettesManuelles() : meme protection contre un ecrasement
+  // premature de Firebase avant la 1ere synchronisation.
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_forfait_factures').set(JSON.stringify(FORFAIT_FACTURES)).catch(function(e){
       console.error('Firebase forfait factures save error:', e);
@@ -1734,6 +1746,7 @@ var SAMPLE_BANQUES = [
 function saveBanques(){
   marquerCollectionModifieAuto('banques', BANQUES);
   localStorage.setItem('gos_banques', JSON.stringify(BANQUES));
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_banques').set(JSON.stringify(BANQUES)).catch(function(e){
       console.error('Firebase banques save error:', e);
@@ -1779,6 +1792,7 @@ var CHARGES_FIXES = [];
 function saveChargesFixes(){
   marquerCollectionModifieAuto('charges_fixes', CHARGES_FIXES);
   localStorage.setItem('gos_charges_fixes', JSON.stringify(CHARGES_FIXES));
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_charges_fixes').set(JSON.stringify(CHARGES_FIXES)).catch(function(e){
       console.error('Firebase charges fixes save error:', e);
@@ -1809,6 +1823,7 @@ var ENGAGEMENTS_BANCAIRES = [];
 function saveEngagementsBancaires(){
   marquerCollectionModifieAuto('engagements_bancaires', ENGAGEMENTS_BANCAIRES);
   localStorage.setItem('gos_engagements_bancaires', JSON.stringify(ENGAGEMENTS_BANCAIRES));
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_engagements_bancaires').set(JSON.stringify(ENGAGEMENTS_BANCAIRES)).catch(function(e){
       console.error('Firebase engagements bancaires save error:', e);
@@ -1880,6 +1895,7 @@ var FORFAITS_CLIENTS = []; // {client, montantAnnuel, montantMensuel, jourDepot}
 function saveForfaitsClients(){
   marquerCollectionModifieAuto('forfaits_clients', FORFAITS_CLIENTS);
   localStorage.setItem('gos_forfaits_clients', JSON.stringify(FORFAITS_CLIENTS));
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_forfaits_clients').set(JSON.stringify(FORFAITS_CLIENTS)).catch(function(e){
       console.error('Firebase forfaits clients save error:', e);
@@ -1917,6 +1933,7 @@ var CLIENTS_SANS_VEHICULE = []; // {id, nom, tel, email, typeClient, entite, cre
 function saveClientsSansVehicule(){
   marquerCollectionModifieAuto('clients_sans_vehicule', CLIENTS_SANS_VEHICULE);
   localStorage.setItem('gos_clients_sans_vehicule', JSON.stringify(CLIENTS_SANS_VEHICULE));
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_clients_sans_vehicule').set(JSON.stringify(CLIENTS_SANS_VEHICULE)).catch(function(e){
       console.error('Firebase clients sans vehicule save error:', e);
@@ -2146,6 +2163,7 @@ function stockArticleById(id){
 function saveFournisseurs(){
   marquerCollectionModifieAuto('fournisseurs', FOURNISSEURS);
   localStorage.setItem('gos_fournisseurs',JSON.stringify(FOURNISSEURS));
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_fournisseurs').set(JSON.stringify(FOURNISSEURS)).catch(function(e){
       console.error('Firebase fournisseurs save error:', e);
@@ -2472,6 +2490,7 @@ var PRESENCES = [];
 function savePresences(){
   marquerCollectionModifieAuto('presences', PRESENCES);
   localStorage.setItem('gos_presences', JSON.stringify(PRESENCES));
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_presences').set(JSON.stringify(PRESENCES)).catch(function(e){
       console.error('Firebase presences save error:', e);
@@ -2501,6 +2520,7 @@ var DESCRIPTEURS_FACIAUX = {};
 function saveDescripteursFaciaux(){
   marquerObjetModifieAuto('descripteurs_faciaux', DESCRIPTEURS_FACIAUX);
   localStorage.setItem('gos_descripteurs_faciaux', JSON.stringify(DESCRIPTEURS_FACIAUX));
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_descripteurs_faciaux').set(JSON.stringify(DESCRIPTEURS_FACIAUX)).catch(function(e){
       console.error('Firebase descripteurs faciaux save error:', e);
@@ -2530,6 +2550,7 @@ var CAISSE_JOURNEES = [];
 function saveCaisseJournees(){
   marquerCollectionModifieAuto('caisse_journees', CAISSE_JOURNEES);
   localStorage.setItem('gos_caisse_journees', JSON.stringify(CAISSE_JOURNEES));
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_caisse_journees').set(JSON.stringify(CAISSE_JOURNEES)).catch(function(e){
       console.error('Firebase caisse journees save error:', e);
@@ -2558,6 +2579,7 @@ var CAISSE_MOUVEMENTS = [];
 function saveCaisseMouvements(){
   marquerCollectionModifieAuto('caisse_mouvements', CAISSE_MOUVEMENTS);
   localStorage.setItem('gos_caisse_mouvements', JSON.stringify(CAISSE_MOUVEMENTS));
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_caisse_mouvements').set(JSON.stringify(CAISSE_MOUVEMENTS)).catch(function(e){
       console.error('Firebase caisse mouvements save error:', e);
@@ -2629,6 +2651,7 @@ var EXPOSITION_SNAPSHOTS = [];
 function saveExpositionSnapshots(){
   marquerCollectionModifieAuto('exposition_snapshots', EXPOSITION_SNAPSHOTS);
   localStorage.setItem('gos_exposition_snapshots', JSON.stringify(EXPOSITION_SNAPSHOTS));
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_exposition_snapshots').set(JSON.stringify(EXPOSITION_SNAPSHOTS)).catch(function(e){
       console.error('Firebase exposition snapshots save error:', e);
@@ -2675,6 +2698,7 @@ var EMPLOYES_PRESENCE = [];
 function saveEmployesPresence(){
   marquerCollectionModifieAuto('employes_presence', EMPLOYES_PRESENCE);
   localStorage.setItem('gos_employes_presence', JSON.stringify(EMPLOYES_PRESENCE));
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_employes_presence').set(JSON.stringify(EMPLOYES_PRESENCE)).catch(function(e){
       console.error('Firebase employes presence save error:', e);
@@ -2705,6 +2729,7 @@ var CLIENT_DELAIS_PAIEMENT = {};
 function saveClientDelaisPaiement(){
   marquerObjetModifieAuto('client_delais_paiement', CLIENT_DELAIS_PAIEMENT);
   localStorage.setItem('gos_client_delais_paiement', JSON.stringify(CLIENT_DELAIS_PAIEMENT));
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_client_delais_paiement').set(JSON.stringify(CLIENT_DELAIS_PAIEMENT)).catch(function(e){
       console.error('Firebase client delais paiement save error:', e);
@@ -3160,6 +3185,7 @@ function capturerEnrolementFacial(){
 function savePersonnel(){
   marquerCollectionModifieAuto('personnel', PERSONNEL);
   localStorage.setItem('gos_personnel', JSON.stringify(PERSONNEL));
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_personnel').set(JSON.stringify(PERSONNEL)).catch(function(e){
       console.error('Firebase personnel save error:', e);
@@ -29564,6 +29590,7 @@ function syncComptesFromFirebase(callback){
 function saveComptes(comptes){
   localStorage.setItem(COMPTES_KEY, JSON.stringify(comptes));
   // Synchroniser sur Firebase pour multi-appareils
+  if(!firstSyncReceived) return;
   if(fbDb && fbConnected){
     fbDb.ref('gos_comptes').set(JSON.stringify(comptes)).catch(function(e){
       console.error('Firebase comptes save error:', e);
@@ -29658,6 +29685,7 @@ function _doLoginWithCompte(compte){
   // Sauvegarder la session pour persister après actualisation
   localStorage.setItem('gos_session', JSON.stringify({userId: compte.id, ts: Date.now()}));
   document.getElementById('loginScreen').style.display='none';
+  majBandeauChargementSync();
   document.querySelector('.app').style.display='flex';
   resetNotifications();
   setTimeout(function(){ majBoutonNotif(); remplirSelectAgirComme(); verifierNouvellesTaches(); verifierTempsMorts(); }, 1500);
@@ -31952,6 +31980,7 @@ function pageComptes(){
   var h = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   h += '<div style="font-weight:700;font-size:15px">Gestion des accès utilisateurs</div>';
   h += '<div style="display:flex;gap:8px">';
+  h += '<button class="btn btn-sm" onclick="ouvrirModalSauvegardes()">&#x1F4BE; Sauvegardes</button>';
   h += '<button class="btn btn-danger btn-sm" onclick="confirmerEffacerDonnees()">&#x1F5D1; Effacer toutes les donnees</button>';
   h += '<button class="btn btn-primary btn-sm" onclick="ouvrirNouveauCompte()">+ Nouveau compte</button>';
   h += '</div></div>';
@@ -32386,7 +32415,7 @@ function tryInitFirebase(){
     (function attendreOuDebloquer(){
       setTimeout(function(){
         if(firstSyncReceived) return; // deja debloque par la vraie reponse Firebase
-        if(!fbConnected){ firstSyncReceived = true; return; } // vraiment hors-ligne : debloquer
+        if(!fbConnected){ firstSyncReceived = true; majBandeauChargementSync(); return; } // vraiment hors-ligne : debloquer
         attendreOuDebloquer(); // toujours en attente d'une connexion active : on continue de patienter
       }, 8000);
     })();
@@ -32513,9 +32542,17 @@ function initFirebase(){
     // Écouter les changements en temps réel
     fbDb.ref('gos_data').on('value', function(snapshot){
       firstSyncReceived = true; // debloque saveVFirebase des la 1ere reponse recue, meme si data est vide
+      majBandeauChargementSync();
       var data = snapshot.val();
+      // IMPORTANT : NE JAMAIS effacer les vehicules locaux simplement
+      // parce que cette reponse Firebase est vide ou malformee — un
+      // simple incident reseau passager (reconnexion, glitch temporaire)
+      // suffisait auparavant a vider silencieusement et DEFINITIVEMENT
+      // tous les vehicules de cet appareil, meme s'ils etaient corrects
+      // just avant. Si la reponse ne contient rien d'exploitable, on ne
+      // touche a rien : ce qui est deja charge (localStorage ou memoire)
+      // reste affiche, en attendant une vraie synchronisation valide.
       if(!data || !data.vehicles){
-        vehicles=[]; localStorage.setItem('gos_v10','[]');
         if(document.getElementById('content')) renderPage();
         return;
       }
@@ -32556,6 +32593,7 @@ function initFirebase(){
         vehicles.forEach(function(v){ tousLesIds[v.id] = true; });
         newVehicles.forEach(function(v){ tousLesIds[v.id] = true; });
         var merged = [];
+        var correctifFusionAEuLieu = false; // vrai si on a du garder une version locale plus avancee qu'une version distante perimee reçue
         Object.keys(tousLesIds).forEach(function(id){
           var l = localById[id], n = newById[id];
           if(!l){ merged.push(n); return; }
@@ -32572,7 +32610,34 @@ function initFirebase(){
             return;
           }
           var lTs = l.lastModified||0, nTs = n.lastModified||0;
-          merged.push(nTs > lTs ? n : l);
+          if(nTs !== lTs){
+            merged.push(nTs > lTs ? n : l);
+          } else {
+            // Horodatages egaux (ou absents des deux cotes — cas de
+            // vehicules dont le suivi de derniere modification etait
+            // incomplet) : dans ce cas precis, ne JAMAIS trancher en
+            // faveur d'une version dont le statut est clairement MOINS
+            // avance dans le circuit que l'autre. Repartir a "reception"
+            // apres avoir deja ete livre/facture n'arrive jamais dans la
+            // vraie vie : c'est le signe d'une copie locale perimee sur
+            // un appareil qui remportait a tort la fusion faute de
+            // pouvoir departager par date. A egalite de date, c'est
+            // desormais le statut le plus avance qui l'emporte.
+            var iL = STATUT_ORDER.indexOf(l.status), iN = STATUT_ORDER.indexOf(n.status);
+            if(iL===-1) iL = 0;
+            if(iN===-1) iN = 0;
+            if(iN > iL){
+              // La version distante recue est MOINS avancee que la notre
+              // (l'inverse du scenario perimee) : on garde la notre, et il
+              // faudra re-pousser vers Firebase pour corriger la base,
+              // sinon un futur appareil neuf recevrait a tort cette
+              // version en retard.
+              merged.push(l);
+              correctifFusionAEuLieu = true;
+            } else {
+              merged.push(n);
+            }
+          }
         });
         vehicles = merged;
         // Re-capture la baseline sur le resultat FUSIONNE — sinon, la
@@ -32592,7 +32657,24 @@ function initFirebase(){
         showSyncStatus('sync');
         verifierNouvellesTaches();
         nettoyerAlertesTempsMort();
+        // Si la fusion a du garder une version locale plus avancee face a
+        // une version distante en retard, la base Firebase elle-meme
+        // reste corrompue tant que personne ne la corrige — un nouvel
+        // appareil qui se connecterait recevrait encore la version en
+        // retard. On repousse donc immediatement l'etat corrige, sans
+        // attendre qu'une sauvegarde ulterieure (non garantie) le fasse.
+        if(correctifFusionAEuLieu){
+          var tsCorrectif = Date.now();
+          lastLocalTs = tsCorrectif;
+          fbDb.ref('gos_data').update({
+            vehicles: JSON.stringify(vehicles),
+            ts: tsCorrectif,
+            deviceId: deviceId,
+            updatedBy: (currentUser?currentUser.login:'unknown')+' (correctif auto-fusion)'
+          }).catch(function(e){ console.error('Erreur correctif auto-fusion:', e); });
+        }
         verifierTempsMorts();
+        creerSauvegardeAutomatiqueSiBesoin();
       }catch(e){ console.error('Sync error:', e); }
     });
 
@@ -32773,6 +32855,120 @@ function initFirebase(){
     }
   });
 
+  // Personnel et comptes utilisateurs : ecoutes en direct ajoutees — ces
+  // deux collections ne se synchronisaient jusqu'ici qu'une seule fois au
+  // chargement de la page (aucune mise a jour ensuite tant que la page
+  // reste ouverte, et aucune fusion par element a l'ecriture) — risque
+  // particulierement genant ici puisqu'il s'agit des IDENTIFIANTS DE
+  // CONNEXION : un compte cree sur un poste pouvait disparaitre si un
+  // autre poste, ouvert avant cette creation, sauvegardait quoi que ce
+  // soit touchant les comptes.
+  fbDb.ref('gos_personnel').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        var distantP = JSON.parse(val)||[];
+        var fusionneP = fusionnerCollectionParItem(PERSONNEL, distantP, lastLocalTs);
+        PERSONNEL.length = 0;
+        var seenNomsP = {};
+        fusionneP.forEach(function(p){ if(!seenNomsP[p.nom]){ seenNomsP[p.nom]=true; PERSONNEL.push(p); } });
+        EQUIPES.length = 0;
+        var seenEqP = {};
+        PERSONNEL.forEach(function(p){ if(p.equipe && !seenEqP[p.equipe]){ seenEqP[p.equipe]=1; EQUIPES.push(p.equipe); } });
+        initialiserBaselineCollection('personnel', PERSONNEL);
+        localStorage.setItem('gos_personnel', JSON.stringify(PERSONNEL));
+        if(currentRole && typeof initSelecteursRole==='function') initSelecteursRole(currentRole);
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
+    }
+  });
+  fbDb.ref('gos_comptes').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        var distantC = JSON.parse(val)||[];
+        var localC = loadComptes();
+        var fusionneC = fusionnerCollectionParItem(localC, distantC, lastLocalTs);
+        localStorage.setItem(COMPTES_KEY, JSON.stringify(fusionneC));
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
+    }
+  });
+
+  // Dernier lot de collections passees en ecoute en direct (banques,
+  // presences employes, descripteurs faciaux de reconnaissance, delais
+  // de paiement client, snapshots d'exposition financiere) — meme
+  // principe que toutes les autres : fusion par element/cle plutot
+  // qu'un simple chargement unique au demarrage.
+  fbDb.ref('gos_banques').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        var distantB = JSON.parse(val)||[];
+        BANQUES = fusionnerCollectionParItem(BANQUES, distantB, lastLocalTs);
+        initialiserBaselineCollection('banques', BANQUES);
+        localStorage.setItem('gos_banques', JSON.stringify(BANQUES));
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
+    }
+  });
+  fbDb.ref('gos_presences').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        var distantPr = JSON.parse(val)||[];
+        PRESENCES = fusionnerCollectionParItem(PRESENCES, distantPr, lastLocalTs);
+        initialiserBaselineCollection('presences', PRESENCES);
+        localStorage.setItem('gos_presences', JSON.stringify(PRESENCES));
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
+    }
+  });
+  fbDb.ref('gos_descripteurs_faciaux').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        var distantDF = JSON.parse(val)||{};
+        DESCRIPTEURS_FACIAUX = fusionnerObjetParCle('descripteurs_faciaux', DESCRIPTEURS_FACIAUX, distantDF, lastLocalTs);
+        initialiserBaselineObjet('descripteurs_faciaux', DESCRIPTEURS_FACIAUX);
+      }catch(e){}
+    }
+  });
+  fbDb.ref('gos_client_delais_paiement').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        var distantCDP = JSON.parse(val)||{};
+        CLIENT_DELAIS_PAIEMENT = fusionnerObjetParCle('client_delais_paiement', CLIENT_DELAIS_PAIEMENT, distantCDP, lastLocalTs);
+        initialiserBaselineObjet('client_delais_paiement', CLIENT_DELAIS_PAIEMENT);
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
+    }
+  });
+  fbDb.ref('gos_exposition_snapshots').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        var distantES = JSON.parse(val)||[];
+        EXPOSITION_SNAPSHOTS = fusionnerCollectionParItem(EXPOSITION_SNAPSHOTS, distantES, lastLocalTs);
+        initialiserBaselineCollection('exposition_snapshots', EXPOSITION_SNAPSHOTS);
+        localStorage.setItem('gos_exposition_snapshots', JSON.stringify(EXPOSITION_SNAPSHOTS));
+      }catch(e){}
+    }
+  });
+  fbDb.ref('gos_employes_presence').on('value', function(snapshot){
+    var val = snapshot.val();
+    if(val){
+      try{
+        var distantEP = JSON.parse(val)||[];
+        EMPLOYES_PRESENCE = fusionnerCollectionParItem(EMPLOYES_PRESENCE, distantEP, lastLocalTs);
+        initialiserBaselineCollection('employes_presence', EMPLOYES_PRESENCE);
+        localStorage.setItem('gos_employes_presence', JSON.stringify(EMPLOYES_PRESENCE));
+        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
+      }catch(e){}
+    }
+  });
+
   } catch(e){
     console.error('Firebase init error:', e);
     fbConnected = false;
@@ -32811,6 +33007,238 @@ function saveVFirebase(){
       pendingVehiclesSave = true; // echec d'ecriture : sera retente a la prochaine reconnexion
     });
   }, 200);
+}
+
+// ============================================================
+// SAUVEGARDES AUTOMATIQUES DES VEHICULES (restaurables)
+// ============================================================
+// Une sauvegarde complete de "vehicles" est prise au plus une fois par
+// jour (des qu'une synchronisation Firebase valide a ete recue), sous
+// gos_backups/{AAAA-MM-JJ}. Objectif : pouvoir revenir en arriere en
+// cas de probleme (perte de donnees, mauvaise manipulation...), sans
+// dependre uniquement de la version "en direct".
+var NB_JOURS_SAUVEGARDE_CONSERVES = 14;
+
+function ouvrirModalSauvegardes(){
+  var overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  overlay.style.zIndex = '99999';
+  overlay.innerHTML = '<div class="modal" style="width:560px;max-height:80vh;overflow-y:auto">'
+    + '<div class="mhead"><h2>&#x1F4BE; Sauvegardes</h2><button class="btn btn-sm" onclick="this.closest(\'.overlay\').remove()">X</button></div>'
+    + '<div class="mbody" style="padding:16px">'
+    + '<p class="xs muted" style="margin-bottom:12px">Une sauvegarde complete des vehicules est conservee automatiquement chaque jour, pendant '+NB_JOURS_SAUVEGARDE_CONSERVES+' jours. Si une baisse suspecte du nombre de vehicules est detectee par rapport a la derniere sauvegarde (signe probable d\'une perte de donnees), la sauvegarde du jour est annulee pour ne pas ecraser une bonne sauvegarde avec une mauvaise. Vous pouvez restaurer l\'une des sauvegardes disponibles en cas de probleme.</p>'
+    + '<button class="btn btn-primary btn-sm" style="margin-bottom:14px" onclick="creerSauvegardeManuelle()">&#x1F4F8; Sauvegarder maintenant</button>'
+    + '<div id="zoneListeSauvegardes"></div>'
+    + '</div></div>';
+  document.body.appendChild(overlay);
+  chargerListeSauvegardes();
+}
+
+// Seuil de baisse consideree comme suspecte (perte de donnees probable)
+// entre la derniere sauvegarde connue et l'etat actuel — en dessous de
+// ce ratio, on refuse d'ecraser une bonne sauvegarde avec une mauvaise.
+var SEUIL_BAISSE_SUSPECTE_SAUVEGARDE = 0.7; // ex: 0.7 = refuse si on perd plus de 30% des vehicules
+
+// Sauvegarde manuelle : declenchee explicitement par l'utilisateur a
+// n'importe quel moment (pas de limite a une par jour comme l'automatique).
+// Stockee separement (gos_backups_manuelles) pour ne pas interferer avec
+// le suivi "derniere sauvegarde du jour" de la sauvegarde automatique, et
+// ne s'efface jamais automatiquement (seul l'utilisateur peut la
+// supprimer) — ce sont des sauvegardes volontairement conservees pour un
+// moment juge important.
+function creerSauvegardeManuelle(){
+  if(!fbDb || !fbConnected){ alert('Connexion Internet requise pour creer une sauvegarde.'); return; }
+  if(!vehicles || !vehicles.length){ alert('Aucun vehicule a sauvegarder pour l\'instant.'); return; }
+  var poursuivre = function(){
+    var cle = 'manuel_'+Date.now();
+    fbDb.ref('gos_backups_manuelles/'+cle).set({
+      vehicles: JSON.stringify(vehicles),
+      nbVehicules: vehicles.length,
+      ts: Date.now(),
+      deviceId: deviceId,
+      creePar: currentUser ? currentUser.login : 'unknown'
+    }).then(function(){
+      afficherToastNotif('Sauvegarde creee', vehicles.length+' vehicule(s) sauvegarde(s) a l\'instant.', 'ok');
+      chargerListeSauvegardes();
+    }).catch(function(e){
+      alert('Echec de la creation de la sauvegarde : '+e.message);
+    });
+  };
+  // Avertir (sans bloquer) si le nombre de vehicules semble anormalement
+  // bas par rapport a la derniere sauvegarde connue — l'utilisateur reste
+  // libre de confirmer, contrairement a la sauvegarde automatique qui
+  // s'annule d'elle-meme dans ce cas.
+  fbDb.ref('gos_backups').orderByKey().limitToLast(1).once('value').then(function(snap){
+    var val = snap.val();
+    var derniereNb = 0;
+    if(val){ var cles = Object.keys(val); if(cles.length) derniereNb = val[cles[0]].nbVehicules||0; }
+    if(derniereNb>0 && vehicles.length < derniereNb*SEUIL_BAISSE_SUSPECTE_SAUVEGARDE){
+      if(!confirm('Attention : le nombre de vehicules actuel ('+vehicles.length+') est nettement inferieur a la derniere sauvegarde connue ('+derniereNb+'). Sauvegarder quand meme cet etat ?')) return;
+    }
+    poursuivre();
+  }).catch(function(){ poursuivre(); });
+}
+
+function creerSauvegardeAutomatiqueSiBesoin(){
+  if(!fbDb || !fbConnected || !firstSyncReceived) return;
+  if(!vehicles || !vehicles.length) return; // rien d'utile a sauvegarder
+  var dateKey = new Date().toISOString().slice(0,10); // AAAA-MM-JJ
+  if(localStorage.getItem('gos_dernier_backup_date') === dateKey) return; // deja fait aujourd'hui
+
+  // IMPORTANT : avant d'ecrire, comparer avec la sauvegarde valide la
+  // plus recente deja existante. Une sauvegarde n'est utile que si elle
+  // capture un etat SAIN — sans cette verification, une synchronisation
+  // elle-meme corrompue (perte de donnees) serait fidelement enregistree
+  // comme "sauvegarde du jour", ecrasant une bonne sauvegarde anterieure
+  // avec une mauvaise et rendant tout l'historique inutile ce jour-la.
+  fbDb.ref('gos_backups').orderByKey().limitToLast(1).once('value').then(function(snap){
+    var val = snap.val();
+    var derniereNb = 0;
+    if(val){
+      var cles = Object.keys(val);
+      if(cles.length) derniereNb = val[cles[0]].nbVehicules||0;
+    }
+    if(derniereNb>0 && vehicles.length < derniereNb*SEUIL_BAISSE_SUSPECTE_SAUVEGARDE){
+      console.error('Sauvegarde automatique annulee : baisse suspecte du nombre de vehicules ('+derniereNb+' -> '+vehicles.length+'). La derniere bonne sauvegarde est conservee telle quelle.');
+      return; // ne pas ecraser une bonne sauvegarde avec une suspecte
+    }
+    fbDb.ref('gos_backups/'+dateKey).set({
+      vehicles: JSON.stringify(vehicles),
+      nbVehicules: vehicles.length,
+      ts: Date.now(),
+      deviceId: deviceId
+    }).then(function(){
+      localStorage.setItem('gos_dernier_backup_date', dateKey);
+      purgerAnciennesSauvegardes();
+    }).catch(function(e){ console.error('Erreur creation sauvegarde:', e); });
+  }).catch(function(e){ console.error('Erreur verification sauvegarde precedente:', e); });
+}
+
+function purgerAnciennesSauvegardes(){
+  if(!fbDb || !fbConnected) return;
+  fbDb.ref('gos_backups').once('value').then(function(snap){
+    var val = snap.val();
+    if(!val) return;
+    var seuil = Date.now() - NB_JOURS_SAUVEGARDE_CONSERVES*86400000;
+    Object.keys(val).forEach(function(dateKey){
+      var b = val[dateKey];
+      if(b && b.ts && b.ts < seuil){
+        fbDb.ref('gos_backups/'+dateKey).remove();
+      }
+    });
+  }).catch(function(){});
+}
+
+// Charge la liste des sauvegardes disponibles (automatiques + manuelles,
+// plus recente en premier) et l'affiche dans la modale.
+function chargerListeSauvegardes(){
+  var zone = document.getElementById('zoneListeSauvegardes');
+  if(!zone) return;
+  if(!fbDb || !fbConnected){
+    zone.innerHTML = '<div class="xs muted">Connexion Internet requise pour voir les sauvegardes.</div>';
+    return;
+  }
+  zone.innerHTML = '<div class="xs muted">Chargement...</div>';
+  Promise.all([
+    fbDb.ref('gos_backups').once('value'),
+    fbDb.ref('gos_backups_manuelles').once('value')
+  ]).then(function(snaps){
+    var valAuto = snaps[0].val()||{};
+    var valManuel = snaps[1].val()||{};
+    var liste = [];
+    Object.keys(valAuto).forEach(function(dateKey){
+      liste.push({cle:dateKey, type:'auto', nbVehicules:valAuto[dateKey].nbVehicules||0, ts:valAuto[dateKey].ts||0});
+    });
+    Object.keys(valManuel).forEach(function(cle){
+      liste.push({cle:cle, type:'manuel', nbVehicules:valManuel[cle].nbVehicules||0, ts:valManuel[cle].ts||0, creePar:valManuel[cle].creePar||''});
+    });
+    liste.sort(function(a,b){ return b.ts-a.ts; });
+    if(!liste.length){
+      zone.innerHTML = '<div class="xs muted">Aucune sauvegarde disponible pour l\'instant (la premiere automatique sera creee au prochain jour).</div>';
+      return;
+    }
+    var h = '<div class="tw"><table><thead><tr><th>Date</th><th>Type</th><th>Vehicules</th><th></th></tr></thead><tbody>';
+    liste.forEach(function(b){
+      var dateAff = new Date(b.ts||Date.now()).toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'})
+        + (b.type==='manuel' ? ' a '+new Date(b.ts).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}) : '');
+      var badge = b.type==='manuel' ? '<span class="badge b-blue">Manuelle'+(b.creePar?' — '+b.creePar:'')+'</span>' : '<span class="badge b-gray">Auto</span>';
+      h += '<tr><td>'+dateAff+'</td><td>'+badge+'</td><td>'+b.nbVehicules+'</td><td style="white-space:nowrap">'
+        +'<button class="btn btn-sm" data-cle="'+b.cle+'" data-type="'+b.type+'" data-nb="'+b.nbVehicules+'" data-date="'+dateAff.replace(/"/g,'&quot;')+'" onclick="confirmerRestaurerSauvegardeByEl(this)">&#x21BA; Restaurer</button>';
+      if(b.type==='manuel'){
+        h += ' <button class="btn btn-sm" data-cle="'+b.cle+'" onclick="supprimerSauvegardeManuelleByEl(this)" title="Supprimer cette sauvegarde" style="color:#A32D2D">&#x2715;</button>';
+      }
+      h += '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+    zone.innerHTML = h;
+  }).catch(function(){
+    zone.innerHTML = '<div class="xs" style="color:#A32D2D">Erreur de chargement des sauvegardes.</div>';
+  });
+}
+
+function supprimerSauvegardeManuelleByEl(btn){
+  var cle = btn.getAttribute('data-cle');
+  if(!confirm('Supprimer definitivement cette sauvegarde manuelle ?')) return;
+  fbDb.ref('gos_backups_manuelles/'+cle).remove().then(function(){
+    chargerListeSauvegardes();
+  }).catch(function(e){ alert('Erreur lors de la suppression : '+e.message); });
+}
+
+function confirmerRestaurerSauvegardeByEl(btn){
+  var cle = btn.getAttribute('data-cle');
+  var type = btn.getAttribute('data-type');
+  var nb = btn.getAttribute('data-nb');
+  var dateAff = btn.getAttribute('data-date');
+  var overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  overlay.style.zIndex = '99999';
+  overlay.innerHTML = '<div class="modal" style="width:420px">'
+    + '<div class="mhead"><h2 style="color:#A32D2D">&#x26A0; Restaurer une sauvegarde</h2></div>'
+    + '<div class="mbody" style="padding:16px">'
+    + '<p style="font-size:13px;margin-bottom:10px">Vous allez remplacer <strong>tous les vehicules actuels</strong> par la sauvegarde du <strong>'+dateAff+'</strong> ('+nb+' vehicule(s)).</p>'
+    + '<p style="font-size:13px;margin-bottom:16px;color:#A32D2D;font-weight:600">Toute modification faite depuis cette date sera perdue. Cette action est irreversible.</p>'
+    + '<div style="display:flex;gap:8px;justify-content:flex-end">'
+    + '<button class="btn btn-sm" onclick="this.closest(\'.overlay\').remove()">Annuler</button>'
+    + '<button class="btn btn-danger" onclick="restaurerSauvegarde(\''+cle+'\',\''+type+'\');this.closest(\'.overlay\').remove()">&#x21BA; Confirmer la restauration</button>'
+    + '</div></div></div>';
+  document.body.appendChild(overlay);
+}
+
+function restaurerSauvegarde(cle, type){
+  if(!fbDb || !fbConnected){ alert('Connexion Internet requise pour restaurer une sauvegarde.'); return; }
+  var noeud = (type==='manuel') ? 'gos_backups_manuelles/' : 'gos_backups/';
+  fbDb.ref(noeud+cle).once('value').then(function(snap){
+    var b = snap.val();
+    if(!b || !b.vehicles){ alert('Cette sauvegarde est introuvable ou corrompue.'); return; }
+    var vehiculesRestaures = JSON.parse(b.vehicles);
+    vehicles = vehiculesRestaures;
+    var sans = vehicles.map(function(v){ var c=JSON.parse(JSON.stringify(v)); c.photos=[]; return c; });
+    localStorage.setItem('gos_v10', JSON.stringify(sans));
+    var ts = Date.now();
+    lastLocalTs = ts;
+    fbDb.ref('gos_data').set({
+      vehicles: b.vehicles,
+      ts: ts,
+      deviceId: deviceId,
+      updatedBy: (currentUser?currentUser.login:'unknown')+' (restauration sauvegarde '+cle+')'
+    }).then(function(){
+      alert(vehicles.length+' vehicule(s) restaure(s) depuis la sauvegarde. Rechargement...');
+      location.reload();
+    }).catch(function(e){
+      alert('Restauration locale effectuee, mais echec de la synchronisation Firebase : '+e.message);
+      location.reload();
+    });
+  }).catch(function(){ alert('Erreur lors de la lecture de la sauvegarde.'); });
+}
+
+// Affiche/masque le bandeau "chargement des donnees a jour" selon que
+// la 1ere synchronisation Firebase a ete confirmee ou non — ne s'affiche
+// que si un utilisateur est connecte (l'ecran de login reste au-dessus).
+function majBandeauChargementSync(){
+  var b = document.getElementById('bandeauChargementSync');
+  if(!b) return;
+  var connecte = !!(typeof currentUser!=='undefined' && currentUser);
+  b.style.display = (connecte && !firstSyncReceived) ? 'block' : 'none';
 }
 
 function showSyncStatus(status){
@@ -32870,6 +33298,7 @@ window.onload=function(){
       if(pC) currentChefEquipeNom = pC.equipe || savedCompte.equipe || '';
     }
     document.getElementById('loginScreen').style.display='none';
+    majBandeauChargementSync();
     document.querySelector('.app').style.display='flex';
     resetNotifications();
     setTimeout(function(){ majBoutonNotif(); remplirSelectAgirComme(); verifierNouvellesTaches(); verifierTempsMorts(); }, 1500);
