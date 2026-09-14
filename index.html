@@ -2367,7 +2367,15 @@ function fusionnerCollectionParItem(local, distant, dernierPushLocal){
       return;
     }
     var lTs = l.lastModified||0, dTs = d.lastModified||0;
-    merged.push(dTs > lTs ? d : l);
+    // IMPORTANT : en cas d'EGALITE (ou d'absence des deux cotes), on
+    // privilegie desormais la version DISTANTE (Firebase), pas locale.
+    // Une egalite est precisement la signature typique d'une copie
+    // locale perimee dont le suivi de derniere modification est
+    // incomplet — la version distante reflete l'etat collectif de tous
+    // les appareils, donc statistiquement plus fiable dans ce cas precis
+    // qu'une seule copie locale isolee. Meme raisonnement que le
+    // correctif applique au merge des vehicules.
+    merged.push(dTs >= lTs ? d : l);
   });
   return merged;
 }
