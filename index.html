@@ -142,10 +142,10 @@ tr:hover td{background:#faf9f7}
   .g2,.g3,.g4{grid-template-columns:1fr 1fr}
 }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </head>
 <body>
 <!-- INDICATEUR DE CHARGEMENT — visible tant que la 1ere synchronisation
@@ -1709,34 +1709,20 @@ var BANQUES = [];
 // appareil la recalcule a tort comme "non deposee" / "a emettre".
 var FORFAIT_FACTURES = []; // factures forfait generees
 function saveForfaitFactures(){
-  marquerCollectionModifieAuto('forfait_factures', FORFAIT_FACTURES);
-  localStorage.setItem('gos_forfait_factures', JSON.stringify(FORFAIT_FACTURES));
-  // Voir saveDettesManuelles() : meme protection contre un ecrasement
-  // premature de Firebase avant la 1ere synchronisation.
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_forfait_factures').set(JSON.stringify(FORFAIT_FACTURES)).catch(function(e){
-      console.error('Firebase forfait factures save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_forfait_factures', JSON.stringify(FORFAIT_FACTURES)); }catch(e){ console.error('Stockage local plein (gos_forfait_factures)', e); }
+  GOS_SYNC.enregistrer('gos_forfait_factures');
 }
 function loadForfaitFactures(){
   try{ FORFAIT_FACTURES = JSON.parse(localStorage.getItem('gos_forfait_factures'))||[]; }
   catch(e){ FORFAIT_FACTURES=[]; }
 }
 function syncForfaitFacturesFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_forfait_factures').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){
-      try{ FORFAIT_FACTURES = JSON.parse(val)||[]; localStorage.setItem('gos_forfait_factures', val); }catch(e){}
-    } else if(FORFAIT_FACTURES.length && fbConnected){
-      fbDb.ref('gos_forfait_factures').set(JSON.stringify(FORFAIT_FACTURES));
-    }
-    migrerIdFacturesForfait();
-    initialiserBaselineCollection('forfait_factures', FORFAIT_FACTURES);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_forfait_factures', function(){ migrerIdFacturesForfait(); if(callback) callback(); });
 }
 var SAMPLE_BANQUES = [
   {id:'b1', nom:'Banque Atlantique', solde:0, actif:true},
@@ -1744,30 +1730,16 @@ var SAMPLE_BANQUES = [
   {id:'b3', nom:'Ecobank', solde:0, actif:true}
 ];
 function saveBanques(){
-  marquerCollectionModifieAuto('banques', BANQUES);
-  localStorage.setItem('gos_banques', JSON.stringify(BANQUES));
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_banques').set(JSON.stringify(BANQUES)).catch(function(e){
-      console.error('Firebase banques save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_banques', JSON.stringify(BANQUES)); }catch(e){ console.error('Stockage local plein (gos_banques)', e); }
+  GOS_SYNC.enregistrer('gos_banques');
 }
 function syncBanquesFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_banques').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){
-      try{ BANQUES = JSON.parse(val)||[]; localStorage.setItem('gos_banques', val); }catch(e){}
-    } else if(BANQUES.length && fbConnected){
-      // Aucune donnee cote cloud : ce compte n'a encore jamais synchronise
-      // ses banques (ex: tout premier appareil connecte) — on pousse les
-      // donnees locales existantes pour amorcer la synchronisation.
-      fbDb.ref('gos_banques').set(JSON.stringify(BANQUES));
-    }
-    initialiserBaselineCollection('banques', BANQUES);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_banques', function(){  if(callback) callback(); });
 }
 function initBanques(){
   if(!localStorage.getItem('gos_banques_init')){
@@ -1790,30 +1762,19 @@ function initBanques(){
 // compte, avec mise a jour en temps reel entre appareils.
 var CHARGES_FIXES = [];
 function saveChargesFixes(){
-  marquerCollectionModifieAuto('charges_fixes', CHARGES_FIXES);
-  localStorage.setItem('gos_charges_fixes', JSON.stringify(CHARGES_FIXES));
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_charges_fixes').set(JSON.stringify(CHARGES_FIXES)).catch(function(e){
-      console.error('Firebase charges fixes save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_charges_fixes', JSON.stringify(CHARGES_FIXES)); }catch(e){ console.error('Stockage local plein (gos_charges_fixes)', e); }
+  GOS_SYNC.enregistrer('gos_charges_fixes');
 }
 function loadChargesFixes(){
   try{ CHARGES_FIXES = JSON.parse(localStorage.getItem('gos_charges_fixes'))||[]; }catch(e){ CHARGES_FIXES=[]; }
 }
 function syncChargesFixesFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_charges_fixes').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){
-      try{ CHARGES_FIXES = JSON.parse(val)||[]; localStorage.setItem('gos_charges_fixes', val); }catch(e){}
-    } else if(CHARGES_FIXES.length && fbConnected){
-      fbDb.ref('gos_charges_fixes').set(JSON.stringify(CHARGES_FIXES));
-    }
-    initialiserBaselineCollection('charges_fixes', CHARGES_FIXES);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_charges_fixes', function(){  if(callback) callback(); });
 }
 
 // ── Engagements bancaires (prets, echeanciers) ───────────────────────────
@@ -1821,30 +1782,19 @@ function syncChargesFixesFromFirebase(callback){
 // Synchronise via Firebase, meme principe que les charges fixes ci-dessus.
 var ENGAGEMENTS_BANCAIRES = [];
 function saveEngagementsBancaires(){
-  marquerCollectionModifieAuto('engagements_bancaires', ENGAGEMENTS_BANCAIRES);
-  localStorage.setItem('gos_engagements_bancaires', JSON.stringify(ENGAGEMENTS_BANCAIRES));
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_engagements_bancaires').set(JSON.stringify(ENGAGEMENTS_BANCAIRES)).catch(function(e){
-      console.error('Firebase engagements bancaires save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_engagements_bancaires', JSON.stringify(ENGAGEMENTS_BANCAIRES)); }catch(e){ console.error('Stockage local plein (gos_engagements_bancaires)', e); }
+  GOS_SYNC.enregistrer('gos_engagements_bancaires');
 }
 function loadEngagementsBancaires(){
   try{ ENGAGEMENTS_BANCAIRES = JSON.parse(localStorage.getItem('gos_engagements_bancaires'))||[]; }catch(e){ ENGAGEMENTS_BANCAIRES=[]; }
 }
 function syncEngagementsBancairesFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_engagements_bancaires').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){
-      try{ ENGAGEMENTS_BANCAIRES = JSON.parse(val)||[]; localStorage.setItem('gos_engagements_bancaires', val); }catch(e){}
-    } else if(ENGAGEMENTS_BANCAIRES.length && fbConnected){
-      fbDb.ref('gos_engagements_bancaires').set(JSON.stringify(ENGAGEMENTS_BANCAIRES));
-    }
-    initialiserBaselineCollection('engagements_bancaires', ENGAGEMENTS_BANCAIRES);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_engagements_bancaires', function(){  if(callback) callback(); });
 }
 
 // ── Comptes clients (acces distant, portail client.html) ────────────────
@@ -1893,31 +1843,19 @@ function syncClientAccountsFromFirebase(callback){
 // telephone...), meme principe que les charges fixes ci-dessus.
 var FORFAITS_CLIENTS = []; // {client, montantAnnuel, montantMensuel, jourDepot}
 function saveForfaitsClients(){
-  marquerCollectionModifieAuto('forfaits_clients', FORFAITS_CLIENTS);
-  localStorage.setItem('gos_forfaits_clients', JSON.stringify(FORFAITS_CLIENTS));
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_forfaits_clients').set(JSON.stringify(FORFAITS_CLIENTS)).catch(function(e){
-      console.error('Firebase forfaits clients save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_forfaits_clients', JSON.stringify(FORFAITS_CLIENTS)); }catch(e){ console.error('Stockage local plein (gos_forfaits_clients)', e); }
+  GOS_SYNC.enregistrer('gos_forfaits_clients');
 }
 function loadForfaitsClients(){
   try{ FORFAITS_CLIENTS = JSON.parse(localStorage.getItem('gos_forfaits_clients'))||[]; }catch(e){ FORFAITS_CLIENTS=[]; }
 }
 function syncForfaitsClientsFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_forfaits_clients').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){
-      try{ FORFAITS_CLIENTS = JSON.parse(val)||[]; localStorage.setItem('gos_forfaits_clients', val); }catch(e){}
-    } else if(FORFAITS_CLIENTS.length && fbConnected){
-      fbDb.ref('gos_forfaits_clients').set(JSON.stringify(FORFAITS_CLIENTS));
-    }
-    migrerIdForfaitsClients();
-    initialiserBaselineCollection('forfaits_clients', FORFAITS_CLIENTS);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_forfaits_clients', function(){ migrerIdForfaitsClients(); if(callback) callback(); });
 }
 
 // ── Clients sans vehicule ────────────────────────────────────────────────
@@ -1931,30 +1869,19 @@ function syncForfaitsClientsFromFirebase(callback){
 // existe deja pour ce nom+tel, pour ne jamais dupliquer une ligne client.
 var CLIENTS_SANS_VEHICULE = []; // {id, nom, tel, email, typeClient, entite, creeLe}
 function saveClientsSansVehicule(){
-  marquerCollectionModifieAuto('clients_sans_vehicule', CLIENTS_SANS_VEHICULE);
-  localStorage.setItem('gos_clients_sans_vehicule', JSON.stringify(CLIENTS_SANS_VEHICULE));
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_clients_sans_vehicule').set(JSON.stringify(CLIENTS_SANS_VEHICULE)).catch(function(e){
-      console.error('Firebase clients sans vehicule save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_clients_sans_vehicule', JSON.stringify(CLIENTS_SANS_VEHICULE)); }catch(e){ console.error('Stockage local plein (gos_clients_sans_vehicule)', e); }
+  GOS_SYNC.enregistrer('gos_clients_sans_vehicule');
 }
 function loadClientsSansVehicule(){
   try{ CLIENTS_SANS_VEHICULE = JSON.parse(localStorage.getItem('gos_clients_sans_vehicule'))||[]; }catch(e){ CLIENTS_SANS_VEHICULE=[]; }
 }
 function syncClientsSansVehiculeFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_clients_sans_vehicule').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){
-      try{ CLIENTS_SANS_VEHICULE = JSON.parse(val)||[]; localStorage.setItem('gos_clients_sans_vehicule', val); }catch(e){}
-    } else if(CLIENTS_SANS_VEHICULE.length && fbConnected){
-      fbDb.ref('gos_clients_sans_vehicule').set(JSON.stringify(CLIENTS_SANS_VEHICULE));
-    }
-    initialiserBaselineCollection('clients_sans_vehicule', CLIENTS_SANS_VEHICULE);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_clients_sans_vehicule', function(){  if(callback) callback(); });
 }
 
 var SAMPLE_FOURNISSEURS = [
@@ -1966,25 +1893,11 @@ var SAMPLE_FOURNISSEURS = [
   {id:'f6',nom:'Pieces Auto Plateau',tel:'+225 27 44 11 00',specialite:'Pieces multi-marques',conditions:'cash',actif:true}
 ];
 function syncFournisseursFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_fournisseurs').once('value').then(function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var saved = JSON.parse(val);
-        localStorage.setItem('gos_fournisseurs', val);
-        FOURNISSEURS.length = 0;
-        saved.forEach(function(f){ FOURNISSEURS.push(f); });
-      }catch(e){}
-    } else {
-      // Uploader les fournisseurs locaux sur Firebase
-      if(FOURNISSEURS.length > 0 && fbDb && fbConnected){
-        fbDb.ref('gos_fournisseurs').set(JSON.stringify(FOURNISSEURS));
-      }
-    }
-    initialiserBaselineCollection('fournisseurs', FOURNISSEURS);
-    if(callback) callback();
-  }).catch(function(e){ console.error('Firebase fournisseurs load error:', e); if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_fournisseurs', function(){  if(callback) callback(); });
 }
 
 
@@ -2012,61 +1925,32 @@ function loadForfaitsTKM(){
   catch(e){ FORFAITS_TKM = []; }
 }
 function saveForfaitsTKM(){
-  marquerCollectionModifieAuto('forfaits_tkm', FORFAITS_TKM);
-  localStorage.setItem('gos_forfaits_tkm', JSON.stringify(FORFAITS_TKM));
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_forfaits_tkm').set(JSON.stringify(FORFAITS_TKM)).catch(function(e){
-      console.error('Firebase forfaits TKM save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_forfaits_tkm', JSON.stringify(FORFAITS_TKM)); }catch(e){ console.error('Stockage local plein (gos_forfaits_tkm)', e); }
+  GOS_SYNC.enregistrer('gos_forfaits_tkm');
 }
 function syncForfaitsTKMFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_forfaits_tkm').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){
-      try{
-        FORFAITS_TKM = JSON.parse(val) || [];
-        localStorage.setItem('gos_forfaits_tkm', val);
-      }catch(e){}
-    } else if(FORFAITS_TKM.length && fbConnected){
-      fbDb.ref('gos_forfaits_tkm').set(JSON.stringify(FORFAITS_TKM));
-    }
-    initialiserBaselineCollection('forfaits_tkm', FORFAITS_TKM);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_forfaits_tkm', function(){  if(callback) callback(); });
 }
 function loadCommandesSpeciales(){
   try{ COMMANDES_SPECIALES = JSON.parse(localStorage.getItem('gos_commandes_speciales')) || []; }
   catch(e){ COMMANDES_SPECIALES = []; }
 }
 function saveCommandesSpeciales(){
-  marquerCollectionModifieAuto('commandes_speciales', COMMANDES_SPECIALES);
-  localStorage.setItem('gos_commandes_speciales', JSON.stringify(COMMANDES_SPECIALES));
-  // Voir saveDettesManuelles() : meme protection contre un ecrasement
-  // premature de Firebase avant la 1ere synchronisation.
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_commandes_speciales').set(JSON.stringify(COMMANDES_SPECIALES)).catch(function(e){
-      console.error('Firebase commandes speciales save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_commandes_speciales', JSON.stringify(COMMANDES_SPECIALES)); }catch(e){ console.error('Stockage local plein (gos_commandes_speciales)', e); }
+  GOS_SYNC.enregistrer('gos_commandes_speciales');
 }
 function syncCommandesSpecialesFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_commandes_speciales').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){
-      try{
-        COMMANDES_SPECIALES = JSON.parse(val) || [];
-        localStorage.setItem('gos_commandes_speciales', val);
-      }catch(e){}
-    } else if(COMMANDES_SPECIALES.length && fbConnected){
-      fbDb.ref('gos_commandes_speciales').set(JSON.stringify(COMMANDES_SPECIALES));
-    }
-    initialiserBaselineCollection('commandes_speciales', COMMANDES_SPECIALES);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_commandes_speciales', function(){  if(callback) callback(); });
 }
 
 function loadStock(){
@@ -2075,33 +1959,17 @@ function loadStock(){
 }
 
 function saveStock(){
-  marquerCollectionModifieAuto('stock', STOCK);
-  localStorage.setItem('gos_stock', JSON.stringify(STOCK));
-  // Voir saveDettesManuelles() : meme protection contre un ecrasement
-  // premature de Firebase avant la 1ere synchronisation.
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_stock').set(JSON.stringify(STOCK)).catch(function(e){
-      console.error('Firebase stock save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_stock', JSON.stringify(STOCK)); }catch(e){ console.error('Stockage local plein (gos_stock)', e); }
+  GOS_SYNC.enregistrer('gos_stock');
 }
 
 function syncStockFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_stock').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){
-      try{
-        STOCK = JSON.parse(val) || [];
-        localStorage.setItem('gos_stock', val);
-      }catch(e){}
-    } else if(STOCK.length && fbConnected){
-      fbDb.ref('gos_stock').set(JSON.stringify(STOCK));
-    }
-    initialiserBaselineCollection('stock', STOCK);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_stock', function(){  if(callback) callback(); });
 }
 
 // ── Helpers stock ───────────────────────────────────────────
@@ -2161,14 +2029,9 @@ function stockArticleById(id){
 }
 
 function saveFournisseurs(){
-  marquerCollectionModifieAuto('fournisseurs', FOURNISSEURS);
-  localStorage.setItem('gos_fournisseurs',JSON.stringify(FOURNISSEURS));
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_fournisseurs').set(JSON.stringify(FOURNISSEURS)).catch(function(e){
-      console.error('Firebase fournisseurs save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_fournisseurs', JSON.stringify(FOURNISSEURS)); }catch(e){ console.error('Stockage local plein (gos_fournisseurs)', e); }
+  GOS_SYNC.enregistrer('gos_fournisseurs');
 }
 function initFournisseurs(){
   if(!localStorage.getItem('gos_fourn_init')){
@@ -2367,15 +2230,7 @@ function fusionnerCollectionParItem(local, distant, dernierPushLocal){
       return;
     }
     var lTs = l.lastModified||0, dTs = d.lastModified||0;
-    // IMPORTANT : en cas d'EGALITE (ou d'absence des deux cotes), on
-    // privilegie desormais la version DISTANTE (Firebase), pas locale.
-    // Une egalite est precisement la signature typique d'une copie
-    // locale perimee dont le suivi de derniere modification est
-    // incomplet — la version distante reflete l'etat collectif de tous
-    // les appareils, donc statistiquement plus fiable dans ce cas precis
-    // qu'une seule copie locale isolee. Meme raisonnement que le
-    // correctif applique au merge des vehicules.
-    merged.push(dTs >= lTs ? d : l);
+    merged.push(dTs > lTs ? d : l);
   });
   return merged;
 }
@@ -2449,10 +2304,13 @@ function saveV(){
   // reellement change depuis la derniere sauvegarde, peu importe quelle
   // fonction a fait la modification.
   marquerVehiculesModifiesAuto();
-  // Marque aussi explicitement le vehicule actuellement ouvert dans la
-  // fiche detail (redondant avec ce qui precede dans la plupart des cas,
-  // mais ne coute rien et couvre un eventuel cas limite).
-  if(typeof detCurrentVid !== 'undefined' && detCurrentVid) marquerVehiculeModifie(detCurrentVid);
+  // CORRECTIF C-01 (phase 2) : l'ancien marquage explicite du vehicule
+  // ouvert en fiche (marquerVehiculeModifie(detCurrentVid)) a ete RETIRE.
+  // Il datait "modifie a l'instant" ce vehicule a CHAQUE sauvegarde, meme
+  // sans aucune modification — une copie perimee devenait alors "la plus
+  // recente" et ecrasait partout la bonne version. La detection par
+  // empreinte ci-dessus (marquerVehiculesModifiesAuto) date deja tout
+  // vehicule reellement modifie, y compris celui de la fiche ouverte.
   // Exclure les photos du localStorage (trop lourdes) mais garder en mémoire et Firebase
   try {
     var vehiclesSansPhotos = vehicles.map(function(v){
@@ -2496,28 +2354,20 @@ function vehiclesActifs(){
 // personnel lui-meme.
 var PRESENCES = [];
 function savePresences(){
-  marquerCollectionModifieAuto('presences', PRESENCES);
-  localStorage.setItem('gos_presences', JSON.stringify(PRESENCES));
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_presences').set(JSON.stringify(PRESENCES)).catch(function(e){
-      console.error('Firebase presences save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_presences', JSON.stringify(PRESENCES)); }catch(e){ console.error('Stockage local plein (gos_presences)', e); }
+  GOS_SYNC.enregistrer('gos_presences');
 }
 function loadPresences(){
   var raw = localStorage.getItem('gos_presences');
   if(raw){ try{ PRESENCES = JSON.parse(raw)||[]; }catch(e){ PRESENCES=[]; } }
 }
 function syncPresencesFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_presences').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){ try{ PRESENCES = JSON.parse(val)||[]; localStorage.setItem('gos_presences', val); }catch(e){} }
-    else if(PRESENCES.length && fbConnected){ fbDb.ref('gos_presences').set(JSON.stringify(PRESENCES)); }
-    initialiserBaselineCollection('presences', PRESENCES);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_presences', function(){  if(callback) callback(); });
 }
 
 // Descripteurs faciaux d'enrolement : {employeId: [128 floats]}. Stockage
@@ -2526,28 +2376,20 @@ function syncPresencesFromFirebase(callback){
 // comparaison lors de la reconnaissance.
 var DESCRIPTEURS_FACIAUX = {};
 function saveDescripteursFaciaux(){
-  marquerObjetModifieAuto('descripteurs_faciaux', DESCRIPTEURS_FACIAUX);
-  localStorage.setItem('gos_descripteurs_faciaux', JSON.stringify(DESCRIPTEURS_FACIAUX));
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_descripteurs_faciaux').set(JSON.stringify(DESCRIPTEURS_FACIAUX)).catch(function(e){
-      console.error('Firebase descripteurs faciaux save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_descripteurs_faciaux', JSON.stringify(DESCRIPTEURS_FACIAUX)); }catch(e){ console.error('Stockage local plein (gos_descripteurs_faciaux)', e); }
+  GOS_SYNC.enregistrer('gos_descripteurs_faciaux');
 }
 function loadDescripteursFaciaux(){
   var raw = localStorage.getItem('gos_descripteurs_faciaux');
   if(raw){ try{ DESCRIPTEURS_FACIAUX = JSON.parse(raw)||{}; }catch(e){ DESCRIPTEURS_FACIAUX={}; } }
 }
 function syncDescripteursFaciauxFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_descripteurs_faciaux').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){ try{ DESCRIPTEURS_FACIAUX = JSON.parse(val)||{}; localStorage.setItem('gos_descripteurs_faciaux', val); }catch(e){} }
-    else if(Object.keys(DESCRIPTEURS_FACIAUX).length && fbConnected){ fbDb.ref('gos_descripteurs_faciaux').set(JSON.stringify(DESCRIPTEURS_FACIAUX)); }
-    initialiserBaselineObjet('descripteurs_faciaux', DESCRIPTEURS_FACIAUX);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_descripteurs_faciaux', function(){  if(callback) callback(); });
 }
 
 // ── Caisse (petites depenses/entrees du quotidien) ───────────────────────
@@ -2556,28 +2398,20 @@ function syncDescripteursFaciauxFromFirebase(callback){
 // ouvertePar, fermeePar, ouvertureLe, fermetureLe}.
 var CAISSE_JOURNEES = [];
 function saveCaisseJournees(){
-  marquerCollectionModifieAuto('caisse_journees', CAISSE_JOURNEES);
-  localStorage.setItem('gos_caisse_journees', JSON.stringify(CAISSE_JOURNEES));
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_caisse_journees').set(JSON.stringify(CAISSE_JOURNEES)).catch(function(e){
-      console.error('Firebase caisse journees save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_caisse_journees', JSON.stringify(CAISSE_JOURNEES)); }catch(e){ console.error('Stockage local plein (gos_caisse_journees)', e); }
+  GOS_SYNC.enregistrer('gos_caisse_journees');
 }
 function loadCaisseJournees(){
   var raw = localStorage.getItem('gos_caisse_journees');
   if(raw){ try{ CAISSE_JOURNEES = JSON.parse(raw)||[]; }catch(e){ CAISSE_JOURNEES=[]; } }
 }
 function syncCaisseJourneesFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_caisse_journees').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){ try{ CAISSE_JOURNEES = JSON.parse(val)||[]; localStorage.setItem('gos_caisse_journees', val); }catch(e){} }
-    else if(CAISSE_JOURNEES.length && fbConnected){ fbDb.ref('gos_caisse_journees').set(JSON.stringify(CAISSE_JOURNEES)); }
-    initialiserBaselineCollection('caisse_journees', CAISSE_JOURNEES);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_caisse_journees', function(){  if(callback) callback(); });
 }
 
 // Mouvements : {id, journeeId, date, type:'entree'|'sortie', montant,
@@ -2585,28 +2419,20 @@ function syncCaisseJourneesFromFirebase(callback){
 // vehiculeId (optionnel), auteur}.
 var CAISSE_MOUVEMENTS = [];
 function saveCaisseMouvements(){
-  marquerCollectionModifieAuto('caisse_mouvements', CAISSE_MOUVEMENTS);
-  localStorage.setItem('gos_caisse_mouvements', JSON.stringify(CAISSE_MOUVEMENTS));
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_caisse_mouvements').set(JSON.stringify(CAISSE_MOUVEMENTS)).catch(function(e){
-      console.error('Firebase caisse mouvements save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_caisse_mouvements', JSON.stringify(CAISSE_MOUVEMENTS)); }catch(e){ console.error('Stockage local plein (gos_caisse_mouvements)', e); }
+  GOS_SYNC.enregistrer('gos_caisse_mouvements');
 }
 function loadCaisseMouvements(){
   var raw = localStorage.getItem('gos_caisse_mouvements');
   if(raw){ try{ CAISSE_MOUVEMENTS = JSON.parse(raw)||[]; }catch(e){ CAISSE_MOUVEMENTS=[]; } }
 }
 function syncCaisseMouvementsFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_caisse_mouvements').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){ try{ CAISSE_MOUVEMENTS = JSON.parse(val)||[]; localStorage.setItem('gos_caisse_mouvements', val); }catch(e){} }
-    else if(CAISSE_MOUVEMENTS.length && fbConnected){ fbDb.ref('gos_caisse_mouvements').set(JSON.stringify(CAISSE_MOUVEMENTS)); }
-    initialiserBaselineCollection('caisse_mouvements', CAISSE_MOUVEMENTS);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_caisse_mouvements', function(){  if(callback) callback(); });
 }
 
 // ── Dettes fournisseurs saisies manuellement ─────────────────────────────
@@ -2617,35 +2443,20 @@ function syncCaisseMouvementsFromFirebase(callback){
 // du chiffrage vehicule, pour rester dans le meme tableau/calcul.
 var DETTES_MANUELLES = [];
 function saveDettesManuelles(){
-  marquerCollectionModifieAuto('dettes_manuelles', DETTES_MANUELLES);
-  localStorage.setItem('gos_dettes_manuelles', JSON.stringify(DETTES_MANUELLES));
-  // IMPORTANT : meme protection que saveVFirebase() pour les vehicules —
-  // tant que la 1ere synchronisation Firebase n'est pas confirmee recue,
-  // un appareil qui vient de se rouvrir (localStorage potentiellement
-  // incomplet ou perime) ne doit jamais ecraser en bloc ('.set()') ce
-  // qu'un AUTRE appareil a deja enregistre entre-temps. Sans ce garde,
-  // c'est exactement ce qui pouvait faire "disparaitre" des dettes
-  // saisies ailleurs.
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_dettes_manuelles').set(JSON.stringify(DETTES_MANUELLES)).catch(function(e){
-      console.error('Firebase dettes manuelles save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_dettes_manuelles', JSON.stringify(DETTES_MANUELLES)); }catch(e){ console.error('Stockage local plein (gos_dettes_manuelles)', e); }
+  GOS_SYNC.enregistrer('gos_dettes_manuelles');
 }
 function loadDettesManuelles(){
   var raw = localStorage.getItem('gos_dettes_manuelles');
   if(raw){ try{ DETTES_MANUELLES = JSON.parse(raw)||[]; }catch(e){ DETTES_MANUELLES=[]; } }
 }
 function syncDettesManuellesFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_dettes_manuelles').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){ try{ DETTES_MANUELLES = JSON.parse(val)||[]; localStorage.setItem('gos_dettes_manuelles', val); }catch(e){} }
-    else if(DETTES_MANUELLES.length && fbConnected){ fbDb.ref('gos_dettes_manuelles').set(JSON.stringify(DETTES_MANUELLES)); }
-    initialiserBaselineCollection('dettes_manuelles', DETTES_MANUELLES);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_dettes_manuelles', function(){  if(callback) callback(); });
 }
 
 // ── Releves quotidiens de l'exposition financiere ────────────────────────
@@ -2657,34 +2468,26 @@ function syncDettesManuellesFromFirebase(callback){
 // n'existe qu'a partir du jour de mise en place de ce mecanisme.
 var EXPOSITION_SNAPSHOTS = [];
 function saveExpositionSnapshots(){
-  marquerCollectionModifieAuto('exposition_snapshots', EXPOSITION_SNAPSHOTS);
-  localStorage.setItem('gos_exposition_snapshots', JSON.stringify(EXPOSITION_SNAPSHOTS));
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_exposition_snapshots').set(JSON.stringify(EXPOSITION_SNAPSHOTS)).catch(function(e){
-      console.error('Firebase exposition snapshots save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_exposition_snapshots', JSON.stringify(EXPOSITION_SNAPSHOTS)); }catch(e){ console.error('Stockage local plein (gos_exposition_snapshots)', e); }
+  GOS_SYNC.enregistrer('gos_exposition_snapshots');
 }
 function loadExpositionSnapshots(){
   var raw = localStorage.getItem('gos_exposition_snapshots');
   if(raw){ try{ EXPOSITION_SNAPSHOTS = JSON.parse(raw)||[]; }catch(e){ EXPOSITION_SNAPSHOTS=[]; } }
 }
 function syncExpositionSnapshotsFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_exposition_snapshots').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){ try{ EXPOSITION_SNAPSHOTS = JSON.parse(val)||[]; localStorage.setItem('gos_exposition_snapshots', val); }catch(e){} }
-    else if(EXPOSITION_SNAPSHOTS.length && fbConnected){ fbDb.ref('gos_exposition_snapshots').set(JSON.stringify(EXPOSITION_SNAPSHOTS)); }
-    migrerIdExpositionSnapshots();
-    initialiserBaselineCollection('exposition_snapshots', EXPOSITION_SNAPSHOTS);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_exposition_snapshots', function(){ migrerIdExpositionSnapshots(); if(callback) callback(); });
 }
 // Enregistre le releve du jour, une seule fois par jour (pas a chaque
 // rechargement de page).
 function capturerSnapshotExpositionDuJour(){
-  var aujourdhui = new Date().toISOString().slice(0,10);
+  if(!gosEstDirection()) return; // C-09 : instantane financier : postes Direction uniquement
+  var aujourdhui = new Date(heureServeur()).toISOString().slice(0,10); // NIVEAU 1 : heure serveur
   var dejaFait = EXPOSITION_SNAPSHOTS.some(function(s){ return new Date(s.date).toISOString().slice(0,10)===aujourdhui; });
   if(dejaFait) return;
   var collecte = collecterExpositionFinanciere();
@@ -2704,28 +2507,20 @@ function capturerSnapshotExpositionDuJour(){
 // toucher au compte de connexion d'origine.
 var EMPLOYES_PRESENCE = [];
 function saveEmployesPresence(){
-  marquerCollectionModifieAuto('employes_presence', EMPLOYES_PRESENCE);
-  localStorage.setItem('gos_employes_presence', JSON.stringify(EMPLOYES_PRESENCE));
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_employes_presence').set(JSON.stringify(EMPLOYES_PRESENCE)).catch(function(e){
-      console.error('Firebase employes presence save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_employes_presence', JSON.stringify(EMPLOYES_PRESENCE)); }catch(e){ console.error('Stockage local plein (gos_employes_presence)', e); }
+  GOS_SYNC.enregistrer('gos_employes_presence');
 }
 function loadEmployesPresence(){
   var raw = localStorage.getItem('gos_employes_presence');
   if(raw){ try{ EMPLOYES_PRESENCE = JSON.parse(raw)||[]; }catch(e){ EMPLOYES_PRESENCE=[]; } }
 }
 function syncEmployesPresenceFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_employes_presence').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){ try{ EMPLOYES_PRESENCE = JSON.parse(val)||[]; localStorage.setItem('gos_employes_presence', val); }catch(e){} }
-    else if(EMPLOYES_PRESENCE.length && fbConnected){ fbDb.ref('gos_employes_presence').set(JSON.stringify(EMPLOYES_PRESENCE)); }
-    initialiserBaselineCollection('employes_presence', EMPLOYES_PRESENCE);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_employes_presence', function(){  if(callback) callback(); });
 }
 
 // ── Delai de paiement personnalise, retenu au niveau du CLIENT ──────────
@@ -2735,28 +2530,20 @@ function syncEmployesPresenceFromFirebase(callback){
 // 30j entreprise / livraison particulier).
 var CLIENT_DELAIS_PAIEMENT = {};
 function saveClientDelaisPaiement(){
-  marquerObjetModifieAuto('client_delais_paiement', CLIENT_DELAIS_PAIEMENT);
-  localStorage.setItem('gos_client_delais_paiement', JSON.stringify(CLIENT_DELAIS_PAIEMENT));
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_client_delais_paiement').set(JSON.stringify(CLIENT_DELAIS_PAIEMENT)).catch(function(e){
-      console.error('Firebase client delais paiement save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_client_delais_paiement', JSON.stringify(CLIENT_DELAIS_PAIEMENT)); }catch(e){ console.error('Stockage local plein (gos_client_delais_paiement)', e); }
+  GOS_SYNC.enregistrer('gos_client_delais_paiement');
 }
 function loadClientDelaisPaiement(){
   var raw = localStorage.getItem('gos_client_delais_paiement');
   if(raw){ try{ CLIENT_DELAIS_PAIEMENT = JSON.parse(raw)||{}; }catch(e){ CLIENT_DELAIS_PAIEMENT={}; } }
 }
 function syncClientDelaisPaiementFromFirebase(callback){
+  // NIVEAU 1 : la lecture initiale ne remplace plus l'etat local par celui du
+  // serveur (perte des saisies hors ligne) : le moteur fusionne etat serveur et
+  // operations en attente ; on attend simplement sa premiere reception.
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_client_delais_paiement').once('value').then(function(snap){
-    var val = snap.val();
-    if(val){ try{ CLIENT_DELAIS_PAIEMENT = JSON.parse(val)||{}; localStorage.setItem('gos_client_delais_paiement', val); }catch(e){} }
-    else if(Object.keys(CLIENT_DELAIS_PAIEMENT).length && fbConnected){ fbDb.ref('gos_client_delais_paiement').set(JSON.stringify(CLIENT_DELAIS_PAIEMENT)); }
-    initialiserBaselineObjet('client_delais_paiement', CLIENT_DELAIS_PAIEMENT);
-    if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  GOS_SYNC.quandRecu('gos_client_delais_paiement', function(){  if(callback) callback(); });
 }
 
 // Initialise EMPLOYES_PRESENCE a partir des comptes de connexion, UNE
@@ -2764,6 +2551,7 @@ function syncClientDelaisPaiementFromFirebase(callback){
 // jamais aux employes deja geres — evite d'ecraser une desactivation ou
 // un employe manuel a chaque appel).
 function initialiserEmployesPresence(){
+  if(['direction','reception'].indexOf(currentRole) < 0) return; // C-09 : presences : Direction et accueil uniquement
   var comptes = loadComptes();
   var idsExistants = {};
   EMPLOYES_PRESENCE.forEach(function(e){ idsExistants[e.id] = true; });
@@ -3191,14 +2979,9 @@ function capturerEnrolementFacial(){
 }
 
 function savePersonnel(){
-  marquerCollectionModifieAuto('personnel', PERSONNEL);
-  localStorage.setItem('gos_personnel', JSON.stringify(PERSONNEL));
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_personnel').set(JSON.stringify(PERSONNEL)).catch(function(e){
-      console.error('Firebase personnel save error:', e);
-    });
-  }
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls elements modifies.
+  try{ localStorage.setItem('gos_personnel', JSON.stringify(PERSONNEL)); }catch(e){ console.error('Stockage local plein (gos_personnel)', e); }
+  GOS_SYNC.enregistrer('gos_personnel');
 }
 function loadPersonnel(){
   var raw = localStorage.getItem('gos_personnel');
@@ -5917,6 +5700,7 @@ function marquerJalonsTemps(v, nouveauStatut){
 // (ne touche jamais un champ deja renseigne), avec une date de secours
 // (livraison, sinon validation financiere, sinon entree).
 function migrerFactureDeposeeLe(){
+  if(!gosPeutMigrer()) return; // C-09 : migration : Direction uniquement
   var nbMigres = 0;
   vehicles.forEach(function(v){
     if(v.status!=='facture_deposee' && v.status!=='dossier_cloture') return;
@@ -5937,6 +5721,7 @@ function migrerFactureDeposeeLe(){
 // l'activation de cette fonctionnalite). Execute une seule fois par
 // charge (ne touche jamais un champ deja renseigne).
 function migrerDateDebutChargesFixes(){
+  if(!gosPeutMigrer()) return; // C-09 : migration : Direction uniquement
   var nbMigres = 0;
   var debutMoisCourant = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
   CHARGES_FIXES.forEach(function(c){
@@ -5959,6 +5744,7 @@ function migrerDateDebutChargesFixes(){
 // seule fois, sans toucher aux dossiers normaux (dont la validation reste
 // une vraie etape metier a respecter).
 function migrerValideDirFacturesManuelles(){
+  if(!gosPeutMigrer()) return; // C-09 : migration : Direction uniquement
   var nbCorrige = 0;
   vehicles.forEach(function(v){
     if(!v.isFactureManuelle && !v.isImportHistorique) return;
@@ -5980,6 +5766,7 @@ function migrerValideDirFacturesManuelles(){
 // par abonnement mensuel, pas par facture individuelle). Cloture
 // directement tous les dossiers forfait deja coinces dans cet etat.
 function migrerForfaitsLivresBloques(){
+  if(!gosPeutMigrer()) return; // C-09 : migration : Direction uniquement
   var nbCorrige = 0;
   vehicles.forEach(function(v){
     if(v.status==='livre' && v.typeClient==='forfait' && !estDossierAssurance(v)){
@@ -6001,6 +5788,7 @@ function migrerForfaitsLivresBloques(){
 // le nouvel historique detaille (paiementsClient), pour ne perdre aucune
 // donnee et permettre l'historique des paiements par la suite.
 function migrerPaiementsClients(){
+  if(!gosPeutMigrer()) return; // C-09 : migration : Direction uniquement
   var nbMigres = 0;
   vehicles.forEach(function(v){
     if(v.paiementsClient) return; // deja migre
@@ -6041,6 +5829,7 @@ function migrerPaiementsClients(){
 // stable et deterministe (base sur les champs existants, donc identique
 // sur tous les appareils) a chaque entree qui n'en a pas encore.
 function migrerIdFacturesForfait(){
+  if(!gosPeutMigrer()) return; // C-09 : migration : Direction uniquement
   var nbCorriges = 0;
   FORFAIT_FACTURES.forEach(function(f){
     if(!f.id){
@@ -6052,6 +5841,7 @@ function migrerIdFacturesForfait(){
   return nbCorriges;
 }
 function migrerIdForfaitsClients(){
+  if(!gosPeutMigrer()) return; // C-09 : migration : Direction uniquement
   var nbCorriges = 0;
   FORFAITS_CLIENTS.forEach(function(f){
     if(!f.id){
@@ -6063,6 +5853,7 @@ function migrerIdForfaitsClients(){
   return nbCorriges;
 }
 function migrerIdExpositionSnapshots(){
+  if(!gosPeutMigrer()) return; // C-09 : migration : Direction uniquement
   var nbCorriges = 0;
   EXPOSITION_SNAPSHOTS.forEach(function(s, idx){
     if(!s.id){
@@ -6075,6 +5866,7 @@ function migrerIdExpositionSnapshots(){
 }
 
 function migrerFournisseursDettesStock(){
+  if(!gosPeutMigrer()) return; // C-09 : migration : Direction uniquement
   var nbCorriges = 0;
   STOCK.forEach(function(a){
     if(!a.detteManuelleId) return;
@@ -21285,7 +21077,7 @@ var fournEditId = null;
 function reserverStockVehicule(v){
   if(!v || !v.chiffrage || !v.chiffrage.lignes) return;
   var manques = [];
-  v.chiffrage.lignes.forEach(function(cl){
+  v.chiffrage.lignes.forEach(function(cl, idxLigne){
     if(cl.source !== 'stock' || !cl.stockArticleId) return;
     if(!cl.valideDir) return;                 // seules les pieces validees
     if(cl.stockSortie) return;                // deja sortie du stock
@@ -21295,10 +21087,12 @@ function reserverStockVehicule(v){
     var a = stockArticleById(cl.stockArticleId);
     if(!a) return;
     // Liberer l'ancienne reservation avant de reserver la nouvelle quantite
-    if(dejaReserve){ a.reserve = Math.max(0, (parseInt(a.reserve,10)||0) - dejaReserve); }
+    if(dejaReserve){ a.reserve = Math.max(0, (parseInt(a.reserve,10)||0) - dejaReserve); GOS_SYNC.stockDelta(a, 0, -dejaReserve); }
     var dispo = stockDispo(a);
     var pris = Math.min(besoin, dispo);
     a.reserve = (parseInt(a.reserve,10)||0) + pris;
+    // NIVEAU 1 : reservation confirmee par le serveur (disponible verifie dans la transaction)
+    if(pris > 0) GOS_SYNC.stockDelta(a, 0, pris, {exigeDispo: true, lien: {vid: v.id, idx: idxLigne}});
     cl.stockReserve = pris;
     if(pris < besoin) manques.push(a.nom+' : '+pris+'/'+besoin);
   });
@@ -21313,6 +21107,7 @@ function libererReservationLigne(cl){
   if(!cl || !cl.stockReserve) return;
   var a = stockArticleById(cl.stockArticleId);
   if(a){
+    GOS_SYNC.stockDelta(a, 0, -(parseInt(cl.stockReserve,10)||0));
     a.reserve = Math.max(0, (parseInt(a.reserve,10)||0) - (parseInt(cl.stockReserve,10)||0));
   }
   cl.stockReserve = 0;
@@ -21339,6 +21134,7 @@ function sortirStockVehicule(v){
     if(!a) return;
     var qte = parseInt(cl.stockReserve,10) || parseInt(cl.qte,10) || 1;
     // Decompte reel : la piece quitte l'etagere
+    GOS_SYNC.stockDelta(a, -qte, -(parseInt(cl.stockReserve,10)||0));
     a.qte = Math.max(0, (parseInt(a.qte,10)||0) - qte);
     a.reserve = Math.max(0, (parseInt(a.reserve,10)||0) - (parseInt(cl.stockReserve,10)||0));
     cl.stockSortie = true;
@@ -21408,6 +21204,7 @@ function ajouterEntreeStock(){
 
   if(existant){
     // Reappro : on cumule la quantite et on met a jour le prix d'achat
+    GOS_SYNC.stockDelta(existant, qte, 0);
     existant.qte = (parseInt(existant.qte,10)||0) + qte;
     existant.prixAchat = prix;
     existant.seuil = seuil;
@@ -21570,6 +21367,7 @@ function validerModifStock(){
   a.reference = reference;
   a.marque = marque;
   a.modele = modele;
+  GOS_SYNC.stockDelta(a, qte - (parseInt(a.qte,10)||0), 0); // NIVEAU 1 : correction de quantite = difference
   a.qte = qte;
   a.prixAchat = prix;
   a.seuil = seuil;
@@ -22219,6 +22017,7 @@ function annulerHistoriqueCommandeSpecialeByEl(btn){
           });
         }
         if(art){
+          GOS_SYNC.stockDelta(art, -(parseInt(c.qte,10)||1), 0);
           art.qte = Math.max(0, (parseInt(art.qte,10)||0) - (parseInt(c.qte,10)||1));
           saveStock();
         }
@@ -22274,6 +22073,7 @@ function livrerCommandeSpecialeByEl(btn){
       && _normStk(a.modele)===_normStk(c.modele);
   });
   if(existant){
+    GOS_SYNC.stockDelta(existant, (parseInt(c.qte,10)||1), 0);
     existant.qte = (parseInt(existant.qte,10)||0) + (parseInt(c.qte,10)||1);
     existant.dateEntree = Date.now();
   } else {
@@ -25769,16 +25569,10 @@ function submitRec(){
     marquerVehiculeModifie(nv.id);
   }
   // Sauvegarder immédiatement sur Firebase (sans debounce) pour les photos
-  if(fbDb && fbConnected){
-    var ts = Date.now();
-    lastLocalTs = ts;
-    fbDb.ref('gos_data').update({
-      vehicles: JSON.stringify(vehicles),
-      ts: ts,
-      deviceId: deviceId,
-      updatedBy: currentUser ? currentUser.login : 'unknown'
-    });
-  }
+  // CORRECTIF C-05a (phase 2) : jamais avant la 1re synchronisation — sinon la
+  // copie locale (perimee, sans photos) remplacait tous les vehicules du serveur.
+  // Dans ce cas saveV() ci-dessous met la sauvegarde en attente (voir saveVFirebase).
+  // NIVEAU 1 : plus d'envoi immediat du tableau complet ; saveV() cree l'operation.
   saveV();resetForm();closeRec();renderPage();
 }
 
@@ -26349,6 +26143,7 @@ function confirmerFermetureDet(){
 function closeDet(){
   _prospectEditMode = false;
   document.getElementById('modalDet').style.display='none';
+  detCurrentVid = null; // CORRECTIF C-01 : plus aucun vehicule "ouvert" apres fermeture de la fiche
   photosVisible=false; photosEditMode=false; closePhotoViewer();
 }
 function detAffecterEquipeReception(id){
@@ -29379,6 +29174,9 @@ function exportData(){
 }
 
 function importData(input){
+  // NIVEAU 1 : l'import remplacait toutes les collections Firebase par set(), en contournant
+  // la fusion et les suppressions explicites. Desactive temporairement.
+  if(typeof GOS_SYNC !== 'undefined'){ alert('Import temporairement desactive pendant la fiabilisation de la synchronisation. Contactez l\'administrateur.'); if(input) input.value=''; return; }
   var file = input.files && input.files[0];
   if(!file){ alert('Aucun fichier selectionne.'); return; }
   var reader = new FileReader();
@@ -29530,80 +29328,28 @@ function loadComptes(){
 
 // Charger les comptes depuis Firebase et mettre à jour le localStorage
 function syncPersonnelFromFirebase(callback){
+  // NIVEAU 1 : attente de la premiere reception du moteur (plus de remplacement du local)
   if(!fbDb){ if(callback) callback(); return; }
-  fbDb.ref('gos_personnel').once('value').then(function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var saved = JSON.parse(val);
-        localStorage.setItem('gos_personnel', val);
-        // Appliquer dans PERSONNEL
-        PERSONNEL.length = 0;
-        var seenNoms = {};
-        saved.forEach(function(p){
-          if(!seenNoms[p.nom]){ seenNoms[p.nom]=true; PERSONNEL.push(p); }
-        });
-        EQUIPES.length = 0;
-        var seenEq = {};
-        PERSONNEL.forEach(function(p){ if(p.equipe&&!seenEq[p.equipe]){seenEq[p.equipe]=1;EQUIPES.push(p.equipe);} });
-        // Recalculer currentTechNom si technicien connecté et nom pas encore défini
-        if(currentRole==='technicien' && !currentTechNom && currentUser){
-          var pT2 = currentUser.personnelId
-            ? PERSONNEL.find(function(x){ return x.id===currentUser.personnelId; })
-            : PERSONNEL.find(function(x){ return x.nom===currentUser.nom; });
-          if(pT2){
-            currentTechNom = pT2.nom;
-            currentTechEquipe = pT2.equipe || null;
-          }
-        }
-        // Le personnel vient d'arriver de Firebase : reconstruire les selecteurs
-        // (sinon les chefs se retrouvent avec une liste vide au premier chargement)
-        if(currentRole && typeof initSelecteursRole==='function'){
-          initSelecteursRole(currentRole);
-          renderPage();
-        }
-      }catch(e){}
-    } else {
-      // Uploader le personnel local sur Firebase
-      if(PERSONNEL.length > 0 && fbDb && fbConnected){
-        fbDb.ref('gos_personnel').set(JSON.stringify(PERSONNEL));
-      }
+  GOS_SYNC.quandRecu('gos_personnel', function(){
+    if(currentRole==='technicien' && !currentTechNom && currentUser){
+      var pT2 = currentUser.personnelId ? PERSONNEL.find(function(x){ return x.id===currentUser.personnelId; })
+                                        : PERSONNEL.find(function(x){ return x.nom===currentUser.nom; });
+      if(pT2){ currentTechNom = pT2.nom; currentTechEquipe = pT2.equipe || null; }
     }
-    initialiserBaselineCollection('personnel', PERSONNEL);
+    if(currentRole && typeof initSelecteursRole==='function'){ initSelecteursRole(currentRole); renderPage(); }
     if(callback) callback();
-  }).catch(function(){ if(callback) callback(); });
+  });
 }
 
 function syncComptesFromFirebase(callback){
-  if(!fbDb) { if(callback) callback(loadComptes()); return; }
-  fbDb.ref('gos_comptes').once('value').then(function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var comptes = JSON.parse(val);
-        localStorage.setItem(COMPTES_KEY, val);
-        if(callback) callback(comptes);
-      }catch(e){ if(callback) callback(loadComptes()); }
-    } else {
-      // Pas encore de comptes sur Firebase - uploader les comptes locaux
-      var local = loadComptes();
-      if(fbDb && fbConnected){
-        fbDb.ref('gos_comptes').set(JSON.stringify(local));
-      }
-      if(callback) callback(local);
-    }
-  }).catch(function(){ if(callback) callback(loadComptes()); });
+  if(!fbDb){ if(callback) callback(loadComptes()); return; }
+  GOS_SYNC.quandRecu('gos_comptes', function(){ if(callback) callback(loadComptes()); });
 }
 
 function saveComptes(comptes){
+  // NIVEAU 1 : stockage local puis operation(s) sur les seuls comptes modifies.
   localStorage.setItem(COMPTES_KEY, JSON.stringify(comptes));
-  // Synchroniser sur Firebase pour multi-appareils
-  if(!firstSyncReceived) return;
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_comptes').set(JSON.stringify(comptes)).catch(function(e){
-      console.error('Firebase comptes save error:', e);
-    });
-  }
+  GOS_SYNC.enregistrer('gos_comptes');
 }
 
 function reinitComptes(){
@@ -29644,24 +29390,8 @@ function toggleLoginPassVisibility(){
 }
 
 function doLogin(){
-  var login = (document.getElementById('loginUser').value||'').trim().toLowerCase();
-  var mdp = (document.getElementById('loginPass').value||'').trim();
-  // Afficher indicateur de chargement
-  var btn = document.querySelector('#loginScreen .btn-primary');
-  if(btn){ btn.textContent = 'Connexion...'; btn.disabled = true; }
-  // Sync personnel ET comptes depuis Firebase avant de vérifier
-  syncPersonnelFromFirebase(function(){
-    syncComptesFromFirebase(function(comptes){
-      if(btn){ btn.textContent = 'Se connecter'; btn.disabled = false; }
-      var compte = comptes.find(function(c){ return c.login===login && c.mdp===mdp; });
-      if(!compte){
-        var err = document.getElementById('loginError');
-        if(err) err.style.display='block';
-        return;
-      }
-      _doLoginWithCompte(compte);
-    });
-  });
+  // C-09 : connexion par Firebase Authentication (adresse e-mail ou identifiant B2)
+  GOS_AUTH.connexion();
 }
 
 function _doLoginWithCompte(compte){
@@ -29803,6 +29533,7 @@ function initSelecteursRole(role){
 }
 
 function doLogout(){
+  GOS_AUTH.deconnexion(); // C-09
   currentUser = null;
   localStorage.removeItem('gos_session');
   var roleWrap = document.querySelector('.role-wrap');
@@ -30919,7 +30650,7 @@ var caisseOnglet = 'jour';
 
 // ── Fonctions utilitaires de gestion de caisse ───────────────────────────
 function dateJourStr(timestamp){
-  var d = timestamp ? new Date(timestamp) : new Date();
+  var d = timestamp ? new Date(timestamp) : new Date(heureServeur()); // NIVEAU 1 : jour de caisse selon l'heure serveur
   return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);
 }
 
@@ -31898,8 +31629,10 @@ function envoyerMessageClientByEl(){
   var uid = messagesClientsConvActive.uid, vehiculeId = messagesClientsConvActive.vehiculeId;
   var nomAuteur = currentUser ? currentUser.login : (currentRole==='direction'?'Direction':currentRole==='reception'?'Reception':'Atelier');
   var ref = fbDb.ref('gos_messages/'+uid+'/'+vehiculeId).push();
-  var message = {auteur:'garage', nomAuteur:nomAuteur, texte:texte, date:Date.now(), lu:false};
+  var uidAuteur = (firebase.auth().currentUser || {}).uid || '';
+  var message = {auteur:'garage', auteurUid: uidAuteur, nomAuteur:nomAuteur, texte:texte, date: firebase.database.ServerValue.TIMESTAMP, lu:false}; // C-09
   ref.set(message).then(function(){
+    message.date = Date.now(); // copie locale pour l'affichage
     MESSAGES_CLIENTS_DATA[uid] = MESSAGES_CLIENTS_DATA[uid] || {};
     MESSAGES_CLIENTS_DATA[uid][vehiculeId] = MESSAGES_CLIENTS_DATA[uid][vehiculeId] || {};
     MESSAGES_CLIENTS_DATA[uid][vehiculeId][ref.key] = message;
@@ -31938,7 +31671,7 @@ function ouvrirConversationDepuisFiche(vid){
   setTimeout(function(){ ouvrirConversationClient(uidTrouve, vid); }, 50);
 }
 
-function pageComptes(){
+function pageComptesAncien(){
   var comptes = loadComptes();
   var apiKey = localStorage.getItem('gos_api_key')||'';
   var html_api = '<div class="card" style="margin-bottom:16px">';
@@ -32003,7 +31736,7 @@ function pageComptes(){
     h += '<td class="fw7">'+c.nom+'</td>';
     h += '<td><span class="badge b-blue" style="font-size:10px">'+c.role+'</span></td>';
     h += '<td><code style="background:#f5f4f1;padding:2px 6px;border-radius:4px">'+c.login+'</code></td>';
-    h += '<td><code style="background:#f5f4f1;padding:2px 6px;border-radius:4px">'+c.mdp+'</code></td>';
+    h += '<td><code style="background:#f5f4f1;padding:2px 6px;border-radius:4px">(masque)</code></td>';
     h += '<td><div class="flex gap6">';
     h += '<button class="btn btn-sm" data-id="'+c.id+'" onclick="editerCompte(this)">✏</button>';
     h += '<button class="btn btn-danger btn-sm" data-id="'+c.id+'" onclick="supprimerCompte(this)">✖</button>';
@@ -32026,7 +31759,7 @@ function pageComptes(){
         h += '<td class="fw7">'+c.nom+'</td>';
         h += '<td><span class="badge '+roleColor+'" style="font-size:10px">'+c.role+'</span></td>';
         h += '<td><code style="background:#f5f4f1;padding:2px 6px;border-radius:4px">'+c.login+'</code></td>';
-        h += '<td><code style="background:#f5f4f1;padding:2px 6px;border-radius:4px">'+c.mdp+'</code></td>';
+        h += '<td><code style="background:#f5f4f1;padding:2px 6px;border-radius:4px">(masque)</code></td>';
         h += '<td><div class="flex gap6">';
         h += '<button class="btn btn-sm" data-id="'+c.id+'" onclick="editerCompte(this)">✏</button>';
         h += '<button class="btn btn-danger btn-sm" data-id="'+c.id+'" onclick="supprimerCompte(this)">✖</button>';
@@ -32098,11 +31831,7 @@ function confirmerEffacerDonnees(){
 function effacerToutesDonnees(){
   vehicles = [];
   localStorage.setItem('gos_v10', '[]');
-  if(fbDb && fbConnected){
-    fbDb.ref('gos_data').remove().then(function(){
-      console.log('Firebase data cleared');
-    }).catch(function(e){ console.error(e); });
-  }
+  saveV(); // NIVEAU 1 : chaque vehicule devient une suppression explicite
   var msg = document.createElement('div');
   msg.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#3B6D11;color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;z-index:99999';
   msg.textContent = 'Toutes les donnees ont ete effacees.';
@@ -32259,7 +31988,7 @@ function editerCompte(btn){
   var loginEl = document.getElementById('compteLogin');
   if(loginEl){ loginEl.value = c.login; loginEl.dataset.manual='1'; }
   var mdpEl = document.getElementById('compteMdp');
-  if(mdpEl){ mdpEl.value = c.mdp; mdpEl.dataset.manual='1'; }
+  if(mdpEl){ mdpEl.value = ''; } // C-09 : aucun mot de passe affiche
   var eqEl = document.getElementById('compteEquipe') || document.getElementById('compteEquipeNom');
   if(eqEl) eqEl.value = c.equipe||'';
   document.getElementById('compteTitle').textContent='Modifier le compte';
@@ -32497,6 +32226,1278 @@ function tryInitFirebase(){
   }
 }
 
+window.GOS_SYNC_CFG = window.GOS_SYNC_CFG || {tombstones:true, persistance:'indexeddb', heureServeur:true, stockDifferentiel:true};
+// ══════════════════════════════════════════════════════════════════════════
+// MOTEUR DE SYNCHRONISATION — NIVEAU 1 (GOS_SYNC)
+// ══════════════════════════════════════════════════════════════════════════
+// Remplace l'ancien principe « chaque appareil envoie sa copie COMPLETE de la
+// collection » par des OPERATIONS portant uniquement sur les elements
+// reellement modifies localement, appliquees sur le serveur par TRANSACTION
+// avec une fusion a trois voies (BASE / LOCAL / SERVEUR).
+//
+//  - Les donnees restent stockees au meme endroit et au meme format (chaines
+//    JSON dans gos_data/vehicles, gos_stock, …) : pas de migration gos/v2.
+//  - Une operation = {opId, collection, recordId, type, patch, base, …}.
+//    Elle est conservee dans une file PERSISTANTE (IndexedDB) jusqu'a la
+//    confirmation du serveur, et survit a la fermeture du navigateur.
+//  - Fusion a trois voies, champ par champ :
+//      serveur = base  → la valeur locale est appliquee ;
+//      serveur = local → deja applique (double envoi sans effet) ;
+//      sinon           → CONFLIT : rien n'est ecrase, une entree est creee
+//                        dans gos_conflits (visible et recuperable).
+//  - Une suppression n'est plus jamais deduite d'une absence : elle est
+//    enregistree explicitement (gos_tombstones/{collection}/{id} :
+//    _deleted, _deletedAt = heure serveur, _deletedBy). Un element supprime
+//    ne peut pas etre recree automatiquement.
+//  - A la reconnexion, rien n'est « rejoue » en bloc : l'etat serveur est
+//    recupere, puis les operations en attente sont traitees dans l'ordre.
+//  - Aucune decision ne depend de l'horloge de l'appareil (les dates ne
+//    servent qu'a la tracabilite ; dates techniques = heure du serveur).
+//  - Stock : les quantites (qte, reserve) sont modifiees par des operations
+//    DIFFERENTIELLES appliquees dans la transaction, avec controle du
+//    disponible cote serveur pour les reservations.
+// ══════════════════════════════════════════════════════════════════════════
+var GOS_SYNC_CFG = window.GOS_SYNC_CFG || {
+  tombstones: true,          // etape 4
+  persistance: 'indexeddb',  // etape 5 ('memoire' = file non persistee)
+  heureServeur: true,        // etape 6
+  stockDifferentiel: true    // etape 7
+};
+
+// Heure du serveur Firebase estimee (heure appareil + decalage mesure par Firebase).
+var gosDecalageServeurMs = 0;
+function heureServeur(){ return Date.now() + (GOS_SYNC_CFG.heureServeur ? gosDecalageServeurMs : 0); }
+
+var GOS_SYNC = (function(){
+  var COLL = {}, ORDRE = [];
+  var CHAMPS_IGNORES = {lastModified: true, _syncOps: true};
+  var db = null;                 // fbDb
+  var enLigne = false, epoque = 0;
+  var file = [];                 // operations en attente, dans l'ordre
+  var fileChargee = false, attentesFile = [];
+  var serveur = {}, recu = {}, tombes = {}, ombre = {};
+  var fluxEnCours = false, fluxDemande = false;
+  var conflitsOuverts = {};
+  var journal = [];              // tracabilite locale (derniers evenements)
+
+  function trace(evt){ evt.t = heureServeur(); journal.push(evt); if(journal.length > 300) journal.shift(); }
+  function clone(v){ return v === undefined ? undefined : JSON.parse(JSON.stringify(v)); }
+  function estObjet(v){ return v !== null && typeof v === 'object' && !Array.isArray(v); }
+  function canon(v){
+    if(v === undefined || v === null) return 'null';
+    if(typeof v !== 'object') return JSON.stringify(v);
+    if(Array.isArray(v)) return '[' + v.map(canon).join(',') + ']';
+    var ks = Object.keys(v).filter(function(k){ return v[k] !== undefined && v[k] !== null; }).sort();
+    return '{' + ks.map(function(k){ return JSON.stringify(k) + ':' + canon(v[k]); }).join(',') + '}';
+  }
+  function egal(a, b){ return canon(a) === canon(b); }
+  function nouvelId(prefixe){ return prefixe + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10); }
+  function cleFirebase(id){ return encodeURIComponent(String(id)).replace(/\./g, '%2E'); }
+  function utilisateur(){ try{ return currentUser ? (currentUser.login || currentUser.nom) : (typeof currentRole !== 'undefined' ? currentRole : '?'); }catch(e){ return '?'; } }
+
+  // ---------------------------------------------------------------- collections
+  function definir(cle, d){
+    d.cle = cle; d.type = d.type || 'liste'; d.ignorer = d.ignorer || {};
+    d.ensembles = d.ensembles || {}; COLL[cle] = d; ORDRE.push(cle);
+  }
+  function idDe(d, rec){ return rec && rec.id !== undefined && rec.id !== null ? String(rec.id) : ('~sansid~' + canon(rec)); }
+  // Carte id -> enregistrement a partir de la forme applicative (tableau ou objet)
+  function enCarte(d, valeur){
+    var m = {};
+    if(d.type === 'objet'){ Object.keys(valeur || {}).forEach(function(k){ m[k] = valeur[k]; }); }
+    else { (valeur || []).forEach(function(r){ if(r) m[idDe(d, r)] = r; }); }
+    return m;
+  }
+  function lireServeurBrut(d, brut){
+    try{
+      if(d.chemin === 'gos_data'){ return brut && brut.vehicles ? JSON.parse(brut.vehicles) : null; }
+      if(brut === null || brut === undefined) return null;
+      return typeof brut === 'string' ? JSON.parse(brut) : brut;
+    }catch(e){ console.error('GOS_SYNC : valeur serveur illisible pour ' + d.cle, e); return undefined; }
+  }
+
+  // ---------------------------------------------------------------- differences (champ par champ)
+  function diff(a, b, chemin, sortie, d){
+    if(egal(a, b)) return sortie;
+    if(chemin.length === 0 && d && d.ignorer && estObjet(a) && estObjet(b)){
+      // niveau racine : on ignore les champs techniques
+    }
+    if(estObjet(a) && estObjet(b) && !(chemin.length === 1 && d && d.ensembles[chemin[0]])){
+      var cles = {}; Object.keys(a).forEach(function(k){ cles[k] = 1; }); Object.keys(b).forEach(function(k){ cles[k] = 1; });
+      Object.keys(cles).forEach(function(k){
+        if(chemin.length === 0 && (CHAMPS_IGNORES[k] || (d && d.ignorer[k]))) return;
+        diff(a[k], b[k], chemin.concat([k]), sortie, d);
+      });
+      return sortie;
+    }
+    sortie.push({p: chemin, a: clone(a), n: clone(b)});
+    return sortie;
+  }
+  function lire(o, p){ for(var i = 0; i < p.length; i++){ if(o === null || typeof o !== 'object') return undefined; o = o[p[i]]; } return o; }
+  function ecrire(o, p, v){
+    if(!p.length) return v;
+    var racine = estObjet(o) ? o : {}; var cur = racine;
+    for(var i = 0; i < p.length - 1; i++){ if(!estObjet(cur[p[i]])) cur[p[i]] = {}; cur = cur[p[i]]; }
+    if(v === undefined) delete cur[p[p.length - 1]]; else cur[p[p.length - 1]] = clone(v);
+    return racine;
+  }
+  // Fusion d'ensemble (photos, paiements) : ajouts et retraits locaux appliques sur la valeur serveur
+  function fusionEnsemble(base, local, srv){
+    var cb = {}, cl = {}; (base || []).forEach(function(x){ cb[canon(x)] = 1; }); (local || []).forEach(function(x){ cl[canon(x)] = 1; });
+    var res = (srv || []).filter(function(x){ var c = canon(x); return !(cb[c] && !cl[c]); });
+    var cs = {}; res.forEach(function(x){ cs[canon(x)] = 1; });
+    (local || []).forEach(function(x){ var c = canon(x); if(!cb[c] && !cs[c]){ res.push(clone(x)); cs[c] = 1; } });
+    return res;
+  }
+
+  // Applique UNE operation sur la carte serveur (dans la transaction). Retourne le resultat.
+  function appliquer(d, carte, op, tomb, pourApercu){
+    var rid = op.recordId, s = carte[rid];
+    var r = {op: op, statut: 'appliquee', conflits: []};
+    var supprime = GOS_SYNC_CFG.tombstones && tomb[rid];
+    if(op.type === 'delta'){
+      if(!s){ r.statut = 'echec'; r.raison = 'article_introuvable'; return r; }
+      if(s._syncOps && s._syncOps.indexOf(op.opId) >= 0){ r.statut = 'deja_appliquee'; return r; }
+      var q = parseInt(s.qte, 10) || 0, res = parseInt(s.reserve, 10) || 0;
+      if(!pourApercu && op.exigeDispo && op.dRes > 0 && (q - res) < op.dRes){ r.statut = 'echec'; r.raison = 'stock_insuffisant'; r.dispoServeur = q - res; return r; }
+      s = clone(s); s.qte = Math.max(0, q + (op.dQte || 0)); s.reserve = Math.max(0, res + (op.dRes || 0));
+      if(!pourApercu){ s._syncOps = (s._syncOps || []).concat([op.opId]).slice(-20); }
+      carte[rid] = s; return r;
+    }
+    if(op.type === 'delete'){
+      if(!s){ r.statut = 'deja_appliquee'; return r; }
+      var sPropre = sansTechnique(s), bPropre = sansTechnique(op.base);
+      if(!pourApercu && op.base && !egal(sPropre, bPropre)){
+        r.conflits.push({type: 'suppression_version_modifiee_ailleurs', serveur: clone(s), base: clone(op.base)});
+      }
+      delete carte[rid]; return r;
+    }
+    if(supprime){
+      if(!pourApercu){ r.statut = 'conflit'; r.conflits.push({type: 'element_supprime_ailleurs', local: op.type === 'create' ? clone(op.record) : clone(op.patch), tombstone: clone(tomb[rid])}); }
+      else r.statut = 'masquee';
+      return r;
+    }
+    if(s && s._syncOps && s._syncOps.indexOf(op.opId) >= 0){ r.statut = 'deja_appliquee'; return r; }
+    var patch = op.type === 'create' ? diff({}, op.record, [], [], d) : op.patch;
+    var cible = s ? clone(s) : (op.type === 'create' ? {} : clone(op.baseComplete || {}));
+    if(!s && op.type !== 'create') r.statut = 'recree';          // absent SANS suppression enregistree : on ne deduit rien de l'absence
+    patch.forEach(function(e){
+      var sv = s ? lire(s, e.p) : lire(cible, e.p);
+      if(pourApercu){ cible = ecrire(cible, e.p, e.n); return; }
+      if(e.p.length === 1 && d.ensembles[e.p[0]]){
+        // C-09 M1 : retrait complet d'un champ ensemble (n absent) -> champ supprime s'il ne reste rien
+        if(e.n === undefined){ var reste = fusionEnsemble(e.a, [], sv); cible = ecrire(cible, e.p, reste.length ? reste : undefined); return; }
+        cible = ecrire(cible, e.p, fusionEnsemble(e.a, e.n, sv)); return; }
+      if(!s && op.type !== 'create'){ cible = ecrire(cible, e.p, e.n); return; }
+      if(egal(sv, e.a)) cible = ecrire(cible, e.p, e.n);
+      else if(egal(sv, e.n)) { /* deja applique */ }
+      else r.conflits.push({type: 'modification_concurrente', chemin: e.p, base: e.a, local: e.n, serveur: clone(sv)});
+    });
+    if(r.conflits.length && r.statut === 'appliquee') r.statut = 'conflit_partiel';
+    if(!pourApercu && d.type === 'liste'){ cible._syncOps = (cible._syncOps || []).concat([op.opId]).slice(-10); }
+    if(d.type === 'liste' && cible.id === undefined && op.record && op.record.id !== undefined) cible.id = op.record.id;
+    carte[rid] = cible;
+    return r;
+  }
+  function sansTechnique(rec){
+    if(!estObjet(rec)) return rec;
+    var c = {}; Object.keys(rec).forEach(function(k){ if(!CHAMPS_IGNORES[k]) c[k] = rec[k]; }); return c;
+  }
+  function enForme(d, carte, ordreRef){
+    if(d.type === 'objet'){ var o = {}; Object.keys(carte).forEach(function(k){ o[k] = carte[k]; }); return o; }
+    var vus = {}, res = [];
+    (ordreRef || []).forEach(function(id){ if(carte[id] !== undefined && !vus[id]){ vus[id] = 1; res.push(carte[id]); } });
+    var nouveaux = Object.keys(carte).filter(function(id){ return !vus[id]; });
+    if(d.nouveauxEnTete) res = nouveaux.map(function(id){ return carte[id]; }).concat(res);
+    else nouveaux.forEach(function(id){ res.push(carte[id]); });
+    return res;
+  }
+  function ordreDe(d, valeur){ return d.type === 'objet' ? null : (valeur || []).map(function(r){ return idDe(d, r); }); }
+
+  // ---------------------------------------------------------------- file persistante
+  var IDB_NOM = 'garageos_sync', IDB_STORE = 'ops';
+  var idb = null;
+  function ouvrirIdb(cb){
+    if(GOS_SYNC_CFG.persistance !== 'indexeddb' || !window.indexedDB){ cb(null); return; }
+    try{
+      var req = indexedDB.open(IDB_NOM, 2);
+      req.onupgradeneeded = function(){ var b = req.result; if(!b.objectStoreNames.contains(IDB_STORE)) b.createObjectStore(IDB_STORE, {keyPath: 'opId'});
+        if(!b.objectStoreNames.contains('quarantaine')) b.createObjectStore('quarantaine', {keyPath: 'opId'}); };
+      req.onsuccess = function(){ idb = req.result; cb(idb); };
+      req.onerror = function(){ console.error('GOS_SYNC : IndexedDB indisponible', req.error); cb(null); };
+    }catch(e){ cb(null); }
+  }
+  function lsFile(){ try{ return JSON.parse(localStorage.getItem('gos_sync_file') || '[]'); }catch(e){ return []; } }
+  function persister(op){
+    if(GOS_SYNC_CFG.persistance === 'memoire') return;
+    if(idb){ try{ idb.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).put(op); }catch(e){ console.error('GOS_SYNC idb put', e); } }
+    else { try{ localStorage.setItem('gos_sync_file', JSON.stringify(file)); }catch(e){ console.error('GOS_SYNC : file hors ligne non enregistree (stockage plein)', e); } }
+  }
+  function retirerPersistant(opId){
+    if(GOS_SYNC_CFG.persistance === 'memoire') return;
+    if(idb){ try{ idb.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).delete(opId); }catch(e){} }
+    else { try{ localStorage.setItem('gos_sync_file', JSON.stringify(file)); }catch(e){} }
+  }
+  function chargerFile(cb){
+    if(GOS_SYNC_CFG.persistance === 'memoire'){ cb([]); return; }
+    ouvrirIdb(function(b){
+      if(!b){ cb(lsFile()); return; }
+      try{
+        var req = b.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).getAll();
+        req.onsuccess = function(){ cb(req.result || []); };
+        req.onerror = function(){ cb([]); };
+      }catch(e){ cb([]); }
+    });
+  }
+  var compteurSeq = 0;
+  function prochainSeq(){ compteurSeq = Math.max(compteurSeq + 1, Date.now() * 1000); return compteurSeq; }
+  function ajouterOp(op){
+    op.opId = op.opId || nouvelId('op');
+    op.seq = prochainSeq();
+    op.createdAt = heureServeur(); op.deviceId = (typeof deviceId !== 'undefined' ? deviceId : '?'); op.auteur = utilisateur();
+    op.tentatives = 0;
+    file.push(op); persister(op);
+    trace({e: 'operation_creee', opId: op.opId, c: op.collection, id: op.recordId, type: op.type});
+  }
+  function retirerOps(ids){
+    var ens = {}; ids.forEach(function(i){ ens[i] = 1; });
+    file = file.filter(function(o){ return !ens[o.opId]; });
+    ids.forEach(retirerPersistant);
+  }
+
+  // ---------------------------------------------------------------- C-09 M1 : champs financiers hors de gos_data
+  var M1_F1 = ['paiementsClient','montantPaye','paiementStatut','paiementDate','paiementNote','numeroFactureExterne','numeroSecondaire','factureDeposeeLe','delaiPaiementPersonnalise','forfaitTkmApplique','forfaitJourDepot'];
+  var M1_F2 = ['valideDir','valideDirLe','devisValideDir','devisValideDirLe','rejetDir','revalidationDemandee'];
+  var M1_ECRITURE = {gos_fin_paiements: ['direction','reception'], gos_fin_validations: ['direction']};
+  function m1Actif(){ return !!COLL['gos_fin_paiements'] && !!COLL['gos_fin_validations']; }
+  function m1PeutEcrire(cle){ return typeof currentRole !== 'undefined' && M1_ECRITURE[cle].indexOf(currentRole) >= 0; }
+  function m1Separer(rec){
+    var base = clone(rec) || {}, f1 = null, f2 = null;
+    M1_F1.forEach(function(k){ if(base[k] !== undefined){ f1 = f1 || {}; f1[k] = base[k]; delete base[k]; } });
+    if(estObjet(base.chiffrage)) M1_F2.forEach(function(k){ if(base.chiffrage[k] !== undefined){ f2 = f2 || {chiffrage: {}}; f2.chiffrage[k] = base.chiffrage[k]; delete base.chiffrage[k]; } });
+    return {base: base, f1: f1, f2: f2};
+  }
+  function m1Composer(liste){
+    var P = window.GOS_FIN_PAIEMENTS || {}, V = window.GOS_FIN_VALIDATIONS || {};
+    return liste.map(function(v){
+      if(!v || v.id === undefined) return v;
+      var id = String(v.id), p = P[id], q = V[id];
+      if(!p && !(q && q.chiffrage)) return v;
+      var c = clone(v);
+      if(p) M1_F1.forEach(function(k){ if(p[k] !== undefined) c[k] = clone(p[k]); else delete c[k]; });
+      if(q && q.chiffrage){ if(!estObjet(c.chiffrage)) c.chiffrage = {}; M1_F2.forEach(function(k){ if(q.chiffrage[k] !== undefined) c.chiffrage[k] = clone(q.chiffrage[k]); else delete c.chiffrage[k]; }); }
+      return c;
+    });
+  }
+  function emettre(cle, type, id, rec, b, patch){
+    if(cle !== 'vehicles' || !m1Actif()){
+      if(type === 'create') ajouterOp({collection: cle, recordId: id, type: 'create', record: clone(rec)});
+      else if(type === 'update') ajouterOp({collection: cle, recordId: id, type: 'update', patch: patch, baseComplete: sansPhotos(b)});
+      else ajouterOp({collection: cle, recordId: id, type: 'delete', base: sansPhotos(b)});
+      return;
+    }
+    if(type === 'create'){
+      var s = m1Separer(rec);
+      ajouterOp({collection: 'vehicles', recordId: id, type: 'create', record: s.base});
+      if(s.f1) ajouterOp({collection: 'gos_fin_paiements', recordId: id, type: 'update', patch: diff({}, s.f1, [], [], COLL.gos_fin_paiements), baseComplete: {}});
+      if(s.f2) ajouterOp({collection: 'gos_fin_validations', recordId: id, type: 'update', patch: diff({}, s.f2, [], [], COLL.gos_fin_validations), baseComplete: {}});
+      return;
+    }
+    if(type === 'delete'){
+      ajouterOp({collection: 'vehicles', recordId: id, type: 'delete', base: sansPhotos(m1Separer(b).base)});
+      if((window.GOS_FIN_PAIEMENTS || {})[id] && m1PeutEcrire('gos_fin_paiements')) ajouterOp({collection: 'gos_fin_paiements', recordId: id, type: 'delete', base: clone(window.GOS_FIN_PAIEMENTS[id])});
+      if((window.GOS_FIN_VALIDATIONS || {})[id] && m1PeutEcrire('gos_fin_validations')) ajouterOp({collection: 'gos_fin_validations', recordId: id, type: 'delete', base: clone(window.GOS_FIN_VALIDATIONS[id])});
+      return;
+    }
+    var pv = [], p1 = [], p2 = [];
+    patch.forEach(function(e){
+      if(M1_F1.indexOf(e.p[0]) >= 0) p1.push(e);
+      else if(e.p[0] === 'chiffrage' && e.p.length >= 2 && M1_F2.indexOf(e.p[1]) >= 0) p2.push(e);
+      else if(e.p[0] === 'chiffrage' && e.p.length === 1){
+        var a = estObjet(e.a) ? clone(e.a) : e.a, nn = estObjet(e.n) ? clone(e.n) : e.n;
+        M1_F2.forEach(function(k){
+          var av = estObjet(a) ? a[k] : undefined, nv = estObjet(nn) ? nn[k] : undefined;
+          if(estObjet(a)) delete a[k]; if(estObjet(nn)) delete nn[k];
+          if(!egal(av, nv)) p2.push({p: ['chiffrage', k], a: av, n: nv});
+        });
+        if(!egal(a, nn)) pv.push({p: ['chiffrage'], a: a, n: nn});
+      }
+      else pv.push(e);
+    });
+    var sb = m1Separer(b);
+    if(pv.length) ajouterOp({collection: 'vehicles', recordId: id, type: 'update', patch: pv, baseComplete: sansPhotos(sb.base)});
+    if(p1.length) ajouterOp({collection: 'gos_fin_paiements', recordId: id, type: 'update', patch: p1, baseComplete: sb.f1 || {}});
+    if(p2.length) ajouterOp({collection: 'gos_fin_validations', recordId: id, type: 'update', patch: p2, baseComplete: sb.f2 || {}});
+  }
+  function recomposer(){ if(serveur['vehicles'] !== undefined) publierVue('vehicles', 'fin'); }
+  // Retour arriere M1 : recopie les champs F1/F2 de gos_fin_* dans gos_data (operations, fusion a trois voies).
+  // gos_fin_* ne sont pas effaces. A lancer par UN poste Direction avant de republier l'ancienne version.
+  function reintegrerM1(){
+    if(!m1Actif() || serveur['vehicles'] === undefined) return -1;
+    var n = 0, P = window.GOS_FIN_PAIEMENTS || {}, V = window.GOS_FIN_VALIDATIONS || {};
+    (serveur['vehicles'] || []).forEach(function(v){
+      if(!v || v.id === undefined) return;
+      var id = String(v.id), p = P[id], q = V[id] && V[id].chiffrage, patch = [];
+      if(p) M1_F1.forEach(function(k){ if(p[k] !== undefined && !egal(v[k], p[k])) patch.push({p: [k], a: clone(v[k]), n: clone(p[k])}); });
+      if(q){
+        if(!estObjet(v.chiffrage)) patch.push({p: ['chiffrage'], a: clone(v.chiffrage), n: clone(q)});
+        else M1_F2.forEach(function(k){ if(q[k] !== undefined && !egal(v.chiffrage[k], q[k])) patch.push({p: ['chiffrage', k], a: clone(v.chiffrage[k]), n: clone(q[k])}); });
+      }
+      if(patch.length){ ajouterOp({collection: 'vehicles', recordId: id, type: 'update', patch: patch, baseComplete: sansPhotos(v), reintegrationM1: true}); n++; }
+    });
+    m1Fait = true;
+    trace({e: 'reintegration_m1', dossiers: n});
+    demanderFlux();
+    return n;
+  }
+  // Migration M1 (Direction) : deplace les champs F1/F2 encore presents dans gos_data. Idempotente.
+  var m1Fait = false;
+  function migrerM1(){
+    if(!window.GOS_M1_ETAT_CONNU || window.GOS_M1_SUSPENDU) return 0;   // etat lu dans gos_config/m1 (retour arriere possible)
+    if(m1Fait || !m1Actif() || serveur['vehicles'] === undefined || recu['gos_fin_paiements'] === undefined || recu['gos_fin_validations'] === undefined) return 0;
+    var n = 0, P = window.GOS_FIN_PAIEMENTS || {}, V = window.GOS_FIN_VALIDATIONS || {};
+    (serveur['vehicles'] || []).forEach(function(v){
+      if(!v || v.id === undefined) return;
+      var id = String(v.id), s = m1Separer(v);
+      if(!s.f1 && !s.f2) return;
+      if(s.f1 && !P[id]) ajouterOp({collection: 'gos_fin_paiements', recordId: id, type: 'update', patch: diff({}, s.f1, [], [], COLL.gos_fin_paiements), baseComplete: {}, migrationM1: true});
+      if(s.f2 && !(V[id] && V[id].chiffrage)) ajouterOp({collection: 'gos_fin_validations', recordId: id, type: 'update', patch: diff({}, s.f2, [], [], COLL.gos_fin_validations), baseComplete: {}, migrationM1: true});
+      var retrait = [];
+      M1_F1.forEach(function(k){ if(v[k] !== undefined) retrait.push({p: [k], a: clone(v[k]), n: undefined}); });
+      if(estObjet(v.chiffrage)) M1_F2.forEach(function(k){ if(v.chiffrage[k] !== undefined) retrait.push({p: ['chiffrage', k], a: clone(v.chiffrage[k]), n: undefined}); });
+      ajouterOp({collection: 'vehicles', recordId: id, type: 'update', patch: retrait, baseComplete: sansPhotos(v), migrationM1: true});
+      n++;
+    });
+    m1Fait = true;
+    trace({e: 'migration_m1', dossiers: n});
+    if(n){ publierVue('gos_fin_paiements', 'm1'); publierVue('gos_fin_validations', 'm1'); publierVue('vehicles', 'm1'); demanderFlux(); }
+    return n;
+  }
+
+  // ---------------------------------------------------------------- C-09 : quarantaine et roles
+  var nbQuarantaine = 0;
+  function mettreEnQuarantaine(ops, raison){
+    ops.forEach(function(op){
+      op.quarantaine = {raison: raison, le: heureServeur(), uid: (typeof GOS_AUTH !== 'undefined' ? GOS_AUTH.uid : null)};
+      nbQuarantaine++;
+      if(idb){ try{ idb.transaction('quarantaine', 'readwrite').objectStore('quarantaine').put(op); }catch(e){ console.error('quarantaine', e); } }
+      else { try{ var q = JSON.parse(localStorage.getItem('gos_sync_quarantaine') || '[]'); q.push(op); localStorage.setItem('gos_sync_quarantaine', JSON.stringify(q)); }catch(e){} }
+    });
+    retirerOps(ops.map(function(o){ return o.opId; }));
+  }
+  function listeQuarantaine(cb){
+    if(idb){ try{ var r = idb.transaction('quarantaine', 'readonly').objectStore('quarantaine').getAll(); r.onsuccess = function(){ cb(r.result || []); }; r.onerror = function(){ cb([]); }; return; }catch(e){} }
+    try{ cb(JSON.parse(localStorage.getItem('gos_sync_quarantaine') || '[]')); }catch(e){ cb([]); }
+  }
+  function definirRole(role, authentifie){
+    autorisees = {};
+    ORDRE.forEach(function(cle){ autorisees[cle] = !authentifie || gosAutorisePour(role, cle); });
+    estDirectionAuth = !!authentifie && role === 'direction';
+    if(authentifie){
+      // confidentialite : une collection non autorisee pour ce role ne reste pas sur l'appareil
+      ORDRE.forEach(function(cle){
+        if(autorisees[cle]) return;
+        var d = COLL[cle];
+        try{ if(cle === 'gos_comptes') localStorage.removeItem(COMPTES_KEY); else { d.ecrire(d.type === 'objet' ? {} : []); localStorage.removeItem(cle); } }catch(e){}
+        ombre[cle] = {};
+      });
+    }
+    roleConnu = true;
+    trace({e: 'role', role: role, authentifie: !!authentifie});
+    if(demarrageEnAttente){ var f = demarrageEnAttente; demarrageEnAttente = null; f(); }
+  }
+  function arreterEtMettreEnQuarantaine(raison, cb){
+    arrete = true; enLigne = false;
+    ecoutes.forEach(function(r){ try{ r.off(); }catch(e){} }); ecoutes = [];
+    var ops = file.slice();
+    if(ops.length) mettreEnQuarantaine(ops, raison);
+    trace({e: 'arret', raison: raison, quarantaine: ops.length});
+    setTimeout(function(){ if(cb) cb(ops.length); }, 300);
+  }
+
+  // ---------------------------------------------------------------- vues locales
+  // Vue presentee a l'application = etat serveur (sans les elements supprimes)
+  // + operations locales en attente (affichage optimiste).
+  function calculerVue(cle){
+    var d = COLL[cle];
+    if(serveur[cle] === undefined) return d.lire();   // etat serveur inconnu : l'etat local contient deja les operations en attente
+    var base = enCarte(d, serveur[cle]);
+    var tomb = tombes[cle] || {};
+    if(GOS_SYNC_CFG.tombstones) Object.keys(tomb).forEach(function(id){ delete base[id]; });
+    file.forEach(function(op){ if(op.collection === cle) appliquer(d, base, op, tomb, true); });
+    var ordre = ordreDe(d, serveur[cle] !== undefined ? serveur[cle] : d.lire());
+    var vueC = enForme(d, base, ordre);
+    return (cle === 'vehicles' && m1Actif()) ? m1Composer(vueC) : vueC;   // C-09 M1 : dossier compose
+  }
+  function publierVue(cle, raison){
+    var d = COLL[cle];
+    // Filet de securite : une modification locale en memoire pas encore enregistree
+    // (sauvegarde non appelee) est transformee en operation avant d'etre remplacee.
+    capturer(cle);
+    var vue = calculerVue(cle);
+    d.ecrire(vue);
+    ombre[cle] = clone(enCarte(d, vue));
+    try{ if(d.local) d.local(vue); }catch(e){ console.error('GOS_SYNC stockage local ' + cle, e); }
+    try{ if(d.apres) d.apres(raison); }catch(e){ console.error('GOS_SYNC apres ' + cle, e); }
+  }
+
+  // ---------------------------------------------------------------- detection des modifications locales
+  function capturer(cle){
+    var d = COLL[cle]; if(!ombre[cle]) return 0;
+    var actuel = enCarte(d, d.lire()), avant = ombre[cle], n = 0;
+    Object.keys(actuel).forEach(function(id){
+      var rec = actuel[id], b = avant[id];
+      if(b === undefined){ emettre(cle, 'create', id, rec, null, null); n++; }
+      else if(JSON.stringify(b) !== JSON.stringify(rec)){
+        var patch = diff(b, rec, [], [], d);
+        if(patch.length){ emettre(cle, 'update', id, rec, b, patch); n++; }
+      }
+      avant[id] = clone(rec);
+    });
+    Object.keys(avant).forEach(function(id){
+      if(actuel[id] === undefined){ emettre(cle, 'delete', id, null, avant[id], null); delete avant[id]; n++; }
+    });
+    return n;
+  }
+  function sansPhotos(rec){ if(!estObjet(rec) || !rec.photos) return clone(rec); var c = clone(rec); c.photos = []; return c; }
+
+  function enregistrer(cle){
+    if(!COLL[cle]) return;
+    if(!localEstPret) return;          // avant la fin du chargement local : rien a comparer
+    if(!ombre[cle]) ombre[cle] = clone(enCarte(COLL[cle], COLL[cle].lire()));
+    var n = capturer(cle);
+    if(n) majIndicateur();
+    demanderFlux();
+  }
+
+  // Stock : operation differentielle (qte / reserve), deja appliquee localement par l'appelant.
+  function stockDelta(article, dQte, dRes, options){
+    if(!GOS_SYNC_CFG.stockDifferentiel || !article || !localEstPret) return;
+    options = options || {};
+    var cle = 'gos_stock', id = idDe(COLL[cle], article);
+    if(!ombre[cle]) ombre[cle] = clone(enCarte(COLL[cle], COLL[cle].lire()));
+    var o = ombre[cle][id];
+    if(o){ o.qte = Math.max(0, (parseInt(o.qte, 10) || 0) + (dQte || 0)); o.reserve = Math.max(0, (parseInt(o.reserve, 10) || 0) + (dRes || 0)); }
+    ajouterOp({collection: cle, recordId: id, type: 'delta', dQte: dQte || 0, dRes: dRes || 0, exigeDispo: !!options.exigeDispo, lien: options.lien || null, libelle: article.nom || ''});
+  }
+
+  // ---------------------------------------------------------------- envoi (transactions)
+  function demanderFlux(){ fluxDemande = true; setTimeout(flux, 0); }
+  function pret(cle){ return !arrete && enLigne && db && fileChargee && recu[cle] === epoque && autorisee(cle) && !refus[cle]; }
+  function flux(){
+    if(fluxEnCours || !fluxDemande) return;
+    fluxDemande = false;
+    // C-09 : operations visant une collection dont la lecture est refusee -> quarantaine (jamais envoyees plus tard sous une autre identite)
+    Object.keys(refus).forEach(function(c){ if(!COLL[c]) return; var b = file.filter(function(o){ return o.collection === c; }); if(b.length) mettreEnQuarantaine(b, 'lecture_refusee'); });
+    var cles = ORDRE.filter(function(c){ return pret(c) && file.some(function(o){ return o.collection === c; }); });
+    if(!cles.length){ majIndicateur(); return; }
+    fluxEnCours = true;
+    var i = 0;
+    (function suivante(){
+      if(i >= cles.length){ fluxEnCours = false; majIndicateur(); if(file.length && enLigne) demanderFlux(); return; }
+      envoyerCollection(cles[i++], suivante);
+    })();
+  }
+  function envoyerCollection(cle, suite){
+    var d = COLL[cle];
+    var lot = file.filter(function(o){ return o.collection === cle; }).slice(0, 60);
+    if(!lot.length || !pret(cle)){ suite(); return; }
+    var monEpoque = epoque;
+    // 1) suppressions : l'enregistrement de suppression est ecrit AVANT la transaction
+    var ecritures = [];
+    if(GOS_SYNC_CFG.tombstones){
+      lot.forEach(function(op){
+        if(op.type !== 'delete' || (tombes[cle] || {})[op.recordId]) return;
+        var t = {_deleted: true, _deletedAt: firebase.database.ServerValue.TIMESTAMP, _deletedBy: op.auteur, deviceId: op.deviceId,
+                 opId: op.opId, id: op.recordId, enregistrement: op.base || null};
+        tombes[cle] = tombes[cle] || {}; tombes[cle][op.recordId] = {_deleted: true, _deletedAt: heureServeur(), _deletedBy: op.auteur, id: op.recordId};
+        ecritures.push(db.ref('gos_tombstones/' + cle + '/' + cleFirebase(op.recordId)).set(t));
+      });
+    }
+    Promise.all(ecritures).then(function(){
+      var resultats = [];
+      lot.forEach(function(op){ op.tentatives = (op.tentatives || 0) + 1; persister(op); });
+      return db.ref(d.chemin).transaction(function(courant){
+        resultats = [];
+        var liste = d.chemin === 'gos_data' ? (courant && courant.vehicles ? safeParse(courant.vehicles, []) : []) :
+                    (courant === null || courant === undefined ? (d.type === 'objet' ? {} : []) : safeParse(courant, d.type === 'objet' ? {} : []));
+        var carte = enCarte(d, liste), ordre = ordreDe(d, liste);
+        var tomb = tombes[cle] || {};
+        // nettoyage : un element supprime (tombstone) ne peut pas reapparaitre sur le serveur
+        if(GOS_SYNC_CFG.tombstones) Object.keys(tomb).forEach(function(id){ delete carte[id]; });
+        lot.forEach(function(op){ resultats.push(appliquer(d, carte, op, tomb, false)); });
+        var nv = enForme(d, carte, ordre);
+        if(d.chemin === 'gos_data'){
+          var o = estObjet(courant) ? clone(courant) : {};
+          o.vehicles = JSON.stringify(nv); o.ts = heureServeur(); o.deviceId = (typeof deviceId !== 'undefined' ? deviceId : '?');
+          o.updatedBy = utilisateur();
+          return o;
+        }
+        return JSON.stringify(nv);
+      }).then(function(res){
+        if(!res || !res.committed){ trace({e: 'transaction_non_validee', c: cle}); suite(); return; }
+        var ids = lot.map(function(o){ return o.opId; });
+        retirerOps(ids);
+        resultats.forEach(function(r){ traiterResultat(cle, r); });
+        trace({e: 'transaction_validee', c: cle, ops: ids.length});
+        // l'etat valide devient l'etat serveur connu
+        var brut = res.snapshot ? res.snapshot.val() : null;
+        var lu = lireServeurBrut(d, brut);
+        if(lu !== undefined && monEpoque === epoque){ serveur[cle] = lu === null ? (d.type === 'objet' ? {} : []) : lu; publierVue(cle, 'transaction'); }
+        if(typeof showSyncStatus === 'function') showSyncStatus('saved');
+        suite();
+      });
+    }).catch(function(e){
+      if(e && e.code === 'PERMISSION_DENIED'){
+        // C-09 : refus des regles = definitif. Les operations ne sont ni appliquees ni jetees :
+        // elles passent en quarantaine locale (examen par la Direction).
+        mettreEnQuarantaine(lot, 'refus_permission');
+        trace({e: 'operations_en_quarantaine', c: cle, n: lot.length});
+        if(serveur[cle] !== undefined) publierVue(cle, 'quarantaine');
+        majIndicateur(); suite(); return;
+      }
+      console.error('GOS_SYNC : envoi ' + cle + ' reporte', e);
+      trace({e: 'erreur_envoi', c: cle, msg: String(e && e.message || e)});
+      if(typeof showSyncStatus === 'function') showSyncStatus('error');
+      setTimeout(function(){ demanderFlux(); }, 3000);
+      suite();
+    });
+  }
+  function safeParse(s, def){ try{ var v = typeof s === 'string' ? JSON.parse(s) : s; return v === null || v === undefined ? def : v; }catch(e){ return def; } }
+
+  function traiterResultat(cle, r){
+    var op = r.op, d = COLL[cle];
+    if(r.statut === 'echec'){
+      trace({e: 'operation_refusee', opId: op.opId, raison: r.raison});
+      if(d.surEchec) try{ d.surEchec(op, r); }catch(e){ console.error(e); }
+      return;
+    }
+    r.conflits.forEach(function(c){ enregistrerConflit(cle, op, c); });
+  }
+  function nettoyerValeur(v){
+    var s = JSON.stringify(v === undefined ? null : v);
+    if(s && s.length > 150000) return {tronque: true, apercu: s.slice(0, 2000), taille: s.length};
+    return v === undefined ? null : v;
+  }
+  function enregistrerConflit(cle, op, c){
+    if(!db) return;
+    var d = COLL[cle];
+    var rec = (serveur[cle] && enCarte(d, serveur[cle])[op.recordId]) || op.record || op.baseComplete || op.base || {};
+    var entree = {
+      collection: cle, recordId: op.recordId, type: c.type, chemin: c.chemin ? c.chemin.join('.') : '',
+      cheminListe: c.chemin || null,
+      base: nettoyerValeur(c.base), local: nettoyerValeur(c.local), serveur: nettoyerValeur(c.serveur),
+      tombstone: c.tombstone || null,
+      libelle: d.libelle ? d.libelle(rec) : String(op.recordId),
+      opId: op.opId, deviceId: op.deviceId, auteur: op.auteur, operationCreeeLe: op.createdAt,
+      detecteLe: firebase.database.ServerValue.TIMESTAMP, statut: 'ouvert'
+    };
+    db.ref('gos_conflits').push().set(entree);
+    trace({e: 'conflit', c: cle, id: op.recordId, type: c.type});
+  }
+
+  // ---------------------------------------------------------------- reception serveur
+  function surValeurServeur(cle, brut){
+    var d = COLL[cle];
+    var lu = lireServeurBrut(d, brut);
+    if(lu === undefined) return;                                   // illisible : on ne touche a rien
+    var premier = recu[cle] !== epoque;
+    if(lu === null && serveur[cle] === undefined && localEstPret){
+      // Noeud ABSENT du serveur (jamais cree, ex. base neuve) : les elements locaux
+      // (ex. listes par defaut) deviennent des creations explicites. Un noeud vide
+      // mais existant ("[]") n'est PAS concerne, et les suppressions sont respectees.
+      // C-09 : gos_comptes (ancienne connexion, mots de passe en clair) n'est JAMAIS
+      // recree a partir des comptes par defaut du code : sinon l'effacement de fin de
+      // bascule serait annule au demarrage suivant.
+      if(cle === 'gos_comptes'){
+        // la vue locale (comptes par defaut du code) reste utilisable pour l'ancienne
+        // connexion pendant la transition, mais rien n'est envoye au serveur.
+        serveur[cle] = clone(d.lire() || []); recu[cle] = epoque; trace({e: 'amorcage_refuse', c: cle}); return;
+      }
+      var locale = enCarte(d, d.lire()), tomb0 = tombes[cle] || {};
+      var dejaEnFile = {}; file.forEach(function(o){ if(o.collection === cle) dejaEnFile[o.recordId] = 1; });
+      Object.keys(locale).forEach(function(id){
+        if(tomb0[id] || dejaEnFile[id]) return;
+        ajouterOp({collection: cle, recordId: id, type: 'create', record: clone(locale[id]), amorcage: true});
+      });
+    }
+    serveur[cle] = lu === null ? (d.type === 'objet' ? {} : []) : lu;
+    recu[cle] = epoque;
+    publierVue(cle, premier ? 'premiere_reception' : 'mise_a_jour');
+    demanderFlux();
+  }
+  function surTombstonesCollection(cle, val){
+    var nouv = {};
+    Object.keys(val || {}).forEach(function(k){ var t = val[k]; if(t && t._deleted) nouv[t.id !== undefined ? String(t.id) : decodeURIComponent(k)] = t; });
+    Object.keys(tombes[cle] || {}).forEach(function(id){ if(!nouv[id]) nouv[id] = tombes[cle][id]; });
+    tombes[cle] = nouv;
+    if(serveur[cle] !== undefined && Object.keys(nouv).length) publierVue(cle, 'suppressions');
+  }
+  function surTombstones(val){
+    var nouv = {};
+    Object.keys(val || {}).forEach(function(c){
+      nouv[c] = {};
+      Object.keys(val[c] || {}).forEach(function(k){ var t = val[c][k]; if(t && t._deleted) nouv[c][t.id !== undefined ? String(t.id) : decodeURIComponent(k)] = t; });
+    });
+    // on garde les suppressions locales pas encore confirmees
+    Object.keys(tombes).forEach(function(c){ Object.keys(tombes[c]).forEach(function(id){ nouv[c] = nouv[c] || {}; if(!nouv[c][id]) nouv[c][id] = tombes[c][id]; }); });
+    tombes = nouv;
+    ORDRE.forEach(function(c){ if(serveur[c] !== undefined && tombes[c] && Object.keys(tombes[c]).length) publierVue(c, 'suppressions'); });
+  }
+
+  // ---------------------------------------------------------------- demarrage / connexion
+  var localEstPret = false, demarrageEnAttente = null;
+  // C-09 : n'ecouter que les noeuds autorises pour le role ; refus de permission = definitif
+  var roleConnu = false, autorisees = null, estDirectionAuth = false, arrete = false, refus = {}, ecoutes = [];
+  function autorisee(cle){ return !autorisees || autorisees[cle] === true; }
+  function ecouter(chemin, cb, cle){
+    var ref = db.ref(chemin); ecoutes.push(ref);
+    ref.on('value', function(s){ delete refus[cle || chemin]; cb(s); }, function(e){
+      // C-09 : SEUL un refus de droits rend la collection illisible. Une ecoute interrompue
+      // par le reseau (hors ligne) ne met RIEN en quarantaine : elle reprend a la reconnexion.
+      if(!e || e.code !== 'PERMISSION_DENIED'){ trace({e: 'ecoute_interrompue', chemin: chemin, code: e && e.code}); return; }
+      refus[cle || chemin] = true; trace({e: 'ecoute_refusee', chemin: chemin, code: e.code});
+      var bloquees = file.filter(function(o){ return o.collection === cle; });
+      if(cle && COLL[cle] && bloquees.length) mettreEnQuarantaine(bloquees, 'lecture_refusee');
+      majIndicateur();
+    });
+  }
+  // Appele a la fin du chargement local (window.onload) : l'etat charge devient la
+  // reference des modifications locales. Toute difference ulterieure = operation.
+  function localPret(){
+    ORDRE.forEach(function(cle){ ombre[cle] = clone(enCarte(COLL[cle], COLL[cle].lire())); });
+    localEstPret = true;
+    if(demarrageEnAttente){ var f = demarrageEnAttente; demarrageEnAttente = null; f(); }
+  }
+  function demarrer(fb){
+    db = fb;
+    if(!localEstPret || !roleConnu){ demarrageEnAttente = function(){ demarrer(fb); }; return; }
+    if(demarrer.fait) return; demarrer.fait = true;
+    chargerFile(function(ops){
+      var dejaEnMemoire = file; // operations creees pendant le chargement
+      file = (ops || []).sort(function(a, b){ return a.seq - b.seq; });
+      var connus = {}; file.forEach(function(o){ connus[o.opId] = 1; compteurSeq = Math.max(compteurSeq, o.seq || 0); });
+      dejaEnMemoire.forEach(function(o){ if(!connus[o.opId]){ o.seq = prochainSeq(); file.push(o); persister(o); } });
+      fileChargee = true;
+      trace({e: 'file_chargee', n: file.length});
+      // les operations en attente sont affichees tout de suite (vue optimiste)
+      ORDRE.forEach(function(cle){ if(serveur[cle] !== undefined && file.some(function(o){ return o.collection === cle; })) publierVue(cle, 'file_restauree'); });
+      majIndicateur();
+      demanderFlux();
+    });
+    // C-09 : les regles ne sont pas des filtres -> une ecoute par collection AUTORISEE
+    if(GOS_SYNC_CFG.tombstones){
+      ORDRE.forEach(function(cle){ if(!autorisee(cle)) return; ecouter('gos_tombstones/' + cle, function(s){ surTombstonesCollection(cle, s.val()); }, 'tomb_' + cle); });
+    }
+    ORDRE.forEach(function(cle){
+      if(!autorisee(cle)) return;
+      var d = COLL[cle];
+      ecouter(d.chemin, function(s){ surValeurServeur(cle, s.val()); }, cle);
+    });
+    if(!autorisees || estDirectionAuth) ecouter('gos_conflits', function(s){
+      var v = s.val() || {}; conflitsOuverts = {};
+      Object.keys(v).forEach(function(k){ if(v[k] && v[k].statut === 'ouvert') conflitsOuverts[k] = v[k]; });
+      majIndicateur();
+    }, 'gos_conflits');
+    db.ref('.info/serverTimeOffset').on('value', function(s){ gosDecalageServeurMs = s.val() || 0; });
+    if(connexionEnAttente !== null){ var c = connexionEnAttente; connexionEnAttente = null; surConnexion(c); }
+  }
+  var connexionEnAttente = null;
+  function surConnexion(connecte){
+    if(!demarrer.fait){ connexionEnAttente = connecte; return; }
+    if(connecte && !enLigne){
+      enLigne = true; epoque++;
+      refus = {};   // C-09 : un refus constate hors ligne n'est pas definitif, il est reevalue a la reconnexion
+      // 1) recuperer d'abord l'etat serveur de chaque collection (la reception
+      //    marque la collection « prete ») ; 2) seulement ensuite, envoyer la file.
+      ORDRE.forEach(function(cle){
+        if(!autorisee(cle) || refus[cle] || arrete) return;
+        var ep = epoque;
+        db.ref(COLL[cle].chemin).once('value').then(function(s){ if(ep === epoque && recu[cle] !== epoque) surValeurServeur(cle, s.val()); }).catch(function(){ refus[cle] = true; });
+      });
+    } else if(!connecte && enLigne){
+      enLigne = false; epoque++;
+    }
+    majIndicateur();
+  }
+
+  // ---------------------------------------------------------------- interface : indicateur et conflits
+  function majIndicateur(){
+    var nbC = Object.keys(conflitsOuverts).length, nbF = file.length;
+    var el = document.getElementById('gosSyncIndicateur');
+    if(!nbC && !nbF && !nbQuarantaine){ if(el) el.style.display = 'none'; return; }
+    if(!el){
+      el = document.createElement('div'); el.id = 'gosSyncIndicateur';
+      el.style.cssText = 'position:fixed;left:14px;bottom:14px;z-index:99990;background:#fff;border:1px solid #d0d0d0;border-radius:8px;padding:7px 11px;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.15);cursor:pointer';
+      el.onclick = function(){ ouvrirConflits(); };
+      document.body.appendChild(el);
+    }
+    var t = [];
+    if(nbF) t.push('\u21BB ' + nbF + ' modification(s) en attente d\'envoi' + (enLigne ? '' : ' (hors ligne)'));
+    if(nbQuarantaine) t.push('<span style="color:#854F0B;font-weight:700">\u26D4 ' + nbQuarantaine + ' operation(s) refusee(s) (droits insuffisants), en quarantaine</span>');
+    if(nbC) t.push('<span style="color:#A32D2D;font-weight:700">\u26A0 ' + nbC + ' conflit(s) a verifier</span>');
+    el.innerHTML = t.join(' &middot; ');
+    el.style.display = 'block';
+  }
+  function court(v){ var s = JSON.stringify(v); if(s === undefined) s = '—'; return s.length > 160 ? s.slice(0, 160) + '…' : s; }
+  function echapper(s){ return String(s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function ouvrirConflits(){
+    var ex = document.getElementById('gosModaleConflits'); if(ex) ex.remove();
+    var ids = Object.keys(conflitsOuverts);
+    var h = '<div class="modal" style="width:680px;max-height:82vh;overflow-y:auto"><div class="mhead"><h2>Conflits de synchronisation</h2>'
+      + '<button class="btn btn-sm" onclick="document.getElementById(\'gosModaleConflits\').remove()">X</button></div><div class="mbody" style="padding:14px">';
+    h += '<p class="xs muted" style="margin-bottom:10px">Deux postes ont modifie la meme information differemment, ou un poste a modifie un element supprime ailleurs. Rien n\'a ete ecrase : la valeur actuellement enregistree est conservee et la valeur du poste est gardee ici.</p>';
+    if(!ids.length) h += '<div class="xs muted">Aucun conflit ouvert.</div>';
+    ids.forEach(function(k){
+      var c = conflitsOuverts[k];
+      h += '<div style="border:1px solid #e2e2e2;border-radius:6px;padding:9px;margin-bottom:8px;font-size:12px">'
+        + '<div style="font-weight:700">' + echapper(c.libelle || c.recordId) + ' <span class="xs muted">(' + echapper(c.collection) + (c.chemin ? ' — ' + echapper(c.chemin) : '') + ')</span></div>'
+        + '<div class="xs muted">' + echapper(c.type) + ' · poste ' + echapper(c.deviceId || '?') + ' · ' + echapper(c.auteur || '?') + ' · ' + (c.detecteLe ? new Date(c.detecteLe).toLocaleString('fr-FR') : '') + '</div>'
+        + '<div>Valeur de depart : <code>' + echapper(court(c.base)) + '</code></div>'
+        + '<div>Valeur du poste : <code>' + echapper(court(c.local)) + '</code></div>'
+        + '<div>Valeur enregistree : <code>' + echapper(court(c.serveur)) + '</code></div>'
+        + '<div style="margin-top:6px;display:flex;gap:6px">'
+        + '<button class="btn btn-sm" onclick="GOS_SYNC.resoudreConflit(\'' + k + '\',\'garder\')">Garder la valeur enregistree</button>'
+        + (c.type === 'modification_concurrente' ? '<button class="btn btn-sm btn-primary" onclick="GOS_SYNC.resoudreConflit(\'' + k + '\',\'appliquer\')">Appliquer la valeur du poste</button>' : '')
+        + '</div></div>';
+    });
+    h += '</div></div>';
+    var o = document.createElement('div'); o.className = 'overlay'; o.id = 'gosModaleConflits'; o.style.zIndex = '99995'; o.style.display = 'flex';
+    o.innerHTML = h; document.body.appendChild(o);
+  }
+  function resoudreConflit(k, action){
+    var c = conflitsOuverts[k]; if(!c || !db) return;
+    if(action === 'appliquer' && c.cheminListe && COLL[c.collection]){
+      var d = COLL[c.collection];
+      var vue = enCarte(d, d.lire()), rec = vue[c.recordId];
+      if(rec){
+        var actuelle = lire(rec, c.cheminListe);
+        ajouterOp({collection: c.collection, recordId: c.recordId, type: 'update', patch: [{p: c.cheminListe, a: clone(actuelle), n: clone(c.local)}], baseComplete: sansPhotos(rec)});
+        publierVue(c.collection, 'resolution_conflit'); demanderFlux();
+      }
+    }
+    db.ref('gos_conflits/' + k).update({statut: action === 'appliquer' ? 'resolu_valeur_poste' : 'resolu_valeur_enregistree',
+      resoluPar: utilisateur(), resoluLe: firebase.database.ServerValue.TIMESTAMP});
+    var m = document.getElementById('gosModaleConflits'); if(m) m.remove();
+  }
+
+  return {
+    definir: definir, enregistrer: enregistrer, localPret: localPret, definirRole: definirRole,
+    arreterEtMettreEnQuarantaine: arreterEtMettreEnQuarantaine, listeQuarantaine: listeQuarantaine,
+    recomposer: recomposer, migrerM1: migrerM1, reintegrerM1: reintegrerM1, _m1: {separer: function(r){ return m1Separer(r); }, F1: M1_F1, F2: M1_F2},
+    refus: function(){ return JSON.parse(JSON.stringify(refus)); }, nbQuarantaine: function(){ return nbQuarantaine; }, stockDelta: stockDelta, demarrer: demarrer, surConnexion: surConnexion,
+    ouvrirConflits: ouvrirConflits, resoudreConflit: resoudreConflit,
+    quandRecu: function(cle, cb){ (function att(){ if(recu[cle] !== undefined && recu[cle] > 0) cb(); else setTimeout(att, 150); })(); },
+    etat: function(){ return {enLigne: enLigne, epoque: epoque, fileChargee: fileChargee, file: clone(file), recu: clone(recu),
+                              conflitsOuverts: Object.keys(conflitsOuverts).length, tombes: Object.keys(tombes).reduce(function(a, c){ a[c] = Object.keys(tombes[c]); return a; }, {}),
+                              journal: journal.slice(-60)}; },
+    _interne: {diff: diff, appliquer: appliquer, canon: canon}
+  };
+})();
+
+// ---------------------------------------------------------------- declaration des collections
+(function(){
+  function lsEcrire(cle){ return function(vue){ localStorage.setItem(cle, JSON.stringify(vue)); }; }
+  function rafraichir(){ if(document.getElementById('content') && !(typeof uneModaleEstOuverte === 'function' && uneModaleEstOuverte())) renderPage(); }
+  GOS_SYNC.definir('vehicles', {
+    chemin: 'gos_data', nouveauxEnTete: true, ensembles: {photos: true, paiementsClient: true},
+    lire: function(){ return vehicles; }, ecrire: function(v){ vehicles = v; },
+    local: function(vue){
+      var sans = vue.map(function(v){ if(!v.photos || !v.photos.length) return v; var c = JSON.parse(JSON.stringify(v)); c.photos = []; return c; });
+      try{ localStorage.setItem('gos_v10', JSON.stringify(sans)); }catch(e){ console.error('localStorage vehicules', e); }
+    },
+    libelle: function(r){ return (r.immat || '') + ' ' + (r.client || ''); },
+    apres: function(raison){
+      firstSyncReceived = true; if(typeof majBandeauChargementSync === 'function') majBandeauChargementSync();
+      initialiserBaselineVehicules();
+      if(raison !== 'transaction'){
+        migrerFactureDeposeeLe(); migrerValideDirFacturesManuelles(); migrerForfaitsLivresBloques();
+      }
+      rafraichir();
+      showSyncStatus('sync');
+      verifierNouvellesTaches(); nettoyerAlertesTempsMort(); verifierTempsMorts();
+      creerSauvegardeAutomatiqueSiBesoin();
+      // C-09 : migration M1 (Direction, idempotente) et projection du portail (Direction / accueil)
+      if(raison !== 'transaction' && typeof GOS_AUTH !== 'undefined' && GOS_AUTH.mode === 'firebase' && gosPeutMigrer()) GOS_SYNC.migrerM1();
+      if(typeof GOS_PORTAIL !== 'undefined') GOS_PORTAIL.planifier();
+    }
+  });
+  function simple(cle, variable, lsKey, extra){
+    var d = {chemin: cle,
+      lire: function(){ return window[variable]; }, ecrire: function(v){ window[variable] = v; },
+      local: lsEcrire(lsKey || cle), apres: function(){ rafraichir(); }};
+    Object.keys(extra || {}).forEach(function(k){ d[k] = extra[k]; });
+    GOS_SYNC.definir(cle, d);
+  }
+  // ordre = ordre de traitement de la file (le stock d'abord : une reservation refusee
+  // est compensee avant l'envoi des dossiers)
+  simple('gos_stock', 'STOCK', null, {libelle: function(r){ return r.nom || r.id; }, surEchec: function(op, r){ gosEchecStock(op, r); }});
+  simple('gos_caisse_journees', 'CAISSE_JOURNEES', null, {libelle: function(r){ return 'Caisse du ' + (r.date || ''); }});
+  simple('gos_caisse_mouvements', 'CAISSE_MOUVEMENTS', null, {libelle: function(r){ return 'Mouvement ' + (r.montant || '') + ' — ' + (r.motif || ''); }});
+  simple('gos_forfait_factures', 'FORFAIT_FACTURES', null, {libelle: function(r){ return 'Facture forfait ' + (r.client || '') + ' ' + (r.periodeKey || ''); }});
+  simple('gos_forfaits_clients', 'FORFAITS_CLIENTS', null, {libelle: function(r){ return 'Forfait ' + (r.client || ''); }});
+  simple('gos_forfaits_tkm', 'FORFAITS_TKM', null, {});
+  simple('gos_commandes_speciales', 'COMMANDES_SPECIALES', null, {});
+  simple('gos_dettes_manuelles', 'DETTES_MANUELLES', null, {libelle: function(r){ return 'Dette ' + (r.piece || ''); }});
+  simple('gos_fournisseurs', 'FOURNISSEURS', null, {libelle: function(r){ return r.nom || r.id; }});
+  simple('gos_charges_fixes', 'CHARGES_FIXES', null, {});
+  simple('gos_engagements_bancaires', 'ENGAGEMENTS_BANCAIRES', null, {});
+  simple('gos_banques', 'BANQUES', null, {});
+  simple('gos_clients_sans_vehicule', 'CLIENTS_SANS_VEHICULE', null, {});
+  simple('gos_presences', 'PRESENCES', null, {});
+  simple('gos_employes_presence', 'EMPLOYES_PRESENCE', null, {});
+  simple('gos_exposition_snapshots', 'EXPOSITION_SNAPSHOTS', null, {});
+  simple('gos_descripteurs_faciaux', 'DESCRIPTEURS_FACIAUX', null, {type: 'objet'});
+  simple('gos_client_delais_paiement', 'CLIENT_DELAIS_PAIEMENT', null, {type: 'objet'});
+  GOS_SYNC.definir('gos_personnel', {
+    chemin: 'gos_personnel', libelle: function(r){ return r.nom || r.id; },
+    lire: function(){ return PERSONNEL; },
+    ecrire: function(v){
+      PERSONNEL.length = 0; var vus = {};
+      v.forEach(function(p){ if(!vus[p.nom]){ vus[p.nom] = 1; PERSONNEL.push(p); } });
+      EQUIPES.length = 0; var eq = {};
+      PERSONNEL.forEach(function(p){ if(p.equipe && !eq[p.equipe]){ eq[p.equipe] = 1; EQUIPES.push(p.equipe); } });
+    },
+    local: lsEcrire('gos_personnel'),
+    apres: function(){ if(currentRole && typeof initSelecteursRole === 'function') initSelecteursRole(currentRole); rafraichir(); }
+  });
+  GOS_SYNC.definir('gos_comptes', {
+    chemin: 'gos_comptes', libelle: function(r){ return r.login || r.id; },
+    lire: function(){ return loadComptes(); },
+    ecrire: function(v){ localStorage.setItem(COMPTES_KEY, JSON.stringify(v)); },
+    local: function(){}, apres: function(){ rafraichir(); }
+  });
+})();
+
+// Reservation de stock refusee par le serveur (disponible insuffisant) :
+// la ligne du dossier est remise en coherence et l'utilisateur est prevenu.
+function gosEchecStock(op, r){
+  if(op.lien && op.lien.vid){
+    var v = vehicles.find(function(x){ return x.id === op.lien.vid; });
+    var cl = v && v.chiffrage && v.chiffrage.lignes ? v.chiffrage.lignes[op.lien.idx] : null;
+    if(cl && cl.stockArticleId === op.recordId){
+      cl.stockReserve = Math.max(0, (parseInt(cl.stockReserve, 10) || 0) - (op.dRes || 0));
+      saveV();
+    }
+  }
+  if(typeof afficherToastNotif === 'function'){
+    afficherToastNotif('Stock insuffisant', (op.libelle ? op.libelle + ' : ' : '') + 'cette piece vient d\'etre reservee sur un autre poste.', 'alerte');
+  }
+  if(document.getElementById('content') && !(typeof uneModaleEstOuverte === 'function' && uneModaleEstOuverte())) renderPage();
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// C-09 — AUTHENTIFICATION DU PERSONNEL (GOS_AUTH)
+// ══════════════════════════════════════════════════════════════════════════
+//  - Chaque employe se connecte avec son compte Firebase Authentication :
+//      * adresse e-mail reelle (Direction, administration, achats, accueil) ;
+//      * identifiant simple (techniciens) -> identifiant@<domaine B2>, domaine
+//        fourni par la configuration (vrai domaine a renseigner avant la production).
+//  - Le mot de passe n'est ni stocke ni affiche dans GarageOS.
+//  - Les droits viennent de gos_staff/{uid} (role, actif), imposes par les regles.
+//  - Internet est obligatoire pour se connecter ; une session ouverte permet
+//    ensuite de travailler hors ligne.
+//  - doitChangerMdp : l'application reste bloquee tant que le changement initial
+//    n'est pas fait (et les regles refusent aussi les donnees).
+//  - Desactivation : surveillance de gos_staff/{uid} ; arret du moteur, mise en
+//    quarantaine des operations en attente, effacement local, deconnexion.
+//  - Transition : l'ancienne connexion (gos_comptes) reste possible tant que
+//    connexionLocaleTransitoire = true ; elle ne donne AUCUN acces Firebase une
+//    fois les regles C-09 publiees.
+// ══════════════════════════════════════════════════════════════════════════
+var GOS_AUTH_CFG = window.GOS_AUTH_CFG || {
+  domaineIdentifiants: 'identifiants.smartservices.invalid',  // PROVISOIRE (banc et projet de test uniquement)
+  connexionLocaleTransitoire: true,                          // double mode pendant la migration
+  projetProduction: 'garage-smart-erp'
+};
+var GOS_AUTH_MATRICE = {
+  // collection du moteur -> roles autorises en LECTURE (aligne sur les regles C-09)
+  'vehicles': 'tous',
+  'gos_stock': ['direction','reception','achats','chef_atelier','chef_equipe','technicien'],
+  'gos_commandes_speciales': ['direction','achats','chef_atelier'],
+  'gos_fournisseurs': ['direction','achats','chef_atelier'],
+  'gos_forfaits_tkm': ['direction','reception','achats','chef_atelier'],
+  'gos_forfait_factures': ['direction'],
+  'gos_forfaits_clients': ['direction','reception'],
+  'gos_clients_sans_vehicule': ['direction','reception'],
+  'gos_client_delais_paiement': ['direction','reception'],
+  'gos_caisse_journees': ['direction','reception'],
+  'gos_caisse_mouvements': ['direction','reception'],
+  'gos_dettes_manuelles': ['direction','achats'],
+  'gos_banques': ['direction'], 'gos_charges_fixes': ['direction'], 'gos_engagements_bancaires': ['direction'],
+  'gos_exposition_snapshots': ['direction'],
+  'gos_personnel': 'tous',
+  'gos_presences': ['direction','reception'], 'gos_employes_presence': ['direction','reception'],
+  'gos_descripteurs_faciaux': ['direction','reception'],
+  'gos_comptes': ['direction'],
+  'gos_fin_paiements': ['direction','reception'],
+  'gos_fin_validations': 'tous'
+};
+function gosAutorisePour(role, cle){ var m = GOS_AUTH_MATRICE[cle]; if(!m) return false; return m === 'tous' || m.indexOf(role) >= 0; }
+function gosEstDirection(){ return typeof currentRole !== 'undefined' && currentRole === 'direction' && (!GOS_AUTH.mode || GOS_AUTH.mode === 'firebase' || GOS_AUTH.mode === 'local'); }
+function gosPeutMigrer(){ return typeof currentRole !== 'undefined' && currentRole === 'direction'; }
+
+var GOS_AUTH = (function(){
+  var etat = {mode: null, uid: null, profil: null, surveillance: null, bloque: false};
+  var CLE_PROFIL = 'gos_profil_staff';
+  function versAdresse(saisie){
+    var s = String(saisie || '').trim().toLowerCase();
+    return s.indexOf('@') >= 0 ? s : s + '@' + GOS_AUTH_CFG.domaineIdentifiants;
+  }
+  function domaineProvisoire(){ return /\.example$|a-definir/.test(GOS_AUTH_CFG.domaineIdentifiants); }
+  function estProjetProduction(){ try{ return firebaseConfig.projectId === GOS_AUTH_CFG.projetProduction; }catch(e){ return false; } }
+  function lireCache(){ try{ return JSON.parse(localStorage.getItem(CLE_PROFIL) || 'null'); }catch(e){ return null; } }
+  function ecrireCache(p){ try{ localStorage.setItem(CLE_PROFIL, JSON.stringify(p)); }catch(e){} }
+  function erreurConnexion(msg){
+    var el = document.getElementById('loginError');
+    if(el){ el.textContent = msg; el.style.display = 'block'; }
+    var btn = document.querySelector('#loginScreen .btn-primary');
+    if(btn){ btn.textContent = 'Se connecter'; btn.disabled = false; }
+  }
+  function attendreChargementLocal(cb){ (function a(){ if(window.__gosChargementLocalTermine) cb(); else setTimeout(a, 50); })(); }
+  function compteDepuisProfil(uid, p){
+    return {id: uid, uid: uid, nom: p.nom, login: p.login || p.email || uid, email: p.email || '', role: p.role,
+            equipe: p.equipe || '', personnelId: p.personnelId || ''};
+  }
+  // Lecture du profil : serveur si possible (delai max), sinon profil deja connu sur l'appareil
+  function lireProfil(uid, cb){
+    var fini = false, cache = lireCache();
+    var t = setTimeout(function(){ if(fini) return; fini = true; cb(cache && cache.uid === uid ? cache.profil : null, 'cache'); }, 5000);
+    fbDb.ref('gos_staff/' + uid).once('value').then(function(s){
+      if(fini) return; fini = true; clearTimeout(t); cb(s.val(), 'serveur');
+    }).catch(function(){ if(fini) return; fini = true; clearTimeout(t); cb(cache && cache.uid === uid ? cache.profil : null, 'cache'); });
+  }
+  function surUtilisateur(user){
+    if(!user){ return; }                             // pas de session Firebase : ecran de connexion
+    if(etat.uid === user.uid && etat.mode === 'firebase') return;
+    lireProfil(user.uid, function(p, source){
+      if(!p){ refuser('Ce compte n\'est associe a aucun profil du personnel. Contactez la Direction.'); return; }
+      if(p.actif !== true){ bloquer('Ce compte est desactive. Contactez la Direction.'); return; }
+      ecrireCache({uid: user.uid, profil: p});
+      if(p.doitChangerMdp === true){ changementObligatoire(user, p); return; }
+      ouvrirSession(user.uid, p, source);
+    });
+  }
+  function ouvrirSession(uid, p, source){
+    etat.mode = 'firebase'; etat.uid = uid; etat.profil = p; etat.bloque = false;
+    attendreChargementLocal(function(){
+      GOS_SYNC.definirRole(p.role, true);
+      _doLoginWithCompte(compteDepuisProfil(uid, p));
+      bandeauTransition(false);
+      if(source === 'serveur'){ fbDb.ref('gos_staff/' + uid + '/derniereConnexion').set(firebase.database.ServerValue.TIMESTAMP).catch(function(){}); }
+      surveiller(uid);
+      // M1 : etat de la migration (actif / reintegre) connu avant toute migration automatique
+      if(p.role === 'direction'){
+        fbDb.ref('gos_config/m1').on('value', function(s){
+          var v = s.val(); window.GOS_M1_SUSPENDU = !!(v && v.etat === 'reintegre'); window.GOS_M1_ETAT_CONNU = true;
+          if(!window.GOS_M1_SUSPENDU){ try{ GOS_SYNC.migrerM1(); }catch(e){} }
+        }, function(){ window.GOS_M1_ETAT_CONNU = false; });
+      }
+    });
+  }
+  function surveiller(uid){
+    if(etat.surveillance) return;
+    etat.surveillance = fbDb.ref('gos_staff/' + uid);
+    etat.surveillance.on('value', function(s){
+      var p = s.val();
+      if(!p || p.actif !== true){ bloquer('Votre compte a ete desactive par la Direction.'); return; }
+      ecrireCache({uid: uid, profil: p});
+    }, function(){ /* lecture refusee : traitee a la prochaine reconnexion */ });
+  }
+  // Desactivation : arret, quarantaine des operations en attente, effacement des donnees locales, deconnexion
+  function bloquer(msg){
+    if(etat.bloque) return; etat.bloque = true;
+    try{ if(etat.surveillance){ etat.surveillance.off(); etat.surveillance = null; } }catch(e){}
+    GOS_SYNC.arreterEtMettreEnQuarantaine('compte_desactive', function(){
+      var cache = lireCache();
+      Object.keys(localStorage).forEach(function(k){
+        if(k.indexOf('gos_') === 0 && k !== 'gos_device_id' && k !== CLE_PROFIL) localStorage.removeItem(k);
+      });
+      if(cache){ cache.profil = Object.assign({}, cache.profil, {actif: false}); ecrireCache(cache); }
+      try{ firebase.auth().signOut(); }catch(e){}
+      etat.mode = null; etat.uid = null;
+      afficherEcranConnexion(msg);
+    });
+  }
+  function refuser(msg){ try{ firebase.auth().signOut(); }catch(e){} afficherEcranConnexion(msg); }
+  function afficherEcranConnexion(msg){
+    try{ currentUser = null; }catch(e){}
+    var app = document.querySelector('.app'); if(app) app.style.display = 'none';
+    var ls = document.getElementById('loginScreen'); if(ls) ls.style.display = 'flex';
+    erreurConnexion(msg);
+  }
+  // Changement de mot de passe impose : aucune utilisation de l'application avant la fin
+  function changementObligatoire(user, p){
+    attendreChargementLocal(function(){
+      var ls = document.getElementById('loginScreen'); if(ls) ls.style.display = 'none';
+      var app = document.querySelector('.app'); if(app) app.style.display = 'none';
+      var o = document.getElementById('gosChangementMdp'); if(o) o.remove();
+      o = document.createElement('div'); o.id = 'gosChangementMdp'; o.className = 'overlay'; o.style.display = 'flex'; o.style.zIndex = '99999';
+      o.innerHTML = '<div class="modal" style="width:380px"><div class="mhead"><h2>Choisissez votre mot de passe</h2></div><div class="mbody" style="padding:16px">'
+        + '<p class="xs muted" style="margin-bottom:10px">Premiere connexion : remplacez le mot de passe provisoire avant d\'utiliser GarageOS.</p>'
+        + '<label class="fl">Nouveau mot de passe (10 caracteres minimum)</label><input type="password" class="fi" id="gosMdp1" autocomplete="new-password">'
+        + '<label class="fl" style="margin-top:8px">Confirmer</label><input type="password" class="fi" id="gosMdp2" autocomplete="new-password">'
+        + '<div id="gosMdpErr" style="color:#A32D2D;font-size:12px;margin-top:8px"></div>'
+        + '<button class="btn btn-primary" id="gosMdpOk" style="margin-top:12px;width:100%">Valider</button></div></div>';
+      document.body.appendChild(o);
+      document.getElementById('gosMdpOk').onclick = function(){
+        var a = document.getElementById('gosMdp1').value, b = document.getElementById('gosMdp2').value, err = document.getElementById('gosMdpErr');
+        if(a.length < 10){ err.textContent = 'Au moins 10 caracteres.'; return; }
+        if(a !== b){ err.textContent = 'Les deux saisies sont differentes.'; return; }
+        this.disabled = true;
+        user.updatePassword(a).then(function(){
+          return fbDb.ref('gos_staff/' + user.uid + '/doitChangerMdp').set(false);
+        }).then(function(){
+          o.remove(); p.doitChangerMdp = false; ecrireCache({uid: user.uid, profil: p}); ouvrirSession(user.uid, p, 'serveur');
+        }).catch(function(e){ err.textContent = 'Echec : ' + (e && e.code ? e.code : e); document.getElementById('gosMdpOk').disabled = false; });
+      };
+    });
+  }
+  function bandeauTransition(visible){
+    var el = document.getElementById('gosBandeauTransition');
+    if(!visible){ if(el) el.remove(); return; }
+    if(!el){ el = document.createElement('div'); el.id = 'gosBandeauTransition';
+      el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99991;background:#FAEEDA;color:#854F0B;font-size:12px;text-align:center;padding:4px';
+      el.textContent = 'Connexion par l\'ancien systeme (transition) : votre compte personnel doit etre active. Une fois la securite activee, cette connexion ne donne plus acces aux donnees.';
+      document.body.appendChild(el); }
+  }
+  function connexion(){
+    var saisie = (document.getElementById('loginUser').value || '').trim();
+    var mdp = document.getElementById('loginPass').value || '';
+    var btn = document.querySelector('#loginScreen .btn-primary');
+    if(btn){ btn.textContent = 'Connexion...'; btn.disabled = true; }
+    if(!saisie || !mdp){ erreurConnexion('Saisissez votre identifiant et votre mot de passe.'); return; }
+    var auth = firebase.auth();
+    auth.signInWithEmailAndPassword(versAdresse(saisie), mdp).then(function(cred){
+      if(btn){ btn.textContent = 'Se connecter'; btn.disabled = false; }
+      surUtilisateur(cred.user);
+    }).catch(function(e){
+      var code = e && e.code || '';
+      if(code === 'auth/network-request-failed'){ erreurConnexion('Connexion Internet obligatoire pour se connecter.'); return; }
+      if(code === 'auth/user-disabled'){ erreurConnexion('Ce compte est desactive. Contactez la Direction.'); return; }
+      if(GOS_AUTH_CFG.connexionLocaleTransitoire && saisie.indexOf('@') < 0){ connexionAncienne(saisie.toLowerCase(), mdp); return; }
+      erreurConnexion('Identifiant ou mot de passe incorrect.');
+    });
+  }
+  // Ancienne connexion (transition uniquement). N'ouvre AUCUNE session Firebase.
+  function connexionAncienne(login, mdp){
+    var comptes = loadComptes();
+    var c = comptes.find(function(x){ return x.login === login && x.mdp === mdp; });
+    if(!c){ erreurConnexion('Identifiant ou mot de passe incorrect.'); return; }
+    etat.mode = 'local'; etat.uid = null;
+    attendreChargementLocal(function(){
+      GOS_SYNC.definirRole(c.role, false);
+      var btn = document.querySelector('#loginScreen .btn-primary'); if(btn){ btn.textContent = 'Se connecter'; btn.disabled = false; }
+      _doLoginWithCompte(c);
+      localStorage.setItem('gos_session', JSON.stringify({userId: c.id, ts: Date.now(), mode: 'local'}));
+      bandeauTransition(true);
+    });
+  }
+  function deconnexion(){
+    try{ if(etat.surveillance){ etat.surveillance.off(); etat.surveillance = null; } }catch(e){}
+    etat.mode = null; etat.uid = null;
+    try{ firebase.auth().signOut(); }catch(e){}
+    bandeauTransition(false);
+  }
+  function demarrer(){
+    firebase.auth().onAuthStateChanged(function(user){
+      if(user) surUtilisateur(user);
+      else if(etat.mode === 'firebase'){ etat.mode = null; }
+    });
+  }
+  return {connexion: connexion, deconnexion: deconnexion, demarrer: demarrer, bloquer: bloquer,
+          versAdresse: versAdresse, domaineProvisoire: domaineProvisoire, estProjetProduction: estProjetProduction,
+          get mode(){ return etat.mode; }, get uid(){ return etat.uid; }, get profil(){ return etat.profil; }};
+})();
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// C-09 — COMPLEMENTS : M1 (donnees financieres du dossier), projection du
+// portail client, gestion des comptes du personnel
+// ══════════════════════════════════════════════════════════════════════════
+
+// ---------------------------------------------------------------- M1
+// Les paiements / la facturation (F1) et les validations Direction du dossier (F2)
+// ne sont plus stockes dans gos_data mais dans gos_fin_paiements et
+// gos_fin_validations (droits d'ecriture restreints par les regles). En memoire,
+// le dossier reste « compose » : les fonctions de l'application ne changent pas.
+var GOS_FIN_PAIEMENTS = (function(){ try{ return JSON.parse(localStorage.getItem('gos_fin_paiements') || '{}') || {}; }catch(e){ return {}; } })();
+var GOS_FIN_VALIDATIONS = (function(){ try{ return JSON.parse(localStorage.getItem('gos_fin_validations') || '{}') || {}; }catch(e){ return {}; } })();
+(function(){
+  function lsEcrire(cle){ return function(vue){ try{ localStorage.setItem(cle, JSON.stringify(vue)); }catch(e){} }; }
+  GOS_SYNC.definir('gos_fin_paiements', {chemin: 'gos_fin_paiements', type: 'objet', ensembles: {paiementsClient: true},
+    lire: function(){ return GOS_FIN_PAIEMENTS; }, ecrire: function(v){ GOS_FIN_PAIEMENTS = v || {}; },
+    local: lsEcrire('gos_fin_paiements'), libelle: function(r){ return 'Paiements du dossier'; },
+    apres: function(){ GOS_SYNC.recomposer(); }});
+  GOS_SYNC.definir('gos_fin_validations', {chemin: 'gos_fin_validations', type: 'objet',
+    lire: function(){ return GOS_FIN_VALIDATIONS; }, ecrire: function(v){ GOS_FIN_VALIDATIONS = v || {}; },
+    local: lsEcrire('gos_fin_validations'), libelle: function(r){ return 'Validation Direction du dossier'; },
+    apres: function(){ GOS_SYNC.recomposer(); }});
+})();
+
+// ---------------------------------------------------------------- portail client
+// Projection par client : gos_portail/{uid} = {vehicules: "<JSON>", majLe, majPar}.
+// Ecrite par les postes Direction et accueil ; lue uniquement par le client concerne.
+// Champs publies limites a ceux affiches par le portail. « commentaires » est
+// strictement interne et n'est JAMAIS publie.
+var GOS_PORTAIL = (function(){
+  var CHAMPS = ['id','immat','marque','modele','annee','mec','km','status','entree','livraison','motif','nature','typeClient','montantPaye','departements','client','tel'];
+  var minuterie = null, derniers = {}, intervalle = null;
+  function actif(){ return typeof GOS_AUTH !== 'undefined' && GOS_AUTH.mode === 'firebase' && (currentRole === 'direction' || currentRole === 'reception'); }
+  function empreinte(s){ var h = 0; for(var i = 0; i < s.length; i++){ h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return s.length + ':' + h; }
+  function projeter(v){
+    var o = {};
+    CHAMPS.forEach(function(k){ if(v[k] !== undefined && v[k] !== null) o[k] = JSON.parse(JSON.stringify(v[k])); });
+    if(v.chiffrage){
+      o.chiffrage = {soumisLe: v.chiffrage.soumisLe || null, valideDirLe: v.chiffrage.valideDirLe || null,
+        lignes: (v.chiffrage.lignes || []).map(function(l){ return {piece: l.piece, qte: l.qte, prixVente: l.prixVente}; })};
+    }
+    return o;
+  }
+  function dossiersDu(c){
+    return vehicles.filter(function(v){
+      if(v.client !== c.clientNom) return false;
+      if((v.tel || '') !== (c.clientTel || '')) return false;
+      if(c.departement) return (v.departements || []).indexOf(c.departement) >= 0;
+      return true;
+    });
+  }
+  function publier(){
+    if(!actif() || typeof CLIENT_ACCOUNTS !== 'object' || !fbDb) return;
+    Object.keys(CLIENT_ACCOUNTS).forEach(function(uid){
+      var c = CLIENT_ACCOUNTS[uid]; if(!c || !c.clientNom) return;
+      var s = JSON.stringify(dossiersDu(c).map(projeter)), h = empreinte(s);
+      if(derniers[uid] === h) return;
+      fbDb.ref('gos_portail/' + uid).set({vehicules: s, majLe: firebase.database.ServerValue.TIMESTAMP, majPar: GOS_AUTH.uid})
+        .then(function(){ derniers[uid] = h; }).catch(function(e){ console.warn('Projection portail refusee', uid, e && e.code); });
+    });
+  }
+  function planifier(){
+    clearTimeout(minuterie); minuterie = setTimeout(publier, 1500);
+    if(!intervalle) intervalle = setInterval(publier, 60000);
+  }
+  return {planifier: planifier, publier: publier, projeter: projeter};
+})();
+
+// ---------------------------------------------------------------- comptes du personnel
+// Creation sans privilege administrateur (instance Firebase secondaire), aucun
+// mot de passe affiche ni stocke par GarageOS.
+//  - Adresse reelle (A) : mot de passe aleatoire inconnu de tous + lien de
+//    reinitialisation envoye par Firebase ; l'employe choisit son mot de passe.
+//  - Identifiant (B)   : mot de passe provisoire remis en main propre ;
+//    changement impose a la premiere connexion (doitChangerMdp).
+var GOS_PERSONNEL = (function(){
+  var liste = {}, ecoute = false;
+  function cleLogin(l){ return String(l).replace(/\./g, ','); }
+  function aleatoire(n){ var a = new Uint32Array(n), c = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789-_!'; crypto.getRandomValues(a); var s = ''; for(var i = 0; i < n; i++) s += c[a[i] % c.length]; return s; }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function demarrerEcoute(){
+    if(ecoute || !fbDb || GOS_AUTH.mode !== 'firebase' || currentRole !== 'direction') return;
+    ecoute = true;
+    fbDb.ref('gos_staff').on('value', function(s){ liste = s.val() || {}; if(currentPage === 'comptes' && !(typeof uneModaleEstOuverte === 'function' && uneModaleEstOuverte())) renderPage(); },
+      function(){ ecoute = false; });
+  }
+  function html(){
+    demarrerEcoute();
+    var h = '<div class="card" style="margin-bottom:16px"><div class="card-head"><strong>Comptes du personnel (connexion Firebase)</strong></div><div class="card-body" style="padding:12px">';
+    if(GOS_AUTH.mode !== 'firebase'){ return h + '<div class="xs muted">Connectez-vous avec votre compte Firebase personnel pour gerer les comptes.</div></div></div>'; }
+    h += '<table class="tbl" style="width:100%;font-size:12px"><thead><tr><th>Nom</th><th>Connexion</th><th>Role</th><th>Etat</th><th>Derniere connexion</th><th></th></tr></thead><tbody>';
+    Object.keys(liste).sort(function(a, b){ return String(liste[a].nom).localeCompare(String(liste[b].nom)); }).forEach(function(uid){
+      var p = liste[uid] || {};
+      h += '<tr><td>' + esc(p.nom) + '</td><td>' + esc(p.typeCompte === 'identifiant' ? p.login : p.email) + '</td><td>' + esc(p.role) + '</td>'
+        + '<td>' + (p.actif ? (p.doitChangerMdp ? 'actif (mot de passe a changer)' : 'actif') : '<span style="color:#A32D2D">desactive</span>') + '</td>'
+        + '<td>' + (p.derniereConnexion ? new Date(p.derniereConnexion).toLocaleString('fr-FR') : 'jamais') + '</td><td>'
+        + (uid === GOS_AUTH.uid ? '<span class="xs muted">vous</span>' : (p.actif ? '<button class="btn btn-sm" onclick="GOS_PERSONNEL.changerEtat(\'' + uid + '\', false)">Desactiver</button>'
+                                                                            : '<button class="btn btn-sm" onclick="GOS_PERSONNEL.changerEtat(\'' + uid + '\', true)">Reactiver</button>'))
+        + '</td></tr>';
+    });
+    h += '</tbody></table>';
+    h += '<div style="margin-top:14px;border-top:1px solid #eee;padding-top:10px"><strong style="font-size:13px">Nouveau compte individuel</strong>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">'
+      + '<div><label class="fl">Nom</label><input class="fi" id="pNom"></div>'
+      + '<div><label class="fl">Role</label><select class="fi" id="pRole"><option value="technicien">technicien</option><option value="chef_equipe">chef d\'equipe</option><option value="chef_atelier">chef d\'atelier</option><option value="testeur">testeur</option><option value="reception">accueil / reception</option><option value="achats">achats</option><option value="direction">direction</option></select></div>'
+      + '<div><label class="fl">Type de connexion</label><select class="fi" id="pType"><option value="identifiant">identifiant simple (atelier)</option><option value="email">adresse e-mail reelle</option></select></div>'
+      + '<div><label class="fl">Identifiant (ex. kone.a) ou adresse e-mail</label><input class="fi" id="pConnexion"></div>'
+      + '<div><label class="fl">Equipe (optionnel)</label><input class="fi" id="pEquipe"></div>'
+      + '<div><label class="fl">Mot de passe provisoire (identifiant uniquement, 10 caracteres min.)</label><input class="fi" id="pProvisoire" type="password" autocomplete="new-password"></div>'
+      + '</div><div id="pMsg" class="xs" style="margin:8px 0;color:#A32D2D"></div><button class="btn btn-primary btn-sm" id="pCreer" onclick="GOS_PERSONNEL.creer()">Creer le compte</button>'
+      + '<div class="xs muted" style="margin-top:6px">Adresse e-mail : l\'employe recoit un lien pour choisir son mot de passe. Identifiant : remettez le mot de passe provisoire en main propre ; il devra le changer a la premiere connexion. Aucun mot de passe n\'est conserve par GarageOS.</div></div>';
+    return h + '</div></div>';
+  }
+  function msg(t, ok){ var el = document.getElementById('pMsg'); if(el){ el.style.color = ok ? '#3B6D11' : '#A32D2D'; el.textContent = t; } }
+  function creer(){
+    var nom = (document.getElementById('pNom').value || '').trim(), role = document.getElementById('pRole').value;
+    var type = document.getElementById('pType').value, cnx = (document.getElementById('pConnexion').value || '').trim().toLowerCase();
+    var equipe = (document.getElementById('pEquipe').value || '').trim(), prov = document.getElementById('pProvisoire').value || '';
+    if(!nom || !cnx){ msg('Nom et connexion obligatoires.'); return; }
+    if(type === 'email' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(cnx)){ msg('Adresse e-mail invalide.'); return; }
+    if(type === 'identifiant'){
+      if(!/^[a-z0-9._-]{2,40}$/.test(cnx)){ msg('Identifiant : lettres minuscules, chiffres, point, tiret (2 a 40).'); return; }
+      if(GOS_AUTH.domaineProvisoire() && GOS_AUTH.estProjetProduction()){ msg('Refuse : le domaine des identifiants est provisoire. Renseignez le vrai domaine B2 avant de creer des comptes sur le projet de production.'); return; }
+      if(prov.length < 10){ msg('Mot de passe provisoire : 10 caracteres minimum.'); return; }
+    }
+    var email = type === 'email' ? cnx : GOS_AUTH.versAdresse(cnx);
+    var mdp = type === 'email' ? aleatoire(24) : prov;
+    var btn = document.getElementById('pCreer'); btn.disabled = true;
+    var auth2 = getFirebaseAuthSecondaire(), uid = null;
+    auth2.createUserWithEmailAndPassword(email, mdp).then(function(cred){
+      uid = cred.user.uid;
+      if(type === 'email') return auth2.sendPasswordResetEmail(email);
+    }).then(function(){
+      if(type !== 'identifiant') return;
+      return fbDb.ref('gos_staff_logins/' + cleLogin(cnx)).transaction(function(cur){ return cur ? undefined : uid; }).then(function(r){ if(!r.committed) throw {code: 'identifiant_deja_utilise'}; });
+    }).then(function(){
+      var p = {nom: nom, role: role, actif: true, typeCompte: type, creeLe: firebase.database.ServerValue.TIMESTAMP, creePar: GOS_AUTH.uid};
+      if(type === 'email') p.email = email; else { p.login = cnx; p.doitChangerMdp = true; }
+      if(equipe) p.equipe = equipe;
+      return fbDb.ref('gos_staff/' + uid).set(p);
+    }).then(function(){
+      try{ auth2.signOut(); }catch(e){}
+      document.getElementById('pProvisoire').value = '';
+      msg(type === 'email' ? 'Compte cree. Un lien pour choisir le mot de passe a ete envoye a ' + email + '.' : 'Compte cree. Remettez le mot de passe provisoire en main propre.', true);
+      btn.disabled = false;
+    }).catch(function(e){
+      try{ auth2.signOut(); }catch(x){}
+      btn.disabled = false;
+      msg('Echec : ' + (e && e.code ? e.code : e) + (uid ? ' — le compte Firebase ' + uid + ' existe sans profil : il n\'a aucun acces ; supprimez-le avec l\'outil B3.' : ''));
+    });
+  }
+  function changerEtat(uid, actif){
+    if(uid === GOS_AUTH.uid) return;
+    if(!actif && !confirm('Desactiver ce compte ? Ses acces seront refuses immediatement par Firebase.')) return;
+    var maj = {actif: actif, modifieLe: firebase.database.ServerValue.TIMESTAMP, modifiePar: GOS_AUTH.uid};
+    if(!actif){ maj.desactiveLe = firebase.database.ServerValue.TIMESTAMP; maj.desactivePar = GOS_AUTH.uid; }
+    fbDb.ref('gos_staff/' + uid).update(maj).catch(function(e){ alert('Echec : ' + (e && e.code ? e.code : e)); });
+  }
+  return {html: html, creer: creer, changerEtat: changerEtat};
+})();
+var GOS_M1_OUTIL = {
+  html: function(){
+    if(typeof GOS_AUTH === 'undefined' || GOS_AUTH.mode !== 'firebase' || currentRole !== 'direction') return '';
+    return '<div class="card" style="margin-bottom:16px"><div class="card-head"><strong>Donnees financieres des dossiers (M1)</strong></div><div class="card-body" style="padding:12px;font-size:12px">'
+      + 'Etat : ' + (window.GOS_M1_SUSPENDU ? '<b>reintegre dans gos_data (retour arriere)</b>' : 'separe (gos_fin_paiements / gos_fin_validations)')
+      + '<div style="margin-top:8px">' + (window.GOS_M1_SUSPENDU
+        ? '<button class="btn btn-sm" onclick="GOS_M1_OUTIL.reprendre()">Reprendre la separation M1</button>'
+        : '<button class="btn btn-sm" onclick="GOS_M1_OUTIL.reintegrer()">Retour arriere : recopier les donnees financieres dans gos_data</button>')
+      + '</div><div class="xs muted" style="margin-top:6px">A utiliser uniquement dans la procedure de retour arriere, depuis UN seul poste Direction, les autres postes fermes.</div></div></div>';
+  },
+  reintegrer: function(){
+    if(!confirm('Recopier les paiements, la facturation et les validations Direction dans gos_data (retour arriere M1) ?')) return;
+    fbDb.ref('gos_config/m1').set({etat: 'reintegre', le: firebase.database.ServerValue.TIMESTAMP, par: GOS_AUTH.uid}).then(function(){
+      var n = GOS_SYNC.reintegrerM1();
+      alert(n + ' dossier(s) a reintegrer. Attendez que l\'indicateur « modifications en attente » soit a 0 avant de republier l\'ancienne version.');
+      renderPage();
+    }).catch(function(e){ alert('Echec : ' + (e && e.code ? e.code : e)); });
+  },
+  reprendre: function(){
+    if(!confirm('Reprendre la separation M1 (les champs seront a nouveau deplaces hors de gos_data) ?')) return;
+    fbDb.ref('gos_config/m1').set({etat: 'actif', le: firebase.database.ServerValue.TIMESTAMP, par: GOS_AUTH.uid}).then(function(){ renderPage(); });
+  }
+};
+function pageComptes(){ return GOS_M1_OUTIL.html() + GOS_PERSONNEL.html() + pageComptesAncien(); }
+
+
 var firebaseConfig = {
   apiKey: "AIzaSyDJncdc6aaiOO0Nl3_bGQ-8peSVa8gdmMU",
   authDomain: "garage-smart-erp.firebaseapp.com",
@@ -32536,199 +33537,27 @@ function initFirebase(){
       fbConnected = snap.val() === true;
       console.log('Firebase connected:', fbConnected);
       showSyncStatus(fbConnected ? 'online' : 'offline');
-      // Reconnexion apres une coupure : si une sauvegarde avait ete tentee
-      // pendant la deconnexion (donc silencieusement abandonnee par
-      // saveVFirebase), on la rejoue maintenant pour ne jamais perdre une
-      // modification locale suite a une coupure furtive de la connexion.
-      if(fbConnected && !etaitConnecte && pendingVehiclesSave){
-        pendingVehiclesSave = false;
-        console.log('Reconnexion Firebase : rattrapage de la sauvegarde en attente');
-        saveVFirebase();
-      }
+      // NIVEAU 1 (etape 3) : l'ancien rejeu de la collection COMPLETE a la
+      // reconnexion est supprime. Le moteur recupere d'abord l'etat serveur,
+      // puis envoie une par une les operations locales en attente.
+      GOS_SYNC.surConnexion(fbConnected);
+    });
+
+    // CORRECTIF C-06 (phase 2) : alerte visible si l'horloge de cet appareil
+    // est decalee de plus de 2 minutes par rapport au serveur Firebase.
+    fbDb.ref('.info/serverTimeOffset').on('value', function(snap){
+      majBandeauHorlogeDecalee(snap.val() || 0);
     });
 
     // Écouter les changements en temps réel
-    fbDb.ref('gos_data').on('value', function(snapshot){
-      firstSyncReceived = true; // debloque saveVFirebase des la 1ere reponse recue, meme si data est vide
-      majBandeauChargementSync();
-      var data = snapshot.val();
-      // IMPORTANT : NE JAMAIS effacer les vehicules locaux simplement
-      // parce que cette reponse Firebase est vide ou malformee — un
-      // simple incident reseau passager (reconnexion, glitch temporaire)
-      // suffisait auparavant a vider silencieusement et DEFINITIVEMENT
-      // tous les vehicules de cet appareil, meme s'ils etaient corrects
-      // just avant. Si la reponse ne contient rien d'exploitable, on ne
-      // touche a rien : ce qui est deja charge (localStorage ou memoire)
-      // reste affiche, en attendant une vraie synchronisation valide.
-      if(!data || !data.vehicles){
-        if(document.getElementById('content')) renderPage();
-        return;
-      }
-      // Ignorer seulement si c'est ce même appareil qui vient de sauvegarder
-      // DANS CETTE SESSION (lastLocalTs>0 obligatoire) — sinon, juste apres
-      // un rechargement de page, lastLocalTs vaut 0 et cette condition
-      // ignorerait a tort la toute premiere synchro Firebase recue,
-      // laissant l'app se fier uniquement au localStorage sans jamais
-      // fusionner avec l'etat reellement present sur le serveur.
-      if(data.deviceId && data.deviceId === deviceId
-         && data.ts && lastLocalTs > 0 && data.ts >= lastLocalTs - 2000) return;
-      try{
-        var newVehicles = JSON.parse(data.vehicles);
-        // Préserver les photos en mémoire qui ne sont pas dans Firebase
-        newVehicles = newVehicles.map(function(nv){
-          try {
-            var existing = vehicles.find(function(v){ return v.id === nv.id; });
-            var existingPhotos = existing && existing.photos && Array.isArray(existing.photos) ? existing.photos : [];
-            var nvPhotos = nv.photos && Array.isArray(nv.photos) ? nv.photos : [];
-            if(existingPhotos.length > 0 && nvPhotos.length === 0){
-              nv.photos = existingPhotos;
-            }
-          } catch(e) {}
-          return nv;
-        });
-        // Fusion VEHICULE PAR VEHICULE (et non un remplacement en bloc) —
-        // pour chaque vehicule, on garde la version la plus recente entre
-        // la copie locale et celle qui arrive de Firebase, en comparant
-        // leur lastModified. Sans cela, un autre appareil ayant une copie
-        // locale perimee (n'ayant pas encore recu une modification recente
-        // faite ailleurs) peut, en sauvegardant quoi que ce soit d'autre,
-        // ecraser cette modification recente avec une version obsolete.
-        var localById = {};
-        vehicles.forEach(function(v){ localById[v.id] = v; });
-        var newById = {};
-        newVehicles.forEach(function(v){ newById[v.id] = v; });
-        var tousLesIds = {};
-        vehicles.forEach(function(v){ tousLesIds[v.id] = true; });
-        newVehicles.forEach(function(v){ tousLesIds[v.id] = true; });
-        var merged = [];
-        var correctifFusionAEuLieu = false; // vrai si on a du garder une version locale plus avancee qu'une version distante perimee reçue
-        Object.keys(tousLesIds).forEach(function(id){
-          var l = localById[id], n = newById[id];
-          if(!l){ merged.push(n); return; }
-          if(!n){
-            // Present localement, absent de la version recue de Firebase.
-            // Si notre dernier envoi a Firebase a eu lieu APRES la
-            // derniere modification connue de ce vehicule, cela signifie
-            // qu'il a ete supprime par un autre appareil entre-temps — ne
-            // pas le ressusciter. Sinon (creation/modif locale tres
-            // recente, pas encore propagee), on le garde en attendant.
-            var lTsAbsent = l.lastModified||0;
-            if(lTsAbsent && lTsAbsent < lastLocalTs) return;
-            merged.push(l);
-            return;
-          }
-          var lTs = l.lastModified||0, nTs = n.lastModified||0;
-          if(nTs !== lTs){
-            merged.push(nTs > lTs ? n : l);
-          } else {
-            // Horodatages egaux (ou absents des deux cotes — cas de
-            // vehicules dont le suivi de derniere modification etait
-            // incomplet) : dans ce cas precis, ne JAMAIS trancher en
-            // faveur d'une version dont le statut est clairement MOINS
-            // avance dans le circuit que l'autre. Repartir a "reception"
-            // apres avoir deja ete livre/facture n'arrive jamais dans la
-            // vraie vie : c'est le signe d'une copie locale perimee sur
-            // un appareil qui remportait a tort la fusion faute de
-            // pouvoir departager par date. A egalite de date, c'est
-            // desormais le statut le plus avance qui l'emporte.
-            var iL = STATUT_ORDER.indexOf(l.status), iN = STATUT_ORDER.indexOf(n.status);
-            if(iL===-1) iL = 0;
-            if(iN===-1) iN = 0;
-            if(iN > iL){
-              // La version distante recue est MOINS avancee que la notre
-              // (l'inverse du scenario perimee) : on garde la notre, et il
-              // faudra re-pousser vers Firebase pour corriger la base,
-              // sinon un futur appareil neuf recevrait a tort cette
-              // version en retard.
-              merged.push(l);
-              correctifFusionAEuLieu = true;
-            } else {
-              merged.push(n);
-            }
-          }
-        });
-        vehicles = merged;
-        // Re-capture la baseline sur le resultat FUSIONNE — sinon, la
-        // toute prochaine sauvegarde locale marquerait a tort tous les
-        // vehicules recus d'un autre appareil comme "modifies a l'instant".
-        initialiserBaselineVehicules();
-        migrerFactureDeposeeLe(); // migration retroactive, aussi apres synchro Firebase
-        migrerValideDirFacturesManuelles(); // idem, pour les factures manuelles/imports
-        migrerForfaitsLivresBloques(); // idem, pour les forfaits bloques sur "livre"
-        lastLocalTs = data.ts || Date.now();
-        // Sauvegarder sans photos en localStorage
-        var sans = vehicles.map(function(v){
-          var c=JSON.parse(JSON.stringify(v)); c.photos=[]; return c;
-        });
-        localStorage.setItem('gos_v10', JSON.stringify(sans));
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-        showSyncStatus('sync');
-        verifierNouvellesTaches();
-        nettoyerAlertesTempsMort();
-        // Si la fusion a du garder une version locale plus avancee face a
-        // une version distante en retard, la base Firebase elle-meme
-        // reste corrompue tant que personne ne la corrige — un nouvel
-        // appareil qui se connecterait recevrait encore la version en
-        // retard. On repousse donc immediatement l'etat corrige, sans
-        // attendre qu'une sauvegarde ulterieure (non garantie) le fasse.
-        if(correctifFusionAEuLieu){
-          var tsCorrectif = Date.now();
-          lastLocalTs = tsCorrectif;
-          fbDb.ref('gos_data').update({
-            vehicles: JSON.stringify(vehicles),
-            ts: tsCorrectif,
-            deviceId: deviceId,
-            updatedBy: (currentUser?currentUser.login:'unknown')+' (correctif auto-fusion)'
-          }).catch(function(e){ console.error('Erreur correctif auto-fusion:', e); });
-        }
-        verifierTempsMorts();
-        creerSauvegardeAutomatiqueSiBesoin();
-      }catch(e){ console.error('Sync error:', e); }
-    });
+    // NIVEAU 1 : ecoute et fusion assurees par le moteur de synchronisation
+    GOS_SYNC.demarrer(fbDb);
+    try{ GOS_AUTH.demarrer(); }catch(eAuth){ console.error('GOS_AUTH', eAuth); } // C-09
 
   // Listener temps reel pour les fournisseurs (sync multi-appareils)
-  fbDb.ref('gos_fournisseurs').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var saved = JSON.parse(val);
-        var fusionneFourn = fusionnerCollectionParItem(FOURNISSEURS, saved, lastLocalTs);
-        FOURNISSEURS.length = 0;
-        fusionneFourn.forEach(function(f){ FOURNISSEURS.push(f); });
-        initialiserBaselineCollection('fournisseurs', FOURNISSEURS);
-        localStorage.setItem('gos_fournisseurs', JSON.stringify(FOURNISSEURS));
-        // Rafraichir la page pour tous les profils (sauf si une modale est ouverte)
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
 
   // Listeners temps reel pour charges fixes / engagements bancaires /
   // forfaits clients (sync multi-appareils, meme principe que fournisseurs).
-  fbDb.ref('gos_charges_fixes').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantCF = JSON.parse(val)||[];
-        CHARGES_FIXES = fusionnerCollectionParItem(CHARGES_FIXES, distantCF, lastLocalTs);
-        initialiserBaselineCollection('charges_fixes', CHARGES_FIXES);
-        localStorage.setItem('gos_charges_fixes', JSON.stringify(CHARGES_FIXES));
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
-  fbDb.ref('gos_forfait_factures').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantFF = JSON.parse(val)||[];
-        FORFAIT_FACTURES = fusionnerCollectionParItem(FORFAIT_FACTURES, distantFF, lastLocalTs);
-        initialiserBaselineCollection('forfait_factures', FORFAIT_FACTURES);
-        localStorage.setItem('gos_forfait_factures', JSON.stringify(FORFAIT_FACTURES));
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
   // gos_client_accounts est stocke directement comme objet {uid: {...}},
   // pas en JSON.stringify comme les autres structures : snapshot.val()
   // renvoie deja l'objet exploitable, pas de parsing necessaire.
@@ -32747,121 +33576,13 @@ function initFirebase(){
       }
     }
   });
-  fbDb.ref('gos_clients_sans_vehicule').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantCSV = JSON.parse(val)||[];
-        CLIENTS_SANS_VEHICULE = fusionnerCollectionParItem(CLIENTS_SANS_VEHICULE, distantCSV, lastLocalTs);
-        initialiserBaselineCollection('clients_sans_vehicule', CLIENTS_SANS_VEHICULE);
-        localStorage.setItem('gos_clients_sans_vehicule', JSON.stringify(CLIENTS_SANS_VEHICULE));
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
-  fbDb.ref('gos_engagements_bancaires').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantEB = JSON.parse(val)||[];
-        ENGAGEMENTS_BANCAIRES = fusionnerCollectionParItem(ENGAGEMENTS_BANCAIRES, distantEB, lastLocalTs);
-        initialiserBaselineCollection('engagements_bancaires', ENGAGEMENTS_BANCAIRES);
-        localStorage.setItem('gos_engagements_bancaires', JSON.stringify(ENGAGEMENTS_BANCAIRES));
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
-  fbDb.ref('gos_forfaits_clients').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantFC = JSON.parse(val)||[];
-        FORFAITS_CLIENTS = fusionnerCollectionParItem(FORFAITS_CLIENTS, distantFC, lastLocalTs);
-        initialiserBaselineCollection('forfaits_clients', FORFAITS_CLIENTS);
-        localStorage.setItem('gos_forfaits_clients', JSON.stringify(FORFAITS_CLIENTS));
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
   // Ecoutes en direct ajoutees pour stock / dettes manuelles / commandes
   // speciales — ces 3 collections tres actives au quotidien n'etaient
   // synchronisees qu'une seule fois au chargement de la page, sans jamais
   // se remettre a jour ensuite tant que la page reste ouverte.
-  fbDb.ref('gos_stock').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantStk = JSON.parse(val)||[];
-        STOCK = fusionnerCollectionParItem(STOCK, distantStk, lastLocalTs);
-        initialiserBaselineCollection('stock', STOCK);
-        localStorage.setItem('gos_stock', JSON.stringify(STOCK));
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
-  fbDb.ref('gos_dettes_manuelles').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantDM = JSON.parse(val)||[];
-        DETTES_MANUELLES = fusionnerCollectionParItem(DETTES_MANUELLES, distantDM, lastLocalTs);
-        initialiserBaselineCollection('dettes_manuelles', DETTES_MANUELLES);
-        localStorage.setItem('gos_dettes_manuelles', JSON.stringify(DETTES_MANUELLES));
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
-  fbDb.ref('gos_commandes_speciales').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantCS = JSON.parse(val)||[];
-        COMMANDES_SPECIALES = fusionnerCollectionParItem(COMMANDES_SPECIALES, distantCS, lastLocalTs);
-        initialiserBaselineCollection('commandes_speciales', COMMANDES_SPECIALES);
-        localStorage.setItem('gos_commandes_speciales', JSON.stringify(COMMANDES_SPECIALES));
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
-  fbDb.ref('gos_forfaits_tkm').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantFT = JSON.parse(val)||[];
-        FORFAITS_TKM = fusionnerCollectionParItem(FORFAITS_TKM, distantFT, lastLocalTs);
-        initialiserBaselineCollection('forfaits_tkm', FORFAITS_TKM);
-        localStorage.setItem('gos_forfaits_tkm', JSON.stringify(FORFAITS_TKM));
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
   // Caisse : de l'argent est en jeu, meme traitement complet que les
   // autres collections financieres — ajout d'une ecoute en direct qui
   // n'existait pas du tout jusqu'ici.
-  fbDb.ref('gos_caisse_journees').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantCJ = JSON.parse(val)||[];
-        CAISSE_JOURNEES = fusionnerCollectionParItem(CAISSE_JOURNEES, distantCJ, lastLocalTs);
-        initialiserBaselineCollection('caisse_journees', CAISSE_JOURNEES);
-        localStorage.setItem('gos_caisse_journees', JSON.stringify(CAISSE_JOURNEES));
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
-  fbDb.ref('gos_caisse_mouvements').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantCM = JSON.parse(val)||[];
-        CAISSE_MOUVEMENTS = fusionnerCollectionParItem(CAISSE_MOUVEMENTS, distantCM, lastLocalTs);
-        initialiserBaselineCollection('caisse_mouvements', CAISSE_MOUVEMENTS);
-        localStorage.setItem('gos_caisse_mouvements', JSON.stringify(CAISSE_MOUVEMENTS));
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
 
   // Personnel et comptes utilisateurs : ecoutes en direct ajoutees — ces
   // deux collections ne se synchronisaient jusqu'ici qu'une seule fois au
@@ -32871,111 +33592,12 @@ function initFirebase(){
   // CONNEXION : un compte cree sur un poste pouvait disparaitre si un
   // autre poste, ouvert avant cette creation, sauvegardait quoi que ce
   // soit touchant les comptes.
-  fbDb.ref('gos_personnel').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantP = JSON.parse(val)||[];
-        var fusionneP = fusionnerCollectionParItem(PERSONNEL, distantP, lastLocalTs);
-        PERSONNEL.length = 0;
-        var seenNomsP = {};
-        fusionneP.forEach(function(p){ if(!seenNomsP[p.nom]){ seenNomsP[p.nom]=true; PERSONNEL.push(p); } });
-        EQUIPES.length = 0;
-        var seenEqP = {};
-        PERSONNEL.forEach(function(p){ if(p.equipe && !seenEqP[p.equipe]){ seenEqP[p.equipe]=1; EQUIPES.push(p.equipe); } });
-        initialiserBaselineCollection('personnel', PERSONNEL);
-        localStorage.setItem('gos_personnel', JSON.stringify(PERSONNEL));
-        if(currentRole && typeof initSelecteursRole==='function') initSelecteursRole(currentRole);
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
-  fbDb.ref('gos_comptes').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantC = JSON.parse(val)||[];
-        var localC = loadComptes();
-        var fusionneC = fusionnerCollectionParItem(localC, distantC, lastLocalTs);
-        localStorage.setItem(COMPTES_KEY, JSON.stringify(fusionneC));
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
 
   // Dernier lot de collections passees en ecoute en direct (banques,
   // presences employes, descripteurs faciaux de reconnaissance, delais
   // de paiement client, snapshots d'exposition financiere) — meme
   // principe que toutes les autres : fusion par element/cle plutot
   // qu'un simple chargement unique au demarrage.
-  fbDb.ref('gos_banques').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantB = JSON.parse(val)||[];
-        BANQUES = fusionnerCollectionParItem(BANQUES, distantB, lastLocalTs);
-        initialiserBaselineCollection('banques', BANQUES);
-        localStorage.setItem('gos_banques', JSON.stringify(BANQUES));
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
-  fbDb.ref('gos_presences').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantPr = JSON.parse(val)||[];
-        PRESENCES = fusionnerCollectionParItem(PRESENCES, distantPr, lastLocalTs);
-        initialiserBaselineCollection('presences', PRESENCES);
-        localStorage.setItem('gos_presences', JSON.stringify(PRESENCES));
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
-  fbDb.ref('gos_descripteurs_faciaux').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantDF = JSON.parse(val)||{};
-        DESCRIPTEURS_FACIAUX = fusionnerObjetParCle('descripteurs_faciaux', DESCRIPTEURS_FACIAUX, distantDF, lastLocalTs);
-        initialiserBaselineObjet('descripteurs_faciaux', DESCRIPTEURS_FACIAUX);
-      }catch(e){}
-    }
-  });
-  fbDb.ref('gos_client_delais_paiement').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantCDP = JSON.parse(val)||{};
-        CLIENT_DELAIS_PAIEMENT = fusionnerObjetParCle('client_delais_paiement', CLIENT_DELAIS_PAIEMENT, distantCDP, lastLocalTs);
-        initialiserBaselineObjet('client_delais_paiement', CLIENT_DELAIS_PAIEMENT);
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
-  fbDb.ref('gos_exposition_snapshots').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantES = JSON.parse(val)||[];
-        EXPOSITION_SNAPSHOTS = fusionnerCollectionParItem(EXPOSITION_SNAPSHOTS, distantES, lastLocalTs);
-        initialiserBaselineCollection('exposition_snapshots', EXPOSITION_SNAPSHOTS);
-        localStorage.setItem('gos_exposition_snapshots', JSON.stringify(EXPOSITION_SNAPSHOTS));
-      }catch(e){}
-    }
-  });
-  fbDb.ref('gos_employes_presence').on('value', function(snapshot){
-    var val = snapshot.val();
-    if(val){
-      try{
-        var distantEP = JSON.parse(val)||[];
-        EMPLOYES_PRESENCE = fusionnerCollectionParItem(EMPLOYES_PRESENCE, distantEP, lastLocalTs);
-        initialiserBaselineCollection('employes_presence', EMPLOYES_PRESENCE);
-        localStorage.setItem('gos_employes_presence', JSON.stringify(EMPLOYES_PRESENCE));
-        if(document.getElementById('content') && !uneModaleEstOuverte()) renderPage();
-      }catch(e){}
-    }
-  });
 
   } catch(e){
     console.error('Firebase init error:', e);
@@ -32986,6 +33608,29 @@ function initFirebase(){
 
 var lastLocalTs = 0;
 
+// CORRECTIF C-06 (phase 2, niveau 0) : bandeau d'alerte permanent tant que
+// l'horloge de l'appareil est decalee de plus de 2 minutes (offset = heure
+// serveur - heure appareil, fourni par Firebase). Ne bloque rien : informe.
+var SEUIL_DECALAGE_HORLOGE_MS = 2 * 60 * 1000;
+function majBandeauHorlogeDecalee(offsetMs){
+  var b = document.getElementById('bandeauHorlogeDecalee');
+  var decale = Math.abs(offsetMs) > SEUIL_DECALAGE_HORLOGE_MS;
+  window.gosHorlogeDecalee = decale;
+  if(!decale){ if(b) b.style.display = 'none'; return; }
+  if(!b){
+    b = document.createElement('div');
+    b.id = 'bandeauHorlogeDecalee';
+    b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:100000;background:#A32D2D;color:#fff;padding:8px 14px;font-size:13px;font-weight:600;text-align:center';
+    document.body.appendChild(b);
+  }
+  var min = Math.round(Math.abs(offsetMs) / 60000);
+  var duree = min >= 1440 ? Math.round(min / 1440) + ' jour(s)' : (min >= 60 ? Math.round(min / 60) + ' heure(s)' : min + ' minute(s)');
+  b.textContent = '\u26A0 L\'heure de cet appareil est ' + (offsetMs < 0 ? 'en avance' : 'en retard') + ' de ' + duree
+    + ' par rapport au serveur. Corrigez la date et l\'heure (reglage automatique) avant toute saisie : sinon vos modifications peuvent ecraser celles des autres postes ou etre perdues.';
+  b.style.display = 'block';
+  console.warn('GarageOS : horloge de l\'appareil decalee de ' + offsetMs + ' ms par rapport au serveur');
+}
+
 // Protege contre l'ecrasement de donnees a jour par une version locale
 // perimee : tant que la 1ere reponse du listener Firebase n'est pas recue,
 // on ne sauvegarde pas — evite qu'un appareil qui vient de se rouvrir
@@ -32995,26 +33640,19 @@ var firstSyncReceived = false;
 
 var pendingVehiclesSave = false; // true si une sauvegarde a ete tentee hors-ligne, a rejouer a la reconnexion
 
+// CORRECTIF C-05a (phase 2) : envoie la sauvegarde mise en attente pendant le
+// chargement, APRES que l'ecouteur gos_data a fusionne l'etat du serveur.
+function envoyerSauvegardeEnAttenteApresSynchro(){
+  if(pendingVehiclesSave && fbDb && fbConnected && firstSyncReceived){
+    pendingVehiclesSave = false;
+    saveVFirebase();
+  }
+}
+
 function saveVFirebase(){
-  if(!fbDb || !fbConnected){ pendingVehiclesSave = true; return; }
-  if(!firstSyncReceived) return; // attend la confirmation de la 1ere synchro avant d'ecrire
-  clearTimeout(fbSyncTimeout);
-  fbSyncTimeout = setTimeout(function(){
-    var ts = Date.now();
-    lastLocalTs = ts;
-    fbDb.ref('gos_data').update({
-      vehicles: JSON.stringify(vehicles),
-      ts: ts,
-      deviceId: deviceId,
-      updatedBy: currentUser ? currentUser.login : 'unknown'
-    }).then(function(){
-      showSyncStatus('saved');
-    }).catch(function(e){
-      console.error('Firebase save error:', e);
-      showSyncStatus('error');
-      pendingVehiclesSave = true; // echec d'ecriture : sera retente a la prochaine reconnexion
-    });
-  }, 200);
+  // NIVEAU 1 : plus d'envoi du tableau complet. Les vehicules reellement
+  // modifies deviennent des operations envoyees par transaction.
+  GOS_SYNC.enregistrer('vehicles');
 }
 
 // ============================================================
@@ -33088,9 +33726,10 @@ function creerSauvegardeManuelle(){
 }
 
 function creerSauvegardeAutomatiqueSiBesoin(){
+  if(!gosEstDirection()) return; // C-09 : sauvegarde automatique : postes Direction uniquement
   if(!fbDb || !fbConnected || !firstSyncReceived) return;
   if(!vehicles || !vehicles.length) return; // rien d'utile a sauvegarder
-  var dateKey = new Date().toISOString().slice(0,10); // AAAA-MM-JJ
+  var dateKey = new Date(heureServeur()).toISOString().slice(0,10); // AAAA-MM-JJ (NIVEAU 1 : heure serveur)
   if(localStorage.getItem('gos_dernier_backup_date') === dateKey) return; // deja fait aujourd'hui
 
   // IMPORTANT : avant d'ecrire, comparer avec la sauvegarde valide la
@@ -33113,7 +33752,7 @@ function creerSauvegardeAutomatiqueSiBesoin(){
     fbDb.ref('gos_backups/'+dateKey).set({
       vehicles: JSON.stringify(vehicles),
       nbVehicules: vehicles.length,
-      ts: Date.now(),
+      ts: firebase.database.ServerValue.TIMESTAMP, // NIVEAU 1 : heure serveur
       deviceId: deviceId
     }).then(function(){
       localStorage.setItem('gos_dernier_backup_date', dateKey);
@@ -33123,6 +33762,11 @@ function creerSauvegardeAutomatiqueSiBesoin(){
 }
 
 function purgerAnciennesSauvegardes(){
+  // CORRECTIF C-06 (phase 2) : purge DESACTIVEE. Elle comparait la date des
+  // sauvegardes a l'horloge de l'appareil : un seul poste mal regle (en avance)
+  // supprimait TOUTES les sauvegardes automatiques. A reactiver au niveau 1 avec
+  // l'heure du serveur. Les sauvegardes s'accumulent en attendant (1 par jour).
+  return;
   if(!fbDb || !fbConnected) return;
   fbDb.ref('gos_backups').once('value').then(function(snap){
     var val = snap.val();
@@ -33222,20 +33866,11 @@ function restaurerSauvegarde(cle, type){
     vehicles = vehiculesRestaures;
     var sans = vehicles.map(function(v){ var c=JSON.parse(JSON.stringify(v)); c.photos=[]; return c; });
     localStorage.setItem('gos_v10', JSON.stringify(sans));
-    var ts = Date.now();
-    lastLocalTs = ts;
-    fbDb.ref('gos_data').set({
-      vehicles: b.vehicles,
-      ts: ts,
-      deviceId: deviceId,
-      updatedBy: (currentUser?currentUser.login:'unknown')+' (restauration sauvegarde '+cle+')'
-    }).then(function(){
-      alert(vehicles.length+' vehicule(s) restaure(s) depuis la sauvegarde. Rechargement...');
-      location.reload();
-    }).catch(function(e){
-      alert('Restauration locale effectuee, mais echec de la synchronisation Firebase : '+e.message);
-      location.reload();
-    });
+    // NIVEAU 1 : la restauration passe par des operations (fusion a trois voies,
+    // suppressions explicites, conflits visibles) et non par un remplacement complet.
+    saveV();
+    renderPage();
+    alert(vehicles.length+' vehicule(s) restaure(s) depuis la sauvegarde. Les modifications sont envoyees au serveur.');
   }).catch(function(){ alert('Erreur lors de la lecture de la sauvegarde.'); });
 }
 
@@ -33288,7 +33923,10 @@ window.onload=function(){
   var comptes = loadComptes();
   var savedCompte = session ? comptes.find(function(c){ return c.id===session.userId; }) : null;
 
-  if(savedCompte){
+  // C-09 : seule une session de l'ANCIENNE connexion (transition) est restauree ici ;
+  // une session Firebase est restauree par GOS_AUTH (onAuthStateChanged).
+  if(savedCompte && GOS_AUTH_CFG.connexionLocaleTransitoire && session && session.mode === 'local'){
+    GOS_SYNC.definirRole(savedCompte.role, false);
     // Reconnexion automatique
     currentUser = savedCompte;
     currentRole = savedCompte.role;
@@ -33383,6 +34021,22 @@ window.onload=function(){
     }
   });
   if(migrated) saveV();loadPersonnel();initFournisseurs();initBanques();loadForfaitFactures();loadStock();loadCommandesSpeciales();loadForfaitsTKM();loadChargesFixes();loadEngagementsBancaires();loadForfaitsClients();loadClientsSansVehicule();loadExpositionSnapshots();
+  // CORRECTIF N-01 (niveau 1, etape 1) : ces 7 collections avaient une fonction
+  // de chargement local qui n'etait JAMAIS appelee. Au demarrage elles restaient
+  // vides en memoire (quel que soit le contenu du stockage local) jusqu'a la
+  // reponse Firebase, et la premiere saisie ecrasait alors le stockage local.
+  // La reference (baseline) est capturee juste apres le chargement, comme pour
+  // les vehicules (initialiserBaselineVehicules) : sinon la premiere sauvegarde
+  // daterait "modifie a l'instant" TOUS les elements charges, meme inchanges.
+  loadCaisseJournees(); initialiserBaselineCollection('caisse_journees', CAISSE_JOURNEES);
+  loadCaisseMouvements(); initialiserBaselineCollection('caisse_mouvements', CAISSE_MOUVEMENTS);
+  loadDettesManuelles(); initialiserBaselineCollection('dettes_manuelles', DETTES_MANUELLES);
+  loadPresences(); initialiserBaselineCollection('presences', PRESENCES);
+  loadEmployesPresence(); initialiserBaselineCollection('employes_presence', EMPLOYES_PRESENCE);
+  loadClientDelaisPaiement(); initialiserBaselineObjet('client_delais_paiement', CLIENT_DELAIS_PAIEMENT);
+  loadDescripteursFaciaux(); initialiserBaselineObjet('descripteurs_faciaux', DESCRIPTEURS_FACIAUX);
+  GOS_SYNC.localPret(); // NIVEAU 1 : reference des modifications locales = etat charge
+  window.__gosChargementLocalTermine = true; // C-09
   migrerPaiementsClients(); // migration retroactive (voir commentaire de la fonction) — necessite vehicles ET FORFAIT_FACTURES deja charges
   // Alimenter le catalogue pièces depuis l'historique existant
   vehicles.forEach(function(v){ if(v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length) indexerPiecesChiffrage(v); });
@@ -33419,9 +34073,9 @@ window.onload=function(){
 
 </script>
   <!-- Firebase SDK chargé en dernier -->
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js" onload="onFirebaseLoaded()" crossorigin="anonymous"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js" onload="onFirebaseDatabaseLoaded()" crossorigin="anonymous"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js" onload="onFirebaseAuthLoaded()" crossorigin="anonymous"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js" onload="onFirebaseLoaded()"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js" onload="onFirebaseDatabaseLoaded()"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js" onload="onFirebaseAuthLoaded()"></script>
 <div class="overlay" id="modalCommentaires" style="display:none" onclick="if(event.target===this)this.style.display='none'">
 <div class="modal" style="max-width:520px">
   <div id="commBody"></div>

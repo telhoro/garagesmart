@@ -121,7 +121,7 @@ function chargerProfilEtDonnees(uid){
 }
 
 function chargerVehicules(){
-  db.ref('gos_data/vehicles').once('value').then(function(snap){
+  db.ref('gos_portail/'+auth.currentUser.uid+'/vehicules').once('value') /* C-09 : projection du client, plus jamais gos_data */.then(function(snap){
     var raw = snap.val();
     var tous = [];
     try{ tous = JSON.parse(raw)||[]; }catch(e){ tous = []; }

@@ -211,7 +211,7 @@ function chargerProfilEtDonnees(uid){
 }
 
 function chargerVehicules(){
-  db.ref('gos_data/vehicles').once('value').then(function(snap){
+  db.ref('gos_portail/'+auth.currentUser.uid+'/vehicules').once('value') /* C-09 : projection du client, plus jamais gos_data */.then(function(snap){
     var raw = snap.val();
     var tous = [];
     try{ tous = JSON.parse(raw)||[]; }catch(e){ tous = []; }
@@ -1106,9 +1106,10 @@ function envoyerMessage(){
   var ref = db.ref('gos_messages/'+currentUid+'/'+vehiculeMessagerieActuel).push();
   ref.set({
     auteur: 'client',
+    auteurUid: currentUid,                              // C-09 : auteur verifie par les regles
     nomAuteur: compteClient.nomContact || compteClient.clientNom,
     texte: texte,
-    date: Date.now(),
+    date: firebase.database.ServerValue.TIMESTAMP,      // C-09 : heure du serveur
     lu: false
   });
   input.value = '';
