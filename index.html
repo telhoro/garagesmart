@@ -2802,7 +2802,9 @@ function enregistrerPointage(employe, methode, photoBase64){
   var pointage = {
     id: 'pres_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),
     employeId: employe.id, employeNom: nomComplet,
-    type: type, date: Date.now(), methode: methode, photo: photoBase64
+    type: type, date: Date.now(), methode: methode
+    // C-08 : la photo du pointage n'est plus conservee (decision Direction du 21/09/2026).
+    // Elle pesait ~8 Ko par pointage, saturait le stockage local et le quota Firebase.
   };
   PRESENCES.push(pointage);
   savePresences();
@@ -32988,6 +32990,7 @@ var GOS_SYNC = (function(){
     refus: function(){ return JSON.parse(JSON.stringify(refus)); }, nbQuarantaine: function(){ return nbQuarantaine; }, stockDelta: stockDelta, demarrer: demarrer, surConnexion: surConnexion,
     ouvrirConflits: ouvrirConflits, resoudreConflit: resoudreConflit,
     quandRecu: function(cle, cb){ (function att(){ if(recu[cle] !== undefined && recu[cle] > 0) cb(); else setTimeout(att, 150); })(); },
+    estRecu: function(cle){ return recu[cle] !== undefined && recu[cle] > 0; },   // C-09 : etat de reception, en lecture directe
     etat: function(){ return {enLigne: enLigne, epoque: epoque, fileChargee: fileChargee, file: clone(file), recu: clone(recu),
                               conflitsOuverts: Object.keys(conflitsOuverts).length, tombes: Object.keys(tombes).reduce(function(a, c){ a[c] = Object.keys(tombes[c]); return a; }, {}),
                               journal: journal.slice(-60)}; },
@@ -33010,7 +33013,10 @@ var GOS_SYNC = (function(){
     apres: function(raison){
       firstSyncReceived = true; if(typeof majBandeauChargementSync === 'function') majBandeauChargementSync();
       initialiserBaselineVehicules();
-      if(raison !== 'transaction'){
+      // C-09 : tant que les donnees financieres (M1) ne sont pas recues, leurs champs
+      // paraissent absents. Une migration lancee a ce moment les recalcule et ecrase
+      // la valeur du serveur. On attend donc les deux noeuds.
+      if(raison !== 'transaction' && GOS_SYNC.estRecu('gos_fin_paiements') && GOS_SYNC.estRecu('gos_fin_validations')){
         migrerFactureDeposeeLe(); migrerValideDirFacturesManuelles(); migrerForfaitsLivresBloques();
       }
       rafraichir();
@@ -33409,7 +33415,8 @@ var GOS_PERSONNEL = (function(){
         + '<td>' + (p.actif ? (p.doitChangerMdp ? 'actif (mot de passe a changer)' : 'actif') : '<span style="color:#A32D2D">desactive</span>') + '</td>'
         + '<td>' + (p.derniereConnexion ? new Date(p.derniereConnexion).toLocaleString('fr-FR') : 'jamais') + '</td><td>'
         + (uid === GOS_AUTH.uid ? '<span class="xs muted">vous</span>' : (p.actif ? '<button class="btn btn-sm" onclick="GOS_PERSONNEL.changerEtat(\'' + uid + '\', false)">Desactiver</button>'
-                                                                            : '<button class="btn btn-sm" onclick="GOS_PERSONNEL.changerEtat(\'' + uid + '\', true)">Reactiver</button>'))
+                                                                            : '<button class="btn btn-sm" onclick="GOS_PERSONNEL.changerEtat(\'' + uid + '\', true)">Reactiver</button>'
+                                                                              + ' <button class="btn btn-sm" style="color:#A32D2D" onclick="GOS_PERSONNEL.supprimer(\'' + uid + '\')">Supprimer</button>'))
         + '</td></tr>';
     });
     h += '</tbody></table>';
@@ -33423,6 +33430,13 @@ var GOS_PERSONNEL = (function(){
       + '<div><label class="fl">Mot de passe provisoire (identifiant uniquement, 10 caracteres min.)</label><input class="fi" id="pProvisoire" type="password" autocomplete="new-password"></div>'
       + '</div><div id="pMsg" class="xs" style="margin:8px 0;color:#A32D2D"></div><button class="btn btn-primary btn-sm" id="pCreer" onclick="GOS_PERSONNEL.creer()">Creer le compte</button>'
       + '<div class="xs muted" style="margin-top:6px">Adresse e-mail : l\'employe recoit un lien pour choisir son mot de passe. Identifiant : remettez le mot de passe provisoire en main propre ; il devra le changer a la premiere connexion. Aucun mot de passe n\'est conserve par GarageOS.</div></div>';
+    h += '<div style="margin-top:14px;border-top:1px solid #eee;padding-top:10px">'
+      + '<strong style="font-size:13px">Un employe a oublie son mot de passe ?</strong>'
+      + '<div class="xs" style="margin-top:6px;line-height:1.6">'
+      + '<b>Compte avec adresse e-mail :</b> il clique sur « Mot de passe oublie » sur l\'ecran de connexion et suit le lien recu.<br>'
+      + '<b>Compte avec identifiant simple :</b> sur le PC Direction, double-cliquez sur le raccourci <b>« Reinitialiser un mot de passe »</b>, saisissez son identifiant, et remettez-lui en main propre le mot de passe provisoire affiche. Il en choisira un nouveau a sa prochaine connexion.<br>'
+      + '<b>Sans le PC Direction :</b> desactivez son compte ci-dessus, supprimez-le, puis recreez-le avec le meme identifiant et un nouveau mot de passe provisoire. Son historique de travail n\'est pas affecte.'
+      + '</div></div>';
     return h + '</div></div>';
   }
   function msg(t, ok){ var el = document.getElementById('pMsg'); if(el){ el.style.color = ok ? '#3B6D11' : '#A32D2D'; el.textContent = t; } }
@@ -33470,7 +33484,25 @@ var GOS_PERSONNEL = (function(){
     if(!actif){ maj.desactiveLe = firebase.database.ServerValue.TIMESTAMP; maj.desactivePar = GOS_AUTH.uid; }
     fbDb.ref('gos_staff/' + uid).update(maj).catch(function(e){ alert('Echec : ' + (e && e.code ? e.code : e)); });
   }
-  return {html: html, creer: creer, changerEtat: changerEtat};
+  // Suppression definitive d'un acces : seulement sur un compte deja desactive,
+  // pour qu'aucun acces ne soit retire par inadvertance. L'identifiant est libere
+  // et redevient reutilisable. Le compte Firebase subsiste mais, sans profil, il
+  // n'a plus aucun droit (verifie par les tests SEC-03).
+  function supprimer(uid){
+    var p = liste[uid] || {};
+    if(uid === GOS_AUTH.uid) return;
+    if(p.actif){ alert('Desactivez d\'abord ce compte, puis supprimez-le.'); return; }
+    if(!confirm('Supprimer definitivement l\'acces de ' + (p.nom || uid) + ' ?\n\nSon historique de travail et sa fiche du personnel ne sont pas touches.\nL\'identifiant redeviendra disponible.')) return;
+    if(prompt('Pour confirmer, tapez SUPPRIMER') !== 'SUPPRIMER') return;
+    var suite = function(){
+      fbDb.ref('gos_staff/' + uid).remove().then(function(){
+        alert('Acces supprime.\n\nLe compte Firebase existe encore mais n\'a plus aucun droit. Pour l\'effacer completement :\nnode gos-admin-b3.js supprimer-sans-profil ' + uid);
+      }).catch(function(e){ alert('Echec : ' + (e && e.code ? e.code : e)); });
+    };
+    if(p.typeCompte === 'identifiant' && p.login) fbDb.ref('gos_staff_logins/' + cleLogin(p.login)).remove().then(suite, suite);
+    else suite();
+  }
+  return {html: html, creer: creer, changerEtat: changerEtat, supprimer: supprimer};
 })();
 var GOS_M1_OUTIL = {
   html: function(){
@@ -33912,9 +33944,9 @@ window.onload=function(){
   window.addEventListener('resize', checkMobileLayout);
 
   initData();vehicles=loadV();initialiserBaselineVehicules();
-  migrerFactureDeposeeLe(); // migration retroactive (voir commentaire de la fonction)
-  migrerValideDirFacturesManuelles(); // idem, pour les factures manuelles/imports
-  migrerForfaitsLivresBloques(); // idem, pour les forfaits bloques sur "livre"
+  // C-09 : au demarrage, les donnees financieres (M1) ne sont pas encore chargees.
+  // Ces migrations sont relancees par le moteur des que les noeuds sont recus.
+  // migrerFactureDeposeeLe / migrerValideDirFacturesManuelles / migrerForfaitsLivresBloques : voir GOS_SYNC
   migrerDateDebutChargesFixes(); // idem, pour le suivi de paiement des charges fixes
   // Firebase sera initialisé via onFirebaseDatabaseLoaded()
   // Vérifier s'il y a une session active (persiste après actualisation)
