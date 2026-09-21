@@ -33104,13 +33104,13 @@ var GOS_SYNC = (function(){
   function ouvrirConflits(){
     var ex = document.getElementById('gosModaleConflits'); if(ex) ex.remove();
     var ids = Object.keys(conflitsOuverts);
-    var h = '<div class="modal" style="width:680px;max-height:82vh;overflow-y:auto"><div class="mhead"><h2>Conflits de synchronisation</h2>'
+    var h = '<div class="modal" style="width:680px;max-height:82vh;overflow-y:auto"><div class="mhead"><h2>Conflits de synchronisation <span id="gosConflitsRestants" class="xs muted">(' + ids.length + ' a traiter)</span></h2>'
       + '<button class="btn btn-sm" onclick="document.getElementById(\'gosModaleConflits\').remove()">X</button></div><div class="mbody" style="padding:14px">';
     h += '<p class="xs muted" style="margin-bottom:10px">Deux postes ont modifie la meme information differemment, ou un poste a modifie un element supprime ailleurs. Rien n\'a ete ecrase : la valeur actuellement enregistree est conservee et la valeur du poste est gardee ici.</p>';
     if(!ids.length) h += '<div class="xs muted">Aucun conflit ouvert.</div>';
     ids.forEach(function(k){
       var c = conflitsOuverts[k];
-      h += '<div style="border:1px solid #e2e2e2;border-radius:6px;padding:9px;margin-bottom:8px;font-size:12px">'
+      h += '<div id="gosConflitLigne_' + k + '" data-conflit="1" style="border:1px solid #e2e2e2;border-radius:6px;padding:9px;margin-bottom:8px;font-size:12px">'
         + '<div style="font-weight:700">' + echapper(c.libelle || c.recordId) + ' <span class="xs muted">(' + echapper(c.collection) + (c.chemin ? ' — ' + echapper(c.chemin) : '') + ')</span></div>'
         + '<div class="xs muted">' + echapper(c.type) + ' · poste ' + echapper(c.deviceId || '?') + ' · ' + echapper(c.auteur || '?') + ' · ' + (c.detecteLe ? new Date(c.detecteLe).toLocaleString('fr-FR') : '') + '</div>'
         + '<div>Valeur de depart : <code>' + echapper(court(c.base)) + '</code></div>'
@@ -33138,7 +33138,23 @@ var GOS_SYNC = (function(){
     }
     db.ref('gos_conflits/' + k).update({statut: action === 'appliquer' ? 'resolu_valeur_poste' : 'resolu_valeur_enregistree',
       resoluPar: utilisateur(), resoluLe: firebase.database.ServerValue.TIMESTAMP});
-    var m = document.getElementById('gosModaleConflits'); if(m) m.remove();
+    // C-09 / O-05 : ne plus refermer toute la fenetre. Seule la ligne traitee
+    // disparait ; le compteur d'en-tete suit ce qui reste. La fenetre ne se
+    // ferme que lorsqu'il n'y a plus rien a trancher.
+    delete conflitsOuverts[k];
+    var ligne = document.getElementById('gosConflitLigne_' + k); if(ligne) ligne.remove();
+    var m = document.getElementById('gosModaleConflits');
+    if(m){
+      var restants = m.querySelectorAll('[data-conflit="1"]').length;
+      var cpt = document.getElementById('gosConflitsRestants');
+      if(cpt) cpt.textContent = restants ? '(' + restants + ' a traiter)' : '(termine)';
+      if(!restants){
+        var corps = m.querySelector('.mbody');
+        if(corps) corps.insertAdjacentHTML('beforeend', '<div class="xs muted" style="margin-top:8px">Tous les conflits ont ete traites.</div>');
+        setTimeout(function(){ var z = document.getElementById('gosModaleConflits'); if(z) z.remove(); }, 1500);
+      }
+    }
+    majIndicateur();
   }
 
   return {
