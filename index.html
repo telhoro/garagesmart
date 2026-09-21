@@ -1071,6 +1071,7 @@ tr:hover td{background:#faf9f7}
   <div class="mhead"><h2>Charge fixe</h2><button class="btn btn-sm" onclick="closeChargeFixeForm()">X</button></div>
   <div class="mbody">
     <div class="fr"><label class="fl">Nom de la charge <span style="color:red">*</span></label><input class="inp" id="chargeFixeNom" placeholder="Ex: Loyer, Salaires..."></div>
+    <div class="fr"><label class="fl">Categorie</label><input class="inp" id="chargeFixeCategorie" list="listeCategoriesChargesFixes" placeholder="Ex: Loyer, Salaires, Energie..." autocomplete="off"><datalist id="listeCategoriesChargesFixes"></datalist><div class="xs muted" style="margin-top:4px">Laisser vide pour classer la charge dans &laquo;&nbsp;Non classe&nbsp;&raquo;.</div></div>
     <div class="fr"><label class="fl">Montant (FCFA) <span style="color:red">*</span></label><input type="number" class="inp" id="chargeFixeMontant" value="0" min="0"></div>
     <div class="fr"><label class="fl">Periodicite</label>
       <select class="inp" id="chargeFixePeriodicite" onchange="onChangePeriodiciteChargeFixe()">
@@ -7288,8 +7289,11 @@ function rapportDetail(sectionId, bornes){
     return {headers:['Banque','Solde'], rows:rows};
   }
   if(sectionId==='charges_fixes'){
-    var rows = CHARGES_FIXES.filter(function(c){return c.actif;}).map(function(c){return [c.nom, c.periodicite, fmtFCFA(c.montant)];});
-    return {headers:['Charge','Periodicite','Montant'], rows:rows};
+    var rows = [];
+    grouperChargesParCategorie(CHARGES_FIXES.filter(function(c){return c.actif;})).forEach(function(g){
+      g.charges.forEach(function(c){ rows.push([g.categorie, c.nom, c.periodicite, fmtFCFA(c.montant)]); });
+    });
+    return {headers:['Categorie','Charge','Periodicite','Montant'], rows:rows};
   }
   if(sectionId==='engagements'){
     var rows = ENGAGEMENTS_BANCAIRES.filter(function(e){return e.actif!==false;}).map(function(e){
@@ -14527,19 +14531,37 @@ function pageChargesFixesPaiement(){
   html += '<button class="btn btn-sm" onclick="chargesFixesVue=\'liste\';renderPage()">&#x2190; Retour a la liste</button>';
   html += '</div>';
 
+  // Bornes du mois civil en cours : sert a separer "a payer ce mois-ci" des
+  // arrieres. Une echeance du mois courant non encore echue reste "a payer".
+  var debutMois = new Date(); debutMois.setHours(0,0,0,0); debutMois.setDate(1);
+  var debutMoisTs = debutMois.getTime();
+  var debutMoisSuivantTs = new Date(debutMois.getFullYear(), debutMois.getMonth()+1, 1).getTime();
+
   var actives = CHARGES_FIXES.filter(function(c){return c.actif;});
   var lignesCharges = actives.map(function(c){
     var impayees = echeancesImpayees(c).sort(function(a,b){return a-b;});
-    var totalCumule = impayees.reduce(function(s,d){return s+resteDuEcheance(c,d);},0);
-    return {charge:c, moisDus: impayees, totalCumule: totalCumule};
+    var cumul = function(f){ return impayees.filter(f).reduce(function(s,d){return s+resteDuEcheance(c,d);},0); };
+    return {
+      charge: c,
+      moisDus: impayees,
+      totalCumule: cumul(function(){ return true; }),
+      duMoisCourant: cumul(function(d){ return d>=debutMoisTs && d<debutMoisSuivantTs; }),
+      arrieres: cumul(function(d){ return d<debutMoisTs; })
+    };
   });
 
-  var totalGeneralDu = lignesCharges.reduce(function(s,l){return s+l.totalCumule;},0);
-  var nbChargesEnRetard = lignesCharges.filter(function(l){return l.moisDus.length>0;}).length;
+  var somme = function(champ){ return lignesCharges.reduce(function(s,l){return s+l[champ];},0); };
+  var totalGeneralDu = somme('totalCumule');
+  var totalMoisCourant = somme('duMoisCourant');
+  var totalArrieres = somme('arrieres');
+  var nbChargesEnRetard = lignesCharges.filter(function(l){return l.arrieres>0;}).length;
+  var fcfa = function(v){ return v ? Math.round(v).toLocaleString('fr-FR')+' FCFA' : '—'; };
 
-  html += '<div class="kgrid k2" style="margin-bottom:16px">';
-  html += kpi('Charges avec mois impayes', nbChargesEnRetard, nbChargesEnRetard>0?'red':'green');
-  html += kpi('Total du (toutes charges)', totalGeneralDu?totalGeneralDu.toLocaleString('fr-FR')+' FCFA':'—', totalGeneralDu>0?'red':'green');
+  html += '<div class="kgrid k4" style="margin-bottom:16px">';
+  html += kpi('A payer ce mois-ci', fcfa(totalMoisCourant), totalMoisCourant>0?'amber':'green');
+  html += kpi('Arrieres (mois anterieurs)', fcfa(totalArrieres), totalArrieres>0?'red':'green');
+  html += kpi('Total du', fcfa(totalGeneralDu), totalGeneralDu>0?'red':'green');
+  html += kpi('Charges en retard', nbChargesEnRetard, nbChargesEnRetard>0?'red':'green');
   html += '</div>';
 
   if(!lignesCharges.length){
@@ -14547,32 +14569,71 @@ function pageChargesFixesPaiement(){
     return html;
   }
 
+  // Regroupement par categorie : le sous-total affiche est le cumul du du groupe.
+  var parCategorie = grouperChargesParCategorie(actives).map(function(g){
+    var lignes = g.charges.map(function(c){
+      return lignesCharges.find(function(l){ return l.charge.id===c.id; });
+    }).filter(function(l){ return !!l; });
+    return {
+      categorie: g.categorie,
+      lignes: lignes,
+      total: lignes.reduce(function(s,l){return s+l.totalCumule;},0),
+      arrieres: lignes.reduce(function(s,l){return s+l.arrieres;},0)
+    };
+  });
+
+  html += boutonsPliageCharges('paiement');
   html += '<div class="card"><div class="tw"><table><thead><tr><th>Charge</th><th>Mois dus</th><th style="text-align:right">Cumul du</th></tr></thead><tbody>';
-  lignesCharges.forEach(function(l){
-    var c = l.charge;
-    html += '<tr>';
-    html += '<td style="vertical-align:top;padding-top:10px"><strong>'+c.nom+'</strong><div class="xs muted">'+(parseFloat(c.montant)||0).toLocaleString('fr-FR')+' FCFA / mois</div></td>';
-    html += '<td>';
-    if(!l.moisDus.length){
-      html += '<span class="badge b-green">&#x2714; A jour</span>';
-    } else {
-      l.moisDus.forEach(function(d){
+
+  parCategorie.forEach(function(g){
+    html += enteteGroupeCharges('paiement', g.categorie, g.lignes.length, fcfa(g.total),
+              g.arrieres>0?'#A32D2D':(g.total>0?'#8A6D1F':'#3B6D11'), 3);
+    if(!chargesFixesGroupesOuverts[clePliageCharges('paiement', g.categorie)]) return;
+
+    g.lignes.forEach(function(l){
+      var c = l.charge;
+      // Detail d'un mois du, avec son bouton Payer.
+      var ligneMois = function(d){
         var dt = new Date(d);
         var enRetard = d<maintenant;
         var resteMois = resteDuEcheance(c, d);
         var estPartiel = resteMois < (parseFloat(c.montant)||0);
-        html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;'+(enRetard?'':'')+'">';
-        html += '<span class="xs" style="'+(enRetard?'color:#A32D2D;font-weight:700':'')+'">'+moisLabels[dt.getMonth()]+' '+dt.getFullYear()+(enRetard?' &#x26A0;':'')+'</span>';
+        var h = '<div style="display:flex;align-items:center;gap:8px;padding:4px 0">';
+        h += '<span class="xs" style="'+(enRetard?'color:#A32D2D;font-weight:700':'')+'">'+moisLabels[dt.getMonth()]+' '+dt.getFullYear()+(enRetard?' &#x26A0;':'')+'</span>';
         if(estPartiel){
-          html += '<span class="xs muted">(reste '+resteMois.toLocaleString('fr-FR')+' FCFA sur '+(parseFloat(c.montant)||0).toLocaleString('fr-FR')+')</span>';
+          h += '<span class="xs muted">(reste '+resteMois.toLocaleString('fr-FR')+' FCFA sur '+(parseFloat(c.montant)||0).toLocaleString('fr-FR')+')</span>';
         }
-        html += '<button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 8px" data-cfid="'+c.id+'" data-echeance="'+d+'" onclick="marquerChargeFixeEcheanceByEl(this)">Payer</button>';
+        h += '<button class="btn btn-success btn-sm" style="font-size:10px;padding:2px 8px" data-cfid="'+c.id+'" data-echeance="'+d+'" onclick="marquerChargeFixeEcheanceByEl(this)">Payer</button>';
+        return h+'</div>';
+      };
+
+      html += '<tr>';
+      html += '<td style="vertical-align:top;padding-top:10px"><strong>'+c.nom+'</strong><div class="xs muted">'+(parseFloat(c.montant)||0).toLocaleString('fr-FR')+' FCFA / mois</div></td>';
+      html += '<td>';
+      if(!l.moisDus.length){
+        html += '<span class="badge b-green">&#x2714; A jour</span>';
+      } else if(l.moisDus.length===1){
+        // Un seul mois du : pas de pliage, le bouton Payer reste immediat.
+        html += ligneMois(l.moisDus[0]);
+      } else {
+        // Plusieurs mois cumules : replie par defaut, un resume tient lieu d'en-tete.
+        var ouvert = !!chargesFixesMoisOuverts[c.id];
+        var premier = new Date(l.moisDus[0]), dernier = new Date(l.moisDus[l.moisDus.length-1]);
+        html += '<div style="cursor:pointer;display:flex;align-items:center;gap:8px" data-cfid="'+echapperAttr(c.id)+'" onclick="basculerMoisChargeByEl(this)" title="Cliquer pour '+(ouvert?'replier':'voir le detail des mois')+'">';
+        html += '<span class="xs" style="font-weight:700">'+(ouvert?'&#x25BC;':'&#x25B6;')+' '+l.moisDus.length+' mois dus</span>';
+        html += '<span class="xs muted">de '+moisLabels[premier.getMonth()]+' '+premier.getFullYear()+' a '+moisLabels[dernier.getMonth()]+' '+dernier.getFullYear()+'</span>';
+        if(l.arrieres>0) html += '<span class="badge b-red">'+fcfa(l.arrieres)+' en retard</span>';
         html += '</div>';
-      });
-    }
-    html += '</td>';
-    html += '<td style="text-align:right;vertical-align:top;padding-top:10px;font-weight:700;font-family:monospace;color:'+(l.totalCumule>0?'#A32D2D':'#3B6D11')+'">'+(l.totalCumule?l.totalCumule.toLocaleString('fr-FR')+' FCFA':'—')+'</td>';
-    html += '</tr>';
+        if(ouvert){
+          html += '<div style="border-left:2px solid #E2E6EA;margin-left:6px;padding-left:10px;margin-top:4px">';
+          l.moisDus.forEach(function(d){ html += ligneMois(d); });
+          html += '</div>';
+        }
+      }
+      html += '</td>';
+      html += '<td style="text-align:right;vertical-align:top;padding-top:10px;font-weight:700;font-family:monospace;color:'+(l.totalCumule>0?'#A32D2D':'#3B6D11')+'">'+fcfa(l.totalCumule)+'</td>';
+      html += '</tr>';
+    });
   });
   html += '</tbody></table></div></div>';
   return html;
@@ -15061,6 +15122,87 @@ function setChargesFixesHistoriquePeriodeByEl(el){
   renderPage();
 }
 
+// ── Charges fixes : categories, regroupement et pliage ──────────────────
+// Une charge porte desormais un libelle de categorie libre (c.categorie).
+// Les charges creees avant cette version n'en ont pas : elles sont regroupees
+// sous "Non classe", qui reste toujours visible et s'affiche en dernier — on
+// ne masque jamais une charge au motif qu'elle n'est pas classee.
+var CATEGORIES_CHARGES_SUGGEREES = ['Loyer','Salaires','Energie et fluides','Assurances','Taxes et impots','Abonnements','Entretien et maintenance','Transport','Frais bancaires','Autres'];
+var CATEGORIE_CHARGE_PAR_DEFAUT = 'Non classe';
+// Etat de pliage : volontairement en memoire seulement (pas de localStorage),
+// le stockage local ayant deja sature en production le 21/09/2026.
+var chargesFixesGroupesOuverts = {};   // {'vue|categorie': true}
+var chargesFixesMoisOuverts = {};      // {idCharge: true} — detail des mois dus
+
+function categorieCharge(c){
+  var v = (c && c.categorie) ? String(c.categorie).trim() : '';
+  return v || CATEGORIE_CHARGE_PAR_DEFAUT;
+}
+// Categories reellement utilisees + suggestions, sans doublon (pour la saisie).
+function categoriesChargesConnues(){
+  var vues = {};
+  CHARGES_FIXES.forEach(function(c){
+    var k = categorieCharge(c);
+    if(k !== CATEGORIE_CHARGE_PAR_DEFAUT) vues[k] = true;
+  });
+  CATEGORIES_CHARGES_SUGGEREES.forEach(function(k){ vues[k] = true; });
+  return Object.keys(vues).sort(function(a,b){ return a.localeCompare(b,'fr'); });
+}
+// Regroupe une liste de charges par categorie. "Non classe" toujours en dernier.
+function grouperChargesParCategorie(liste){
+  var par = {};
+  liste.forEach(function(c){ var k = categorieCharge(c); (par[k] = par[k] || []).push(c); });
+  return Object.keys(par).sort(function(a,b){
+    if(a === CATEGORIE_CHARGE_PAR_DEFAUT) return 1;
+    if(b === CATEGORIE_CHARGE_PAR_DEFAUT) return -1;
+    return a.localeCompare(b,'fr');
+  }).map(function(k){ return {categorie: k, charges: par[k]}; });
+}
+function clePliageCharges(vue, categorie){ return vue+'|'+categorie; }
+function basculerGroupeChargeByEl(el){
+  var k = el.getAttribute('data-grp');
+  chargesFixesGroupesOuverts[k] = !chargesFixesGroupesOuverts[k];
+  renderPage();
+}
+function basculerMoisChargeByEl(el){
+  var k = el.getAttribute('data-cfid');
+  chargesFixesMoisOuverts[k] = !chargesFixesMoisOuverts[k];
+  renderPage();
+}
+function plierToutChargesFixes(vue, ouvrir){
+  grouperChargesParCategorie(CHARGES_FIXES).forEach(function(g){
+    chargesFixesGroupesOuverts[clePliageCharges(vue, g.categorie)] = !!ouvrir;
+  });
+  chargesFixesMoisOuverts = {};
+  if(ouvrir && vue==='paiement'){
+    CHARGES_FIXES.forEach(function(c){ chargesFixesMoisOuverts[c.id] = true; });
+  }
+  renderPage();
+}
+// Equivalent mensuel d'une charge, quelle que soit sa periodicite.
+function equivalentMensuelCharge(c){
+  var m = parseFloat(c.montant)||0;
+  if(c.periodicite==='trimestriel') return m/3;
+  if(c.periodicite==='annuel') return m/12;
+  return m;
+}
+function echapperAttr(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// Ligne d'en-tete d'un groupe, cliquable, commune aux deux vues.
+function enteteGroupeCharges(vue, categorie, nb, resume, couleur, nbColonnes){
+  var k = clePliageCharges(vue, categorie);
+  var ouvert = !!chargesFixesGroupesOuverts[k];
+  var h = '<tr style="background:#F2F5F8;cursor:pointer" data-grp="'+echapperAttr(k)+'" onclick="basculerGroupeChargeByEl(this)" title="Cliquer pour '+(ouvert?'replier':'deplier')+'">';
+  h += '<td colspan="'+Math.max(1,nbColonnes-1)+'"><strong>'+(ouvert?'&#x25BC;':'&#x25B6;')+' '+categorie+'</strong> <span class="xs muted">('+nb+')</span></td>';
+  h += '<td style="text-align:right;font-weight:700;font-family:monospace'+(couleur?';color:'+couleur:'')+'">'+resume+'</td>';
+  return h+'</tr>';
+}
+function boutonsPliageCharges(vue){
+  return '<div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px">'
+       + '<button class="btn btn-sm" onclick="plierToutChargesFixes(\'' + vue + '\',true)">Tout deplier</button>'
+       + '<button class="btn btn-sm" onclick="plierToutChargesFixes(\'' + vue + '\',false)">Tout replier</button>'
+       + '</div>';
+}
+
 function pageChargesFixes(){
   if(chargesFixesVue==='paiement') return pageChargesFixesPaiement();
   if(chargesFixesVue==='historique') return pageChargesFixesHistorique();
@@ -15071,18 +15213,17 @@ function pageChargesFixes(){
   html += '</div>';
 
   var actives = CHARGES_FIXES.filter(function(c){return c.actif;});
-  var totalMensuelEquiv = actives.reduce(function(s,c){
-    var m = parseFloat(c.montant)||0;
-    if(c.periodicite==='trimestriel') return s+m/3;
-    if(c.periodicite==='annuel') return s+m/12;
-    return s+m;
-  },0);
+  var totalMensuelEquiv = actives.reduce(function(s,c){ return s+equivalentMensuelCharge(c); },0);
+  var groupes = grouperChargesParCategorie(CHARGES_FIXES);
 
-  html += '<div class="kgrid k3" style="margin-bottom:16px">';
+  html += '<div class="kgrid k4" style="margin-bottom:16px">';
   html += kpi('Charges actives', actives.length, '');
   html += kpi('Equivalent mensuel', totalMensuelEquiv?Math.round(totalMensuelEquiv).toLocaleString('fr-FR')+' FCFA':'—', totalMensuelEquiv>0?'amber':'');
+  html += kpi('Categories', groupes.length, '');
   html += kpi('Total charges', CHARGES_FIXES.length, '');
   html += '</div>';
+
+  if(groupes.length) html += boutonsPliageCharges('liste');
 
   html += '<div class="card"><div class="tw"><table><thead><tr>';
   html += '<th>Charge</th><th>Montant</th><th>Periodicite</th><th>Prochaine echeance</th><th>Statut</th><th></th>';
@@ -15092,7 +15233,13 @@ function pageChargesFixes(){
     html += '<tr><td colspan="6"><div class="empty">Aucune charge fixe enregistree.</div></td></tr>';
   }
 
-  CHARGES_FIXES.forEach(function(c){
+  groupes.forEach(function(g){
+  var actifsGroupe = g.charges.filter(function(c){return c.actif;});
+  var equivGroupe = actifsGroupe.reduce(function(s,c){ return s+equivalentMensuelCharge(c); },0);
+  html += enteteGroupeCharges('liste', g.categorie, g.charges.length,
+            (equivGroupe?Math.round(equivGroupe).toLocaleString('fr-FR')+' FCFA / mois':'—'), '', 6);
+  if(!chargesFixesGroupesOuverts[clePliageCharges('liste', g.categorie)]) return;
+  g.charges.forEach(function(c){
     var periodLabel = c.periodicite==='trimestriel'?'Trimestriel':c.periodicite==='annuel'?'Annuel':'Mensuel';
     var prochaine = c.actif ? prochainEcheanceCharge(c) : null;
     var jourLabel = 'le '+(c.jourEcheance||1)+' de chaque mois'+(c.periodicite!=='mensuel'?' (cycle '+periodLabel.toLowerCase()+')':'');
@@ -15110,6 +15257,7 @@ function pageChargesFixes(){
     }
     html += '</div></td></tr>';
   });
+  });
   html += '</tbody></table></div></div>';
   return html;
 }
@@ -15124,6 +15272,14 @@ function openChargeFixeForm(id){
   chargeFixeEditId = id;
   var c = id ? CHARGES_FIXES.find(function(x){return x.id===id;}) : null;
   document.getElementById('chargeFixeNom').value = c ? c.nom : '';
+  var listeCat = document.getElementById('listeCategoriesChargesFixes');
+  if(listeCat){
+    listeCat.innerHTML = categoriesChargesConnues().map(function(k){
+      return '<option value="'+echapperAttr(k)+'">';
+    }).join('');
+  }
+  var champCat = document.getElementById('chargeFixeCategorie');
+  if(champCat) champCat.value = (c && c.categorie) ? c.categorie : '';
   document.getElementById('chargeFixeMontant').value = c ? c.montant : 0;
   document.getElementById('chargeFixePeriodicite').value = c ? c.periodicite : 'mensuel';
   document.getElementById('chargeFixeJour').value = c ? (c.jourEcheance||5) : 5;
@@ -15139,6 +15295,8 @@ function submitChargeFixeForm(){
   var nom = document.getElementById('chargeFixeNom').value.trim();
   if(!nom){ alert('Le nom est obligatoire.'); return; }
   var montant = parseFloat(document.getElementById('chargeFixeMontant').value)||0;
+  var champCategorie = document.getElementById('chargeFixeCategorie');
+  var categorie = champCategorie ? champCategorie.value.trim() : '';
   var periodicite = document.getElementById('chargeFixePeriodicite').value;
   var jourEcheance = parseInt(document.getElementById('chargeFixeJour').value,10)||1;
   if(jourEcheance<1) jourEcheance=1; if(jourEcheance>31) jourEcheance=31;
@@ -15151,9 +15309,9 @@ function submitChargeFixeForm(){
   if(dateFin && dateFin<dateDebut){ alert('La date de fin doit etre posterieure a la date de debut.'); return; }
   if(chargeFixeEditId){
     var c = CHARGES_FIXES.find(function(x){return x.id===chargeFixeEditId;});
-    if(c){ c.nom=nom; c.montant=montant; c.periodicite=periodicite; c.jourEcheance=jourEcheance; c.moisEcheance=moisEcheance; c.dateDebut=dateDebut; c.dateFin=dateFin; }
+    if(c){ c.nom=nom; c.montant=montant; c.categorie=categorie; c.periodicite=periodicite; c.jourEcheance=jourEcheance; c.moisEcheance=moisEcheance; c.dateDebut=dateDebut; c.dateFin=dateFin; }
   } else {
-    CHARGES_FIXES.push({id:'cf'+Date.now(), nom:nom, montant:montant, periodicite:periodicite, jourEcheance:jourEcheance, moisEcheance:moisEcheance, actif:true, dateDebut:dateDebut, dateFin:dateFin, echeancesPayees:[]});
+    CHARGES_FIXES.push({id:'cf'+Date.now(), nom:nom, montant:montant, categorie:categorie, periodicite:periodicite, jourEcheance:jourEcheance, moisEcheance:moisEcheance, actif:true, dateDebut:dateDebut, dateFin:dateFin, echeancesPayees:[]});
   }
   saveChargesFixes(); closeChargeFixeForm(); renderPage();
 }
