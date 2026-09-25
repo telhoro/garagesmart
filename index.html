@@ -156,6 +156,25 @@ tr:hover td{background:#faf9f7}
 <div id="bandeauChargementSync" style="position:fixed;top:10px;right:14px;z-index:99998;font-size:20px;display:none;animation:sablierPulse 1.4s ease-in-out infinite" title="Chargement des donnees a jour...">
   &#x23F3;
 </div>
+
+<!-- C-09 v4 — VOILE DE CHARGEMENT BLOQUANT (point 1 du 25/09/2026)
+     Empeche toute saisie tant que les donnees du serveur ne sont pas arrivees.
+     Enregistrer avant leur arrivee revient a se comparer a une copie perimee,
+     donc a proposer d'ecraser le travail d'un autre poste. Ne s'affiche jamais
+     hors ligne : la copie locale est alors la seule reference possible et le
+     travail est mis en file d'attente comme avant. -->
+<div id="gosBlocageChargement" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:99997;background:rgba(255,255,255,0.94);align-items:center;justify-content:center;flex-direction:column;gap:12px;text-align:center;padding:24px">
+  <div style="font-size:38px;animation:sablierPulse 1.4s ease-in-out infinite">&#x23F3;</div>
+  <div style="font-weight:700;font-size:15px">Chargement des donnees a jour...</div>
+  <div class="xs muted" style="max-width:340px;line-height:1.5">Quelques secondes. L'enregistrement est suspendu le temps de recevoir les dernieres informations, pour ne rien ecraser.</div>
+</div>
+
+<!-- Repli : si le serveur ne repond pas, on ne laisse pas l'application figee
+     (le garage ne pourrait plus travailler), mais on le dit clairement plutot
+     que de rendre la main en silence. -->
+<div id="gosAvertissementDonnees" style="display:none;position:fixed;top:0;left:0;right:0;z-index:99996;background:#FDF3E3;border-bottom:1px solid #E8A44A;color:#854F0B;font-size:12px;padding:7px 12px;text-align:center;line-height:1.4">
+  &#x26A0; Les donnees du serveur ne sont pas arrivees. Evitez d'enregistrer : verifiez la connexion, puis rechargez la page.
+</div>
 <style>@keyframes sablierPulse{0%,100%{opacity:0.35;transform:scale(0.92)}50%{opacity:1;transform:scale(1.08)}}</style>
 <!-- ECRAN LOGIN -->
 <div id="loginScreen" style="position:fixed;inset:0;background:#f5f4f1;z-index:99999;display:flex;align-items:center;justify-content:center">
@@ -832,6 +851,7 @@ tr:hover td{background:#faf9f7}
 <div class="overlay" id="modalDet" style="display:none" onclick="if(event.target===this)confirmerFermetureDet()">
 <div class="modal modal-xl">
   <div class="mhead"><h2 id="detTitle">Detail</h2><div class="flex gap6"><button class="btn btn-sm" id="btnPhotos" style="color:#185FA5;border-color:#B5D4F4" onclick="photosVisible=!photosVisible;openDetKeepEdit(detCurrentVid)">&#x1F4F7; Photos</button><button class="btn btn-sm" onclick="imprimerDetCourant()" title="Imprimer devis/facture">&#x1F5A8;</button><button class="btn btn-sm" onclick="imprimerFicheEntree(detCurrentVid)" title="Fiche d'entree" style="color:#3B6D11;border-color:#3B6D11">&#x1F4CB; Fiche</button><button class="btn btn-sm" id="btnBonLivraison" style="display:none;color:#A32D2D;border-color:#E0A0A0" onclick="imprimerBonLivraison(detCurrentVid)" title="Bon de livraison">&#x1F4E6; Bon de livraison</button><button class="btn btn-sm" id="btnCommentaires" onclick="ouvrirCommentaires(detCurrentVid)" title="Commentaires" style="color:#854F0B;border-color:#E8A44A">&#x1F4AC;</button><button class="btn btn-sm" id="btnMessageClient" onclick="ouvrirConversationDepuisFiche(detCurrentVid)" title="Message client" style="color:#185FA5;border-color:#B5D4F4">&#x1F310; Message client</button><button class="btn btn-sm" onclick="closeDet()">X</button></div></div>
+  <div id="detBandeauChangement" style="display:none;background:#FDF3E3;border-bottom:1px solid #E8A44A;color:#854F0B;font-size:12px;padding:8px 12px;line-height:1.45"></div>
   <div class="mbody" id="detBody"></div>
   <div class="mfoot" id="detFoot"></div>
 </div>
@@ -2301,6 +2321,9 @@ function marquerVehiculesModifiesAuto(){
 }
 
 function saveV(){
+  // C-09 v4 : la sauvegarde de l'utilisateur devient la nouvelle reference,
+  // sinon son propre enregistrement declencherait l'avertissement de la fiche.
+  try{ if(typeof majSnapshotFicheOuverte === 'function') majSnapshotFicheOuverte(); }catch(e){ console.error(e); }
   // Detection systematique : marque TOUT vehicule dont le contenu a
   // reellement change depuis la derniere sauvegarde, peu importe quelle
   // fonction a fait la modification.
@@ -25912,6 +25935,8 @@ function openDet(id){
   if(_devisComplEditPreserve!==null){ devisComplEditMode=_devisComplEditPreserve; _devisComplEditPreserve=null; }
   else { devisComplEditMode = false; }
   var v=vehicles.find(function(x){return x.id===id;});if(!v){console.error('openDet: vehicle not found for id='+id); return;}
+  detSnapshotOuverture = snapshotDossier(v); detChangementsIgnores = false;   // C-09 v4 : reference de comparaison
+  (function(){ var b=document.getElementById('detBandeauChangement'); if(b) b.style.display='none'; })();
   // Masquer bouton commentaires pour technicien et testeur
   var btnComm = document.getElementById('btnCommentaires');
   if(btnComm) btnComm.style.display = (currentRole==='technicien'||currentRole==='testeur') ? 'none' : '';
@@ -26401,6 +26426,84 @@ function detAffecterEquipe(id){
 var _detEditPreserve = null;
 var _chiffrageEditPreserve = null;
 var _devisComplEditPreserve = null;
+// ── C-09 v4 : surveillance du dossier affiche dans la fiche ouverte ─────
+// On garde une empreinte du dossier au moment de l'ouverture, puis on la
+// compare a chaque arrivee de donnees du serveur. Les photos et les champs
+// techniques (prefixes par _) sont exclus : trop lourds et non pertinents.
+var detSnapshotOuverture = null;
+var detChangementsIgnores = false;
+var LIBELLES_CHAMPS_DOSSIER = {
+  montantPaye:'Montant paye', paiementsClient:'Paiements du client', paiementDate:'Date de paiement',
+  paiementNote:'Note de paiement', factureDeposeeLe:'Date de depot de facture', valideDir:'Validation Direction',
+  status:'Statut du dossier', kilometrage:'Kilometrage', livraison:'Livraison', entree:'Date d\'entree',
+  technicien:'Technicien', equipe_affectee:'Equipe affectee', priorite:'Priorite', montant:'Montant',
+  chiffrage:'Chiffrage', devisCompl:'Devis complementaire', interventions:'Interventions',
+  commentaires:'Commentaires', immat:'Immatriculation', client:'Client', marque:'Marque', modele:'Modele'
+};
+
+function snapshotDossier(v){
+  if(!v) return null;
+  var c = {};
+  Object.keys(v).forEach(function(k){
+    if(k === 'photos' || k.charAt(0) === '_') return;
+    c[k] = JSON.stringify(v[k]);
+  });
+  return c;
+}
+// A appeler des que l'etat affiche devient la reference : ouverture de la
+// fiche, rechargement volontaire, ou enregistrement par l'utilisateur lui-meme
+// (sinon sa propre sauvegarde declencherait l'avertissement).
+function majSnapshotFicheOuverte(){
+  if(!detCurrentVid){ detSnapshotOuverture = null; return; }
+  var v = vehicles.find(function(x){ return x.id === detCurrentVid; });
+  detSnapshotOuverture = snapshotDossier(v);
+  detChangementsIgnores = false;
+}
+function champsModifiesFicheOuverte(){
+  if(!detSnapshotOuverture || !detCurrentVid) return [];
+  var v = vehicles.find(function(x){ return x.id === detCurrentVid; });
+  if(!v) return ['__disparu__'];
+  var actuel = snapshotDossier(v), noms = {};
+  Object.keys(actuel).forEach(function(k){ if(detSnapshotOuverture[k] !== actuel[k]) noms[k] = 1; });
+  Object.keys(detSnapshotOuverture).forEach(function(k){ if(actuel[k] === undefined) noms[k] = 1; });
+  return Object.keys(noms);
+}
+function verifierChangementFicheOuverte(){
+  var b = document.getElementById('detBandeauChangement');
+  var modale = document.getElementById('modalDet');
+  if(!b || !modale) return;
+  var ouverte = modale.style.display && modale.style.display !== 'none';
+  if(!ouverte || !detCurrentVid || detChangementsIgnores){ b.style.display = 'none'; return; }
+  var champs = champsModifiesFicheOuverte();
+  if(!champs.length){ b.style.display = 'none'; return; }
+  var texte;
+  if(champs.length === 1 && champs[0] === '__disparu__'){
+    texte = 'Ce dossier n\'existe plus dans les donnees a jour : il a ete supprime ou archive depuis un autre poste.';
+  } else {
+    texte = 'Un autre poste vient de modifier ce dossier (<strong>'
+          + champs.map(function(k){ return LIBELLES_CHAMPS_DOSSIER[k] || k; }).join(', ')
+          + '</strong>). Ce que vous voyez n\'est plus a jour : rechargez avant d\'enregistrer.';
+  }
+  b.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+    + '<span style="font-size:15px">&#x26A0;</span>'
+    + '<span style="flex:1;min-width:200px">' + texte + '</span>'
+    + '<button class="btn btn-sm btn-primary" onclick="rechargerFicheOuverte()">Recharger la fiche</button>'
+    + '<button class="btn btn-sm" onclick="ignorerChangementFicheOuverte()">Ignorer</button>'
+    + '</div>';
+  b.style.display = 'block';
+}
+// Recharger efface les saisies non enregistrees de la fiche : c'est un choix
+// explicite de l'utilisateur, jamais une decision de l'application.
+function rechargerFicheOuverte(){
+  var id = detCurrentVid; if(!id) return;
+  detChangementsIgnores = false;
+  openDetKeepEdit(id);
+}
+function ignorerChangementFicheOuverte(){
+  detChangementsIgnores = true;
+  var b = document.getElementById('detBandeauChangement'); if(b) b.style.display = 'none';
+}
+
 function openDetKeepEdit(id){
   _detEditPreserve = detEditMode;
   _chiffrageEditPreserve = chiffrageEditMode;
@@ -32824,6 +32927,10 @@ var GOS_SYNC = (function(){
   function enregistrer(cle){
     if(!COLL[cle]) return;
     if(!localEstPret) return;          // avant la fin du chargement local : rien a comparer
+    // C-09 v4 : l'interface empeche la saisie pendant l'attente du serveur. Si
+    // une ecriture arrive tout de meme ici, c'est un ecrivain automatique qu'il
+    // faut identifier : on le trace au lieu de le deviner apres coup.
+    if(attendReception()) trace({e: 'ecriture_avant_reception', c: cle});
     if(!ombre[cle]) ombre[cle] = clone(enCarte(COLL[cle], COLL[cle].lire()));
     var n = capturer(cle);
     if(n) majIndicateur();
@@ -32844,6 +32951,19 @@ var GOS_SYNC = (function(){
   // ---------------------------------------------------------------- envoi (transactions)
   function demanderFlux(){ fluxDemande = true; setTimeout(flux, 0); }
   function pret(cle){ return !arrete && enLigne && db && fileChargee && recu[cle] === epoque && autorisee(cle) && !refus[cle]; }
+  // C-09 v4 : vrai tant qu'une collection LISIBLE PAR CE ROLE n'a pas encore
+  // ete recue du serveur. Les collections non autorisees pour le role et
+  // celles dont la lecture est refusee sont exclues : sinon un technicien,
+  // qui n'a acces qu'a une partie des donnees, attendrait indefiniment.
+  function attendReception(){
+    if(!enLigne || !db) return false;
+    var attend = false;
+    Object.keys(COLL).forEach(function(cle){
+      if(!autorisee(cle) || refus[cle]) return;
+      if(recu[cle] !== epoque) attend = true;
+    });
+    return attend;
+  }
   function flux(){
     if(fluxEnCours || !fluxDemande) return;
     fluxDemande = false;
@@ -33165,6 +33285,8 @@ var GOS_SYNC = (function(){
     ouvrirConflits: ouvrirConflits, resoudreConflit: resoudreConflit,
     quandRecu: function(cle, cb){ (function att(){ if(recu[cle] !== undefined && recu[cle] > 0) cb(); else setTimeout(att, 150); })(); },
     estRecu: function(cle){ return recu[cle] !== undefined && recu[cle] > 0; },   // C-09 : etat de reception, en lecture directe
+    attendReception: attendReception,   // C-09 v4 : le serveur n'a pas encore tout envoye
+    ecritureAutorisee: function(){ return !attendReception(); },
     etat: function(){ return {enLigne: enLigne, epoque: epoque, fileChargee: fileChargee, file: clone(file), recu: clone(recu),
                               conflitsOuverts: Object.keys(conflitsOuverts).length, tombes: Object.keys(tombes).reduce(function(a, c){ a[c] = Object.keys(tombes[c]); return a; }, {}),
                               journal: journal.slice(-60)}; },
@@ -33175,7 +33297,13 @@ var GOS_SYNC = (function(){
 // ---------------------------------------------------------------- declaration des collections
 (function(){
   function lsEcrire(cle){ return function(vue){ localStorage.setItem(cle, JSON.stringify(vue)); }; }
-  function rafraichir(){ if(document.getElementById('content') && !(typeof uneModaleEstOuverte === 'function' && uneModaleEstOuverte())) renderPage(); }
+  function rafraichir(){
+    // C-09 v4 : la verification de la fiche ouverte doit tourner MEME quand une
+    // modale est affichee — c'est precisement le cas ou renderPage() est
+    // suspendu et ou l'utilisateur ne voit pas les changements des autres.
+    try{ if(typeof verifierChangementFicheOuverte === 'function') verifierChangementFicheOuverte(); }catch(e){ console.error('verifierChangementFicheOuverte', e); }
+    if(document.getElementById('content') && !(typeof uneModaleEstOuverte === 'function' && uneModaleEstOuverte())) renderPage();
+  }
   GOS_SYNC.definir('vehicles', {
     chemin: 'gos_data', nouveauxEnTete: true, ensembles: {photos: true, paiementsClient: true},
     lire: function(){ return vehicles; }, ecrire: function(v){ vehicles = v; },
@@ -34083,6 +34211,27 @@ function restaurerSauvegarde(cle, type){
 // Affiche/masque le bandeau "chargement des donnees a jour" selon que
 // la 1ere synchronisation Firebase a ete confirmee ou non — ne s'affiche
 // que si un utilisateur est connecte (l'ecran de login reste au-dessus).
+// C-09 v4 : pilote le voile de chargement. Au-dela de GOS_BLOCAGE_LIMITE_MS
+// sans reponse du serveur, on rend la main pour ne pas paralyser le garage,
+// mais un avertissement reste affiche tant que les donnees manquent.
+var gosBlocageDepuis = null;
+var GOS_BLOCAGE_LIMITE_MS = 20000;
+function majBlocageChargement(){
+  var voile = document.getElementById('gosBlocageChargement');
+  var avert = document.getElementById('gosAvertissementDonnees');
+  if(!voile) return;
+  var connecte = !!(typeof currentUser !== 'undefined' && currentUser);
+  var attend = false;
+  try{ attend = connecte && typeof GOS_SYNC !== 'undefined' && !!GOS_SYNC.attendReception && GOS_SYNC.attendReception(); }
+  catch(e){ attend = false; }
+  if(attend){ if(gosBlocageDepuis === null) gosBlocageDepuis = Date.now(); }
+  else { gosBlocageDepuis = null; }
+  var expire = gosBlocageDepuis !== null && (Date.now() - gosBlocageDepuis) > GOS_BLOCAGE_LIMITE_MS;
+  voile.style.display = (attend && !expire) ? 'flex' : 'none';
+  if(avert) avert.style.display = (attend && expire) ? 'block' : 'none';
+}
+setInterval(majBlocageChargement, 400);
+
 function majBandeauChargementSync(){
   var b = document.getElementById('bandeauChargementSync');
   if(!b) return;
