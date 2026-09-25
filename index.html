@@ -33221,25 +33221,129 @@ var GOS_SYNC = (function(){
   }
   function court(v){ var s = JSON.stringify(v); if(s === undefined) s = '—'; return s.length > 160 ? s.slice(0, 160) + '…' : s; }
   function echapper(s){ return String(s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  // ── C-09 v5 : mise en forme lisible d'un conflit ────────────────────────
+  var NOMS_COLLECTIONS_SYNC = {
+    vehicles:'Dossier vehicule', gos_fin_paiements:'Paiements du dossier', gos_fin_validations:'Validation Direction',
+    gos_comptes:'Anciens comptes', gos_personnel:'Personnel', gos_stock:'Stock',
+    gos_charges_fixes:'Charges fixes', gos_banques:'Banques', gos_fournisseurs:'Fournisseurs',
+    gos_presences:'Pointages', gos_employes_presence:'Employes au pointage',
+    gos_engagements_bancaires:'Engagements bancaires', gos_forfaits_clients:'Forfaits clients',
+    gos_forfait_factures:'Factures de forfait', gos_forfaits_tkm:'Forfaits TKM',
+    gos_commandes_speciales:'Commandes speciales', gos_dettes_manuelles:'Dettes manuelles',
+    gos_caisse_journees:'Journees de caisse', gos_caisse_mouvements:'Mouvements de caisse',
+    gos_clients_sans_vehicule:'Clients sans vehicule', gos_client_delais_paiement:'Delais de paiement',
+    gos_exposition_snapshots:'Exposition', gos_descripteurs_faciaux:'Reconnaissance faciale'
+  };
+  var LIBELLES_CHAMPS_SYNC = {
+    qte:'Quantite', reserve:'Quantite reservee', solde:'Solde', nom:'Nom', prenom:'Prenom',
+    login:'Identifiant', role:'Role', actif:'Actif', equipe:'Equipe', periodicite:'Periodicite',
+    jourEcheance:'Jour d\'echeance', echeancesPayees:'Echeances payees', categorie:'Categorie',
+    montant:'Montant', montantPaye:'Montant paye', paiementsClient:'Paiements du client',
+    paiementDate:'Date de paiement', paiementNote:'Note de paiement', deposeeDate:'Date de depot',
+    emiseDate:'Date d\'emission', factureDeposeeLe:'Date de depot de facture',
+    valideDir:'Validation Direction', valideDirLe:'Date de validation Direction',
+    status:'Statut du dossier', statut:'Statut', kilometrage:'Kilometrage', livraison:'Livraison',
+    entree:'Date d\'entree', technicien:'Technicien', equipe_affectee:'Equipe affectee',
+    priorite:'Priorite', chiffrage:'Chiffrage', devisCompl:'Devis complementaire',
+    interventions:'Interventions', commentaires:'Commentaires', immat:'Immatriculation',
+    client:'Client', marque:'Marque', modele:'Modele', stepStart:'Debut d\'etape'
+  };
+  function nomCollectionSync(cle){ return NOMS_COLLECTIONS_SYNC[cle] || cle; }
+  function nomChampSync(chemin){
+    if(!chemin) return '';
+    var global = (typeof LIBELLES_CHAMPS_DOSSIER !== 'undefined') ? LIBELLES_CHAMPS_DOSSIER : {};
+    return String(chemin).split('.').map(function(p){
+      return LIBELLES_CHAMPS_SYNC[p] || global[p] || p;
+    }).join(' > ');
+  }
+  function champMonetaire(chemin){ return /montant|paye|prix|solde|total|cout|tarif|acompte|remise/i.test(String(chemin || '')); }
+  // Rend une valeur lisible par un humain plutot que par une machine.
+  function valeurLisibleSync(v, chemin){
+    if(v === null || v === undefined || v === '') return '(vide)';
+    if(typeof v === 'boolean') return v ? 'Oui' : 'Non';
+    if(typeof v === 'number'){
+      if(v > 1000000000000) return new Date(v).toLocaleString('fr-FR', {day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'});
+      if(champMonetaire(chemin)) return v.toLocaleString('fr-FR') + ' FCFA';
+      return v.toLocaleString('fr-FR');
+    }
+    if(typeof v === 'string') return v.length > 90 ? v.slice(0, 90) + '…' : v;
+    if(Array.isArray(v)){
+      if(!v.length) return '(aucun)';
+      var somme = 0, avecMontant = 0;
+      v.forEach(function(x){ if(x && typeof x.montant === 'number'){ somme += x.montant; avecMontant++; } });
+      if(avecMontant === v.length) return v.length + ' ligne(s), total ' + somme.toLocaleString('fr-FR') + ' FCFA';
+      return v.length + ' element(s)';
+    }
+    if(typeof v === 'object'){
+      var cles = Object.keys(v);
+      return '{ ' + cles.slice(0, 4).join(', ') + (cles.length > 4 ? ', …' : '') + ' }';
+    }
+    return String(v);
+  }
+  function valeurSimpleSync(v){ return v === null || v === undefined || ['number','string','boolean'].indexOf(typeof v) >= 0; }
+  // Nomme le dossier comme au garage : immatriculation et client.
+  function dossierConcerneSync(c){
+    try{
+      if(typeof vehicles !== 'undefined' && vehicles && vehicles.length &&
+         ['vehicles','gos_fin_paiements','gos_fin_validations'].indexOf(c.collection) >= 0){
+        var v = vehicles.find(function(x){ return x.id === c.recordId; });
+        if(v) return (v.immat || 'Sans immatriculation') + ' — ' + (v.client || 'client inconnu');
+      }
+    }catch(e){}
+    return c.libelle || c.recordId;
+  }
+  function carteConflit(k, c){
+    var champ = nomChampSync(c.chemin);
+    var supprime = (c.type === 'element_supprime_ailleurs');
+    var simple = valeurSimpleSync(c.local) && valeurSimpleSync(c.serveur) && !supprime;
+    var vServeur = valeurLisibleSync(c.serveur, c.chemin);
+    var vPoste = valeurLisibleSync(c.local, c.chemin);
+    var vBase = valeurLisibleSync(c.base, c.chemin);
+    var h = '<div id="gosConflitLigne_' + k + '" data-conflit="1" style="border:1px solid #e2e2e2;border-radius:6px;padding:11px;margin-bottom:10px;font-size:12px">';
+    h += '<div style="font-weight:700;font-size:13px">' + echapper(dossierConcerneSync(c)) + '</div>';
+    h += '<div class="xs muted" style="margin-bottom:8px">' + echapper(nomCollectionSync(c.collection)) + (champ ? ' · ' + echapper(champ) : '') + '</div>';
+    if(supprime){
+      h += '<div style="background:#FDF3E3;border:1px solid #E8A44A;color:#854F0B;border-radius:4px;padding:8px;margin-bottom:8px">'
+         + 'Cet element a ete supprime ailleurs, mais ce poste voulait encore le modifier. Il n\'existe plus dans les donnees enregistrees.</div>';
+    } else {
+      h += '<table style="width:100%;border-collapse:collapse;margin-bottom:8px">';
+      h += '<tr><td style="padding:4px 6px;color:#666;white-space:nowrap">Enregistre (serveur)</td>'
+         + '<td style="padding:4px 6px;font-weight:700;font-family:monospace;text-align:right">' + echapper(vServeur) + '</td></tr>';
+      h += '<tr style="background:#F7F9FB"><td style="padding:4px 6px;color:#666;white-space:nowrap">Sur le poste de ' + echapper(c.auteur || '?') + '</td>'
+         + '<td style="padding:4px 6px;font-weight:700;font-family:monospace;text-align:right;color:#185FA5">' + echapper(vPoste) + '</td></tr>';
+      h += '<tr><td style="padding:4px 6px;color:#999;white-space:nowrap">Avant modification</td>'
+         + '<td style="padding:4px 6px;font-family:monospace;text-align:right;color:#999">' + echapper(vBase) + '</td></tr>';
+      if(typeof c.local === 'number' && typeof c.serveur === 'number' && champMonetaire(c.chemin)){
+        var ecart = c.local - c.serveur;
+        h += '<tr><td style="padding:4px 6px;color:#666">Ecart</td>'
+           + '<td style="padding:4px 6px;font-family:monospace;text-align:right;color:' + (ecart < 0 ? '#A32D2D' : '#3B6D11') + '">'
+           + (ecart > 0 ? '+' : '') + ecart.toLocaleString('fr-FR') + ' FCFA</td></tr>';
+      }
+      h += '</table>';
+    }
+    h += '<div class="xs muted" style="margin-bottom:8px">Modifie le '
+       + (c.detecteLe ? new Date(c.detecteLe).toLocaleString('fr-FR') : '?')
+       + ' · poste ' + echapper(c.deviceId || '?') + '</div>';
+    h += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+    h += '<button class="btn btn-sm" onclick="GOS_SYNC.resoudreConflit(\'' + k + '\',\'garder\')">'
+       + (simple ? 'Garder ' + echapper(vServeur) : 'Garder la valeur enregistree') + '</button>';
+    if(c.type === 'modification_concurrente'){
+      h += '<button class="btn btn-sm btn-primary" onclick="GOS_SYNC.resoudreConflit(\'' + k + '\',\'appliquer\')">'
+         + (simple ? 'Remplacer par ' + echapper(vPoste) : 'Appliquer la valeur du poste') + '</button>';
+    }
+    return h + '</div></div>';
+  }
+
   function ouvrirConflits(){
     var ex = document.getElementById('gosModaleConflits'); if(ex) ex.remove();
     var ids = Object.keys(conflitsOuverts);
     var h = '<div class="modal" style="width:680px;max-height:82vh;overflow-y:auto"><div class="mhead"><h2>Conflits de synchronisation <span id="gosConflitsRestants" class="xs muted">(' + ids.length + ' a traiter)</span></h2>'
       + '<button class="btn btn-sm" onclick="document.getElementById(\'gosModaleConflits\').remove()">X</button></div><div class="mbody" style="padding:14px">';
-    h += '<p class="xs muted" style="margin-bottom:10px">Deux postes ont modifie la meme information differemment, ou un poste a modifie un element supprime ailleurs. Rien n\'a ete ecrase : la valeur actuellement enregistree est conservee et la valeur du poste est gardee ici.</p>';
+    h += '<p class="xs muted" style="margin-bottom:10px;line-height:1.5">Deux postes ont modifie la meme information differemment. <strong>Rien n\'a ete ecrase</strong> : la valeur enregistree est celle qui s\'applique aujourd\'hui, celle du poste est conservee ici en attendant votre decision. Chaque bouton indique exactement la valeur qu\'il mettra en place.</p>';
     if(!ids.length) h += '<div class="xs muted">Aucun conflit ouvert.</div>';
     ids.forEach(function(k){
       var c = conflitsOuverts[k];
-      h += '<div id="gosConflitLigne_' + k + '" data-conflit="1" style="border:1px solid #e2e2e2;border-radius:6px;padding:9px;margin-bottom:8px;font-size:12px">'
-        + '<div style="font-weight:700">' + echapper(c.libelle || c.recordId) + ' <span class="xs muted">(' + echapper(c.collection) + (c.chemin ? ' — ' + echapper(c.chemin) : '') + ')</span></div>'
-        + '<div class="xs muted">' + echapper(c.type) + ' · poste ' + echapper(c.deviceId || '?') + ' · ' + echapper(c.auteur || '?') + ' · ' + (c.detecteLe ? new Date(c.detecteLe).toLocaleString('fr-FR') : '') + '</div>'
-        + '<div>Valeur de depart : <code>' + echapper(court(c.base)) + '</code></div>'
-        + '<div>Valeur du poste : <code>' + echapper(court(c.local)) + '</code></div>'
-        + '<div>Valeur enregistree : <code>' + echapper(court(c.serveur)) + '</code></div>'
-        + '<div style="margin-top:6px;display:flex;gap:6px">'
-        + '<button class="btn btn-sm" onclick="GOS_SYNC.resoudreConflit(\'' + k + '\',\'garder\')">Garder la valeur enregistree</button>'
-        + (c.type === 'modification_concurrente' ? '<button class="btn btn-sm btn-primary" onclick="GOS_SYNC.resoudreConflit(\'' + k + '\',\'appliquer\')">Appliquer la valeur du poste</button>' : '')
-        + '</div></div>';
+      h += carteConflit(k, c);
     });
     h += '</div></div>';
     var o = document.createElement('div'); o.className = 'overlay'; o.id = 'gosModaleConflits'; o.style.zIndex = '99995'; o.style.display = 'flex';
