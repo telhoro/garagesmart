@@ -19518,7 +19518,10 @@ function renderChiffrageSection(v){
   var totalAchat = v.chiffrage.lignes.reduce(function(s,cl){return s+(cl.differe?0:(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1));},0);
   var totalVente = v.chiffrage.lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
   var totalMarge = totalVente - totalAchat;
-  var margePct = totalAchat>0 ? Math.round((totalMarge/totalAchat)*100) : 0;
+  // Taux de marge = marge / chiffre d'affaires, comme partout ailleurs dans
+  // l'application (KPI, rentabilite, clients, devis, forfaits). Diviser par le
+  // cout d'achat donnait un taux superieur a 100 %, incomparable avec le reste.
+  var margePct = totalVente>0 ? Math.round((totalMarge/totalVente)*100) : 0;
   s += '<tr style="background:#f5f4f1;font-weight:700">';
   s += '<td colspan="3" style="text-align:right">Totaux :</td>';
   if(!_prospectMasquerPrix){
@@ -19527,7 +19530,7 @@ function renderChiffrageSection(v){
     s += '<td style="font-family:monospace" title="Total vente">'+Math.round(totalVente).toLocaleString('fr-FR')+'</td>';
     s += '<td></td>'; // colonne Remise % — pas de total agrege pertinent ici
     s += '<td style="font-family:monospace;color:#185FA5">'+Math.round(totalVente).toLocaleString('fr-FR')+' FCFA</td>';
-    s += '<td colspan="5" style="color:#3B6D11;font-weight:800">&#x1F4B0; Marge brute : <span style="font-family:monospace;color:'+(totalMarge>=0?'#3B6D11':'#A32D2D')+'">'+Math.round(totalMarge).toLocaleString('fr-FR')+' FCFA ('+margePct+'%)</span></td>';
+    s += '<td colspan="5" style="color:&#x1F4B0;3B6D11;font-weight:800" title="Taux de marge = marge / total vente">&#x1F4B0; Marge brute : <span style="font-family:monospace;color:'+(totalMarge>=0?'&#x1F4B0;3B6D11':'&#x1F4B0;A32D2D')+'">'+Math.round(totalMarge).toLocaleString('fr-FR')+' FCFA ('+margePct+'%)</span></td>';
   } else {
     s += '<td colspan="5"></td>';
   }
@@ -20987,7 +20990,8 @@ function htmlRecapValidation(v){
   var totValVente = lignesVal.reduce(function(sum,cl){return sum+montantChiffrageLigne(cl);},0);
   // La marge se calcule sur le COUT REEL : le stock a bien coute de l'argent, meme s'il est deja paye
   var totValMarge = totValVente - totCoutReel;
-  var margeValPct = totCoutReel>0 ? Math.round((totValMarge/totCoutReel)*100) : 0;
+  // Meme base que partout ailleurs : marge / chiffre d'affaires.
+  var margeValPct = totValVente>0 ? Math.round((totValMarge/totValVente)*100) : 0;
   var nbTotal = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}).length;
 
   var r = '<div style="font-weight:700;margin-bottom:8px;font-size:13px">&#x1F4CA; Recapitulatif des pieces validees ('+lignesVal.length+'/'+nbTotal+')</div>';
@@ -21010,7 +21014,7 @@ function htmlRecapValidation(v){
     var mBg = totValMarge>=0 ? '#EAF3DE' : '#FBEAEA';
     var mBord = totValMarge>=0 ? '#C3DDA0' : '#E0A0A0';
     var mCol = totValMarge>=0 ? '#3B6D11' : '#A32D2D';
-    r += '<div class="kpi" style="background:'+mBg+';border-color:'+mBord+'"><div class="kpi-lbl">Marge brute</div><div class="kpi-val" style="color:'+mCol+'">'+(totValMarge?totValMarge.toLocaleString('fr-FR')+' FCFA ('+margeValPct+'%)':'—')+'</div></div>';
+    r += '<div class="kpi" style="background:'+mBg+';border-color:'+mBord+'" title="Taux de marge = marge / total vente client"><div class="kpi-lbl">Marge brute</div><div class="kpi-val" style="color:'+mCol+'">'+(totValMarge?totValMarge.toLocaleString('fr-FR')+' FCFA ('+margeValPct+'%)':'—')+'</div></div>';
     r += '</div>';
   } else {
     r += '<div style="background:#F3EEFB;border:1px solid #D5C5EC;border-radius:8px;padding:8px 12px;font-size:12px;color:#534AB7">&#x2139; Client en forfait : le decaissement ci-dessus est le cout des pieces. La rentabilite (forfait mensuel - depenses) est visible dans la Rentabilite forfait.</div>';
