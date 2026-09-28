@@ -20792,6 +20792,24 @@ function setSourceFinancement(sel){
 function toutValiderPieces(){
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v || !v.chiffrage || !v.chiffrage.lignes) return;
+  // C-09 v13 : ce bouton contournait le verrou de validation.
+  if(v.chiffrage.valideDir && !validationEditMode){
+    alert('La validation financiere est posee sur ce chiffrage.\nUtilisez "Modifier la validation" pour la rouvrir.');
+    return;
+  }
+  var avecPiece = v.chiffrage.lignes.filter(function(cl){ return (cl.piece||'').trim(); });
+  var dejaValidees = avecPiece.filter(function(cl){ return cl.valideDir === true; });
+  var nonValidees  = avecPiece.filter(function(cl){ return cl.valideDir !== true; });
+  // Une selection partielle est un choix delibere de la Direction : on ne
+  // l'ecrase pas en silence. Premiere validation d'un chiffrage neuf (aucune
+  // ligne cochee) : aucune question, c'est l'usage normal du bouton.
+  if(dejaValidees.length && nonValidees.length){
+    var noms = nonValidees.slice(0,6).map(function(cl){ return cl.piece; }).join(', ');
+    if(nonValidees.length > 6) noms += ', ...';
+    if(!confirm(nonValidees.length + ' piece(s) ne sont PAS validees : ' + noms
+      + '\n\nLes valider toutes maintenant ?'
+      + '\nSi vous venez de les decocher volontairement, repondez Annuler.')) return;
+  }
   var nbConcernees = 0;
   v.chiffrage.lignes.forEach(function(cl){
     if((cl.piece||'').trim()){ cl.valideDir = true; nbConcernees++; }
@@ -20809,6 +20827,13 @@ function appliquerSourceFinancementGlobale(valeur){
   if(!valeur) return;
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v || !v.chiffrage || !v.chiffrage.lignes) return;
+  // C-09 v13 : meme verrou que les cases de validation — changer le
+  // financement de toutes les lignes d'un chiffrage deja valide est une
+  // decision financiere, pas un reglage d'affichage.
+  if(v.chiffrage.valideDir && !validationEditMode){
+    alert('La validation financiere est posee sur ce chiffrage.\nUtilisez "Modifier la validation" pour la rouvrir.');
+    return;
+  }
   v.chiffrage.lignes.forEach(function(cl){
     if(!(cl.piece||'').trim()) return;
     if(cl.paiement==='credit') return; // deja verrouille sur credit fournisseur
