@@ -4728,17 +4728,20 @@ function appliquerCorrectionStatut(){
   if(nouveauStatut===ancienStatut){ alert('Ce vehicule est deja sur ce statut.'); return; }
   var ancienLabel = (STATUSES[ancienStatut]||{l:ancienStatut}).l;
   var nouveauLabel = (STATUSES[nouveauStatut]||{l:nouveauStatut}).l;
+  var aEffacer = champsAEffacerAuRetour(v, ancienStatut, nouveauStatut);   // C-09 v9
   demanderConfirmation(
     'Forcer le statut de '+v.immat+' ?',
-    'De "'+ancienLabel+'" vers "'+nouveauLabel+'". Cette action force la position du dossier sans repasser par les etapes normales.',
+    'De "'+ancienLabel+'" vers "'+nouveauLabel+'". Cette action force la position du dossier sans repasser par les etapes normales.' + texteRetourStatut(v, aEffacer),
     function(){
       v.status = nouveauStatut;
       v.stepStart = Date.now();
+      appliquerRetourStatut(v, aEffacer, currentUser ? currentUser.login : 'Direction');   // C-09 v9
       if(['facture_deposee','dossier_cloture','livre'].indexOf(nouveauStatut)>=0){
         v.archiveDate = Date.now();
         v.livraison = Date.now();
         creerTravauxAPrevoir(v);
       }
+      if(nouveauStatut === 'facture_deposee' && !v.factureDeposeeLe) v.factureDeposeeLe = Date.now();   // C-09 v9 : symetrie
       ajouterCommentaireSysteme(v, '&#x1F527; Correction manuelle de statut : "'+ancienLabel+'" -> "'+nouveauLabel+'"', currentUser ? currentUser.login : 'Direction');
       marquerVehiculeModifie(v.id);
       saveV();
@@ -5980,12 +5983,66 @@ function advanceById(btn){
   var id = btn.getAttribute('data-vid');
   if(id) advance(id);
 }
+// ── C-09 v9 : effets de bord d'un changement de statut, dans LES DEUX SENS ──
+// Avancer posait les dates (livraison, depot de facture) ; reculer n'en retirait
+// aucune. Un dossier ramene au stade devis restait donc compte comme facture.
+var STATUTS_FACTURE = ['facture_deposee','dossier_cloture'];
+// Liste ce qu'un retour en arriere doit annuler. Ne touche jamais aux paiements
+// ni au numero de facture : ce sont des informations saisies, pas des
+// consequences automatiques du statut.
+function champsAEffacerAuRetour(v, ancien, nouveau){
+  var etaitFacture = STATUTS_FACTURE.indexOf(ancien) >= 0;
+  var seraFacture  = STATUTS_FACTURE.indexOf(nouveau) >= 0;
+  var etaitLivre   = LIV_ST.indexOf(ancien) >= 0;
+  var seraLivre    = LIV_ST.indexOf(nouveau) >= 0;
+  var r = [];
+  if(etaitFacture && !seraFacture && v.factureDeposeeLe) r.push('facture');
+  if(etaitLivre && !seraLivre && (v.livraison || v.archiveDate)) r.push('livraison');
+  return r;
+}
+// Texte affiche a l'utilisateur AVANT d'appliquer : aucune donnee financiere
+// n'est effacee sans que la consequence soit annoncee.
+function texteRetourStatut(v, aEffacer){
+  if(!aEffacer || !aEffacer.length) return '';
+  var t = '';
+  if(aEffacer.indexOf('facture') >= 0){
+    t += '\n\nLa date de depot de facture (' + new Date(v.factureDeposeeLe).toLocaleDateString('fr-FR')
+       + ') sera effacee : le dossier sortira de l\'exposition financiere, des impayes et de la liste des factures du client.';
+    if(v.numeroFactureExterne) t += '\nLe numero de facture ' + v.numeroFactureExterne + ' est conserve.';
+    var paye = (parseFloat(v.montantPaye)||0) > 0 || (v.paiementsClient && v.paiementsClient.length);
+    if(paye) t += '\nATTENTION : un paiement est enregistre sur ce dossier. Il ne sera PAS supprime, mais le dossier ne comptera plus comme facture. Verifiez-le avant de continuer.';
+  }
+  if(aEffacer.indexOf('livraison') >= 0){
+    t += '\n\nLa date de livraison sera effacee et les chronometres repartiront de cette etape.';
+  }
+  return t;
+}
+function appliquerRetourStatut(v, aEffacer, auteur){
+  if(!aEffacer || !aEffacer.length) return;
+  if(aEffacer.indexOf('facture') >= 0){
+    ajouterCommentaireSysteme(v, '&#x21A9; Retour en arriere : depot de facture annule (date du '
+      + new Date(v.factureDeposeeLe).toLocaleDateString('fr-FR') + '). Le dossier sort de l\'exposition financiere et des impayes.'
+      + (v.numeroFactureExterne ? ' Numero de facture ' + v.numeroFactureExterne + ' conserve.' : ''), auteur || 'Direction');
+    v.factureDeposeeLe = null;
+  }
+  if(aEffacer.indexOf('livraison') >= 0){
+    ajouterCommentaireSysteme(v, '&#x21A9; Retour en arriere : date de livraison annulee.', auteur || 'Direction');
+    v.livraison = null;
+    v.archiveDate = null;
+  }
+}
+
 function setStatus(id,st){
   for(var i=0;i<vehicles.length;i++){
     if(vehicles[i].id===id){
       var v = vehicles[i];
+      // C-09 v9 : un recul doit defaire ce que l'avancee avait pose.
+      var _ancienSt = v.status;
+      var _aEffacer = champsAEffacerAuRetour(v, _ancienSt, st);
+      if(_aEffacer.length && !confirm('Ramener ' + v.immat + ' a "' + ((STATUSES[st]||{l:st}).l) + '" ?' + texteRetourStatut(v, _aEffacer))) return;
       v.status = st;
       v.stepStart = Date.now();
+      appliquerRetourStatut(v, _aEffacer, currentUser ? currentUser.login : 'Direction');
       // Memes effets de bord que la correction manuelle de statut et
       // qu'une transition normale via advance() : sans ca, un saut direct
       // vers "livre / facture deposee / dossier cloture" via ce menu
@@ -5997,6 +6054,10 @@ function setStatus(id,st){
         v.livraison = Date.now();
         creerTravauxAPrevoir(v);
       }
+      // C-09 v9 : symetrie avec advance(). Sans cela, un passage a
+      // "facture deposee" par ce menu laissait le dossier sans date de depot,
+      // donc absent de la facturation alors que son statut disait l'inverse.
+      if(st === 'facture_deposee' && !v.factureDeposeeLe) v.factureDeposeeLe = Date.now();
       marquerVehiculeModifie(v.id);
       break;
     }
