@@ -10970,7 +10970,14 @@ function collecterToutesFacturesClient(client){
   var TROIS_JOURS_MS = 3*86400000;
   var factures = [];
 
-  vehicles.filter(function(v){return v.client===client && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;})
+  vehicles.filter(function(v){
+    // C-09 v10 : meme regle que partout ailleurs — un dossier n'entre en
+    // facturation qu'une fois LIVRE (LIV_ST : livre / facture deposee /
+    // dossier cloture). Avant cela il n'y a rien a encaisser, meme si le
+    // chiffrage est deja complet et valide.
+    return v.client===client && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length
+           && LIV_ST.indexOf(v.status)>=0;
+  })
     .forEach(function(v){
       var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
       var montant = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
@@ -19278,7 +19285,38 @@ function montantChiffrageLigne(cl){
   if(cl.differe) return 0;
   return (parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1)*(1-(parseFloat(cl.remise)||0)/100);
 }
+// ── C-09 v11 : un identifiant UNIQUE par ligne de chiffrage ─────────────
+// Tous les controles du tableau (validation, mise de cote, prix, suppression)
+// retrouvent leur ligne par cet identifiant. S'il est partage par deux lignes,
+// find() renvoie la premiere et l'action se produit sur la mauvaise ligne.
+// Les devisId existants sont consideres comme reserves : un libreId regenere
+// ne peut jamais les heurter. devisId n'est jamais modifie — il relie la ligne
+// a la piece demandee dans le devis.
+function garantirIdsLignesChiffrage(v){
+  if(!v || !v.chiffrage || !v.chiffrage.lignes) return false;
+  var vus = {}, change = false;
+  v.chiffrage.lignes.forEach(function(cl){ if(cl.devisId) vus[cl.devisId] = true; });
+  v.chiffrage.lignes.forEach(function(cl, idx){
+    if(!cl.libreId || vus[cl.libreId]){
+      cl.libreId = 'lg_' + Date.now().toString(36) + '_' + idx + '_' + Math.random().toString(36).slice(2,7);
+      change = true;
+    }
+    vus[cl.libreId] = true;
+  });
+  return change;
+}
+
+// Verrou de la colonne Validation : une fois la validation financiere posee,
+// les cases ne se decochent plus par megarde. Le bouton "Modifier la
+// validation" les rouvre, pour la Direction uniquement.
+var validationEditMode = false;
+function toggleValidationEdit(){
+  validationEditMode = !validationEditMode;
+  openDetKeepEdit(detCurrentVid);
+}
+
 function renderChiffrageSection(v){
+  if(garantirIdsLignesChiffrage(v)) saveV();   // C-09 v11 : avant tout rendu
   // isForfait masque les colonnes Prix vente/Total vente (paiement forfaitaire
   // fixe, pas au prix de vente par piece). Les dossiers assurance suivent
   // desormais exactement le meme affichage qu'un devis classique.
@@ -19360,8 +19398,18 @@ function renderChiffrageSection(v){
   var _isProspectPieceEditor = v.isProspect && currentRole==='chef_atelier';
   var _prospectMasquerPrix = _isProspectPieceEditor; // raccourci utilise plus bas
   var isChiffreLocked = !!(v.chiffrage && v.chiffrage.valide) && !chiffrageEditMode && !_isProspectEditor && !_isProspectPieceEditor;
-  if(isChiffreLocked){
-    s += '<div style="float:right;margin-top:-30px"><button class="btn btn-sm" style="font-size:11px" onclick="toggleChiffrageEdit()">&#x270F; Modifier chiffrage</button></div>';
+  // C-09 v11 : la colonne Validation se verrouille des que la validation
+  // financiere est posee. Elle ne se rouvre que volontairement, par la
+  // Direction, via le bouton ci-dessous — plus de decochage par megarde.
+  var validationVerrouillee = !!(v.chiffrage && v.chiffrage.valideDir) && !validationEditMode;
+  if(isChiffreLocked || (validationVerrouillee && currentRole==='direction')){
+    s += '<div style="float:right;margin-top:-30px">';
+    if(isChiffreLocked) s += '<button class="btn btn-sm" style="font-size:11px" onclick="toggleChiffrageEdit()">&#x270F; Modifier chiffrage</button>';
+    if(currentRole==='direction' && !!(v.chiffrage && v.chiffrage.valideDir)){
+      s += '<button class="btn btn-sm" style="font-size:11px;margin-left:6px;color:#854F0B;border-color:#E8A44A" onclick="toggleValidationEdit()">'
+         + (validationEditMode ? '&#x1F512; Reverrouiller la validation' : '&#x270F; Modifier la validation') + '</button>';
+    }
+    s += '</div>';
   }
 
   if(!v.chiffrage) v.chiffrage = {lignes:[], valide:false, soumisLe:null};
@@ -19455,8 +19503,7 @@ function renderChiffrageSection(v){
     +'</tr></thead><tbody>';
 
   v.chiffrage.lignes.forEach(function(cl){
-    var lineId = cl.devisId || cl.libreId || cl.id || ('line_'+i);
-    if(!cl.libreId && !cl.devisId) cl.libreId = 'line_'+i; // garantir un id
+    var lineId = cl.libreId;   // C-09 v11 : garanti unique par garantirIdsLignesChiffrage
     var isLibre = !cl.devisId;
     var fournNomDisplay = '—';
     if(cl.fournisseurId){ var ff=FOURNISSEURS.find(function(x){return x.id===cl.fournisseurId;}); if(ff) fournNomDisplay=ff.nom; }
@@ -19470,7 +19517,7 @@ function renderChiffrageSection(v){
     if(isChiffreLocked){
       var pieceOrig = '';
       if(cl.devisId && v.devis && v.devis.lignes){ var dlx=v.devis.lignes.find(function(x){return x.id===cl.devisId;}); if(dlx) pieceOrig=dlx.piece||''; }
-      var lidDif = cl.devisId||cl.libreId||'';
+      var lidDif = cl.libreId;   // C-09 v11
       s += '<tr'+(cl.differe?' style="background:#EDEBE7;opacity:0.65"':(isLibre?' style="background:#fafcff"':''))+'>';
       s += '<td style="background:#f5fbf0;font-size:11px;font-weight:600;color:#3B6D11">'+(pieceOrig||'—')+'</td>';
       s += '<td>'+(isLibre?'<span class="badge b-gray" style="font-size:9px;margin-right:4px">+</span>':'')+'<span class="fw7">'+cl.piece+'</span></td>';
@@ -19489,10 +19536,10 @@ function renderChiffrageSection(v){
       // Colonne validation direction
       if(currentRole==='direction'){
         var isValPiece = !!(cl.valideDir);
-        var lid = cl.devisId||cl.libreId||'';
+        var lid = cl.libreId;   // C-09 v11
         s += '<td style="min-width:180px">';
         s += '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:4px">';
-        s += '<input type="checkbox" data-lid="'+lid+'" '+(isValPiece?'checked':'')+' onchange="toggleValidPiece(this)" style="width:15px;height:15px">';
+        s += '<input type="checkbox" data-lid="'+lid+'" '+(isValPiece?'checked':'')+(validationVerrouillee?' disabled title="Validation financiere posee — utilisez Modifier la validation"':'')+' onchange="toggleValidPiece(this)" style="width:15px;height:15px">';
         s += '<span class="xs">'+(isValPiece?'<span style=\'color:#3B6D11\'>Valide</span>':'A valider')+'</span>';
         s += '</label>';
         if(isValPiece || true){
@@ -19506,7 +19553,7 @@ function renderChiffrageSection(v){
             s += '<option value="credit_fourn" selected>Credit fournisseur</option>';
             s += '</select>';
           } else {
-            s += '<select class="inp" style="font-size:10px;padding:2px 4px" data-lid="'+lid+'" onchange="setSourceFinancement(this)">';
+            s += '<select class="inp" style="font-size:10px;padding:2px 4px" data-lid="'+lid+'"'+(validationVerrouillee?' disabled':'')+' onchange="setSourceFinancement(this)">';
             s += '<option value="">-- Source financement</option>';
             BANQUES.filter(function(b){return b.actif;}).forEach(function(b){
               s += '<option value="'+b.id+'"'+(srcFin===b.id?' selected':'')+'>'+b.nom+'</option>';
@@ -20008,6 +20055,10 @@ function updateChiffrageLigne(lineId, field, val){
   // Chercher par devisId OU libreId
   var cl = v.chiffrage.lignes.find(function(x){return x.devisId===lineId || x.libreId===lineId;});
   if(!cl) return;
+  // C-09 v12 : etat AVANT modification, pour savoir si un montant deja valide change.
+  var CHAMPS_MONTANT = ['prixAchat','prixVente','qte','remise'];
+  var _etaitValidee = (cl.valideDir === true) && CHAMPS_MONTANT.indexOf(field) >= 0;
+  var _avant = _etaitValidee ? cl[field] : null;
   // Typage correct : qte en entier, prix en nombre
   if(field==='qte'){
     var q = parseInt(val, 10);
@@ -20020,6 +20071,29 @@ function updateChiffrageLigne(lineId, field, val){
     cl.remise = isNaN(r) ? 0 : Math.max(0, Math.min(100, r));
   } else {
     cl[field] = val;
+  }
+
+  // ── C-09 v12 : un montant valide qui change perd sa validation ──────────
+  // Sinon la Direction se retrouve engagee sur un montant qu'elle n'a jamais
+  // approuve, sans aucun signal.
+  if(_etaitValidee && String(_avant) !== String(cl[field])){
+    var LIBELLES_MONTANT = {prixAchat:'prix d\'achat', prixVente:'prix de vente', qte:'quantite', remise:'remise'};
+    var _fmt = function(x){ var n = parseFloat(x); return isNaN(n) ? String(x==null?'—':x) : Math.round(n).toLocaleString('fr-FR', GOS_FMT0); };
+    cl.valideDir = false;
+    ajouterCommentaireSysteme(v,
+      '&#x26A0; Validation retiree sur "' + (cl.piece||'ligne sans designation') + '" : '
+      + (LIBELLES_MONTANT[field]||field) + ' modifie de ' + _fmt(_avant) + ' a ' + _fmt(cl[field])
+      + ' apres validation. La ligne repasse en attente de validation Direction.'
+      + (cl.stockReserve && !cl.stockSortie ? ' Reservation de stock conservee.' : ''),
+      currentUser ? currentUser.login : 'Achats');
+    if(typeof afficherToastNotif === 'function'){
+      afficherToastNotif('Validation retiree',
+        (cl.piece||'Cette ligne') + ' repasse en attente de validation Direction : le ' + (LIBELLES_MONTANT[field]||field) + ' a change.',
+        'alerte');
+    }
+    saveV();
+    if(typeof openDetKeepEdit === 'function' && detCurrentVid) openDetKeepEdit(detCurrentVid);
+    return;
   }
 
   // ── Liaison avec le stock ──
@@ -20748,6 +20822,12 @@ function toggleValidPiece(cb){
   var lid = cb.getAttribute('data-lid');
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v || !v.chiffrage) return;
+  // C-09 v11 : le verrou ne doit pas etre seulement visuel.
+  if(v.chiffrage.valideDir && !validationEditMode){
+    cb.checked = !cb.checked;
+    alert('La validation financiere est posee sur ce chiffrage.\nUtilisez "Modifier la validation" pour la rouvrir.');
+    return;
+  }
   var cl = v.chiffrage.lignes.find(function(x){
     return x.devisId===lid || x.libreId===lid;
   });
