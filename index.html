@@ -9877,6 +9877,334 @@ function pageFacturationEcheances(){
   return html;
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// BILAN GLOBAL — onglet de la page Facturation (02/10/2026)
+// ══════════════════════════════════════════════════════════════════════════
+// Demande Direction : un tableau de tous les clients, devis ET forfait
+// reunis, avec sur une periode choisie le CA genere, le montant du, le delai
+// moyen de reglement, la part de CA encaissee, le montant expose, la marge et
+// le taux de rentabilite. Chaque client se deplie sur le detail de ses
+// factures, les impayees d'abord, puis de la plus recente a la plus ancienne.
+//
+// CONVENTIONS DE CALCUL — affichees aussi a l'ecran, pour qu'aucun chiffre ne
+// soit mysterieux :
+//  - Perimetre : un dossier devis n'entre qu'une fois LIVRE (LIV_ST), meme
+//    regle que les trois autres collecteurs de facturation. Les factures
+//    forfait entrent des leur emission.
+//  - Date de reference : la date de depot de facture ; a defaut la livraison
+//    (devis) ou la date d'emission (forfait). C'est la date qui fait sens pour
+//    un bilan de facturation, et celle qui pilote deja les echeances.
+//  - CA : ce qui est facture au client (montantChiffrageLigne), donc la meme
+//    base que l'onglet Devis — sinon le "du" et le "% encaisse" ne
+//    concorderaient pas avec ce que l'on reclame reellement.
+//  - Cout d'achat : les lignes VALIDEES par la Direction, hors travaux mis de
+//    cote. C'est l'argent reellement engage, meme base que la Rentabilite et
+//    l'Exposition financiere.
+//  - Taux de rentabilite : marge / CA, comme partout ailleurs depuis la
+//    correction du 25/09. Jamais marge / cout d'achat.
+//  - Montant expose : etat a ce jour, repris tel quel de l'Exposition
+//    financiere. Ce n'est pas un flux de periode et il ne varie donc pas avec
+//    le filtre — la colonne le precise.
+// ══════════════════════════════════════════════════════════════════════════
+
+var bilanPeriode = 'mois';     // 'mois' | 'trimestre' | 'annee' | 'custom' | 'tout'
+var bilanDebut = '';
+var bilanFin = '';
+var bilanTri = 'ca';           // 'ca' | 'du' | 'marge' | 'client' | 'taux'
+var bilanClientsOuverts = {};
+
+function bilanSetPeriode(p){ bilanPeriode = p; renderPage(); }
+function bilanSetDateByEl(el){
+  if(el.getAttribute('data-bd') === 'debut') bilanDebut = el.value; else bilanFin = el.value;
+  bilanPeriode = 'custom';
+  renderPage();
+}
+function bilanSetTriByEl(el){ bilanTri = el.value; renderPage(); }
+function bilanBasculerClient(el){
+  var k = el.getAttribute('data-bcl');
+  bilanClientsOuverts[k] = !bilanClientsOuverts[k];
+  renderPage();
+}
+
+// Bornes de la periode choisie. 'tout' ne borne rien.
+function bilanBornes(){
+  var today = new Date();
+  var debut = 0, fin = null;
+  if(bilanPeriode === 'mois'){
+    debut = new Date(today.getFullYear(), today.getMonth(), 1).getTime();
+  } else if(bilanPeriode === 'trimestre'){
+    var q = Math.floor(today.getMonth() / 3) * 3;
+    debut = new Date(today.getFullYear(), q, 1).getTime();
+  } else if(bilanPeriode === 'annee'){
+    debut = new Date(today.getFullYear(), 0, 1).getTime();
+  } else if(bilanPeriode === 'custom'){
+    if(bilanDebut) debut = new Date(bilanDebut).setHours(0,0,0,0);
+    if(bilanFin) fin = new Date(bilanFin).setHours(23,59,59,999);
+  }
+  return {debut: debut, fin: fin};
+}
+function bilanDansPeriode(ts, b){
+  if(!ts) return false;
+  if(b.debut > 0 && ts < b.debut) return false;
+  if(b.fin && ts > b.fin) return false;
+  return true;
+}
+function bilanLibellePeriode(){
+  var b = bilanBornes();
+  if(bilanPeriode === 'tout') return 'toutes periodes';
+  var d = b.debut ? new Date(b.debut).toLocaleDateString('fr-FR') : 'origine';
+  var f = b.fin ? new Date(b.fin).toLocaleDateString('fr-FR') : "aujourd'hui";
+  return 'du ' + d + ' au ' + f;
+}
+
+// ── Collecte : une entree par facture, devis et forfait confondus ────────
+function bilanCollecterFactures(){
+  var b = bilanBornes();
+  var maintenant = Date.now();
+  var factures = [];
+
+  // DEVIS : un dossier livre = une facture.
+  vehicles.filter(function(v){
+    return v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length
+           && LIV_ST.indexOf(v.status) >= 0;
+  }).forEach(function(v){
+    var avecPiece = v.chiffrage.lignes.filter(function(cl){ return (cl.piece||'').trim(); });
+    // montantChiffrageLigne rend 0 pour une ligne mise de cote : les travaux
+    // a prevoir ne sont ni factures ni comptes.
+    var ca = avecPiece.reduce(function(s, cl){ return s + montantChiffrageLigne(cl); }, 0);
+    if(!ca) return;
+    var dateRef = v.factureDeposeeLe || v.livraison || v.archiveDate || 0;
+    if(!bilanDansPeriode(dateRef, b) && bilanPeriode !== 'tout') return;
+    var cout = avecPiece.filter(function(cl){ return cl.valideDir === true && !cl.differe; })
+                        .reduce(function(s, cl){ return s + (parseFloat(cl.prixAchat)||0) * (parseInt(cl.qte)||1); }, 0);
+    var paye = parseFloat(v.montantPaye) || 0;
+    factures.push({
+      type: 'devis', client: v.client || 'Client non renseigne',
+      libelle: (v.immat || '') + ' ' + (v.marque || '') + ' ' + (v.modele || ''),
+      ca: ca, paye: paye, reste: Math.max(0, ca - paye), cout: cout,
+      dateRef: dateRef, deposee: !!v.factureDeposeeLe,
+      numero: v.numeroFactureExterne || '',
+      jours: v.factureDeposeeLe ? Math.floor((maintenant - v.factureDeposeeLe) / 86400000) : null
+    });
+  });
+
+  // FORFAIT : une facture mensuelle par client.
+  if(typeof FORFAIT_FACTURES !== 'undefined'){
+    FORFAIT_FACTURES.forEach(function(f){
+      var ca = parseFloat(f.montant) || 0;
+      if(!ca) return;
+      var dateRef = f.deposeeDate || f.emiseDate || 0;
+      if(!bilanDansPeriode(dateRef, b) && bilanPeriode !== 'tout') return;
+      var paye = (f.statut === 'payee') ? ca : (parseFloat(f.montantPaye) || 0);
+      factures.push({
+        type: 'forfait', client: f.client || 'Client non renseigne',
+        libelle: (typeof libelleMoisForfait === 'function' ? libelleMoisForfait(f.periodeKey) : (f.periodeKey || '')),
+        ca: ca, paye: paye, reste: Math.max(0, ca - paye), cout: 0,
+        dateRef: dateRef, deposee: (f.statut === 'deposee' || f.statut === 'payee'),
+        numero: f.numeroFactureExterne || '',
+        jours: f.deposeeDate ? Math.floor((maintenant - f.deposeeDate) / 86400000) : null
+      });
+    });
+  }
+  return factures;
+}
+
+// Le cout des dossiers d'un client FORFAIT n'est porte par aucune facture :
+// l'abonnement est factures a part. On le reprend sur les vehicules livres du
+// client dans la periode, pour que sa marge ait un sens.
+function bilanCoutForfaitClient(client, b){
+  return vehicles.filter(function(v){
+    return v.client === client && v.typeClient === 'forfait'
+           && v.chiffrage && v.chiffrage.lignes && LIV_ST.indexOf(v.status) >= 0
+           && (bilanPeriode === 'tout' || bilanDansPeriode(v.factureDeposeeLe || v.livraison || v.archiveDate || 0, b));
+  }).reduce(function(s, v){
+    return s + v.chiffrage.lignes.filter(function(cl){
+      return (cl.piece||'').trim() && cl.valideDir === true && !cl.differe;
+    }).reduce(function(t, cl){ return t + (parseFloat(cl.prixAchat)||0) * (parseInt(cl.qte)||1); }, 0);
+  }, 0);
+}
+
+// ── Agregation par client ────────────────────────────────────────────────
+function bilanParClient(){
+  var b = bilanBornes();
+  var factures = bilanCollecterFactures();
+  // Exposition : reprise telle quelle de son collecteur, qui rend
+  // {buckets: {client -> {client, totalExpose, ...}}, totalEngageGlobal}.
+  // On ne recalcule rien : deux formules pour une meme notion finiraient par
+  // diverger, et c'est exactement ce qu'on passe la semaine a corriger.
+  var expo = {};
+  try{
+    var buckets = (collecterExpositionFinanciere() || {}).buckets || {};
+    Object.keys(buckets).forEach(function(k){
+      expo[buckets[k].client || k] = buckets[k].totalExpose || 0;
+    });
+  }catch(e){ console.error('Bilan global : exposition indisponible', e); }
+
+  var clients = {};
+  factures.forEach(function(f){
+    if(!clients[f.client]){
+      clients[f.client] = {client: f.client, ca: 0, paye: 0, reste: 0, cout: 0,
+                           factures: [], types: {}};
+    }
+    var c = clients[f.client];
+    c.ca += f.ca; c.paye += f.paye; c.reste += f.reste; c.cout += f.cout;
+    c.types[f.type] = true;
+    c.factures.push(f);
+  });
+
+  var liste = Object.keys(clients).map(function(k){
+    var c = clients[k];
+    if(c.types.forfait) c.cout += bilanCoutForfaitClient(c.client, b);
+    c.marge = c.ca - c.cout;
+    c.taux = c.ca > 0 ? (c.marge / c.ca * 100) : null;   // marge / CA, jamais / cout
+    c.pctEncaisse = c.ca > 0 ? (c.paye / c.ca * 100) : null;
+    c.delaiMoyen = (typeof delaiMoyenReglementClient === 'function') ? delaiMoyenReglementClient(c.client) : null;
+    c.expose = expo[c.client] || 0;
+    c.nature = (c.types.devis && c.types.forfait) ? 'mixte' : (c.types.forfait ? 'forfait' : 'devis');
+    // Detail : les impayees d'abord, puis de la plus recente a la plus ancienne.
+    c.factures.sort(function(x, y){
+      var ix = x.reste > 0 ? 0 : 1, iy = y.reste > 0 ? 0 : 1;
+      if(ix !== iy) return ix - iy;
+      return (y.dateRef || 0) - (x.dateRef || 0);
+    });
+    return c;
+  });
+
+  liste.sort(function(a, z){
+    if(bilanTri === 'client') return a.client.localeCompare(z.client, 'fr');
+    if(bilanTri === 'du') return z.reste - a.reste;
+    if(bilanTri === 'marge') return z.marge - a.marge;
+    if(bilanTri === 'taux') return (z.taux === null ? -1e9 : z.taux) - (a.taux === null ? -1e9 : a.taux);
+    return z.ca - a.ca;
+  });
+  return liste;
+}
+
+// ── Rendu ────────────────────────────────────────────────────────────────
+function bilanPct(v){ return v === null ? '—' : v.toFixed(1) + '%'; }
+function bilanCouleurPct(v){
+  if(v === null) return '#888';
+  return v >= 80 ? '#3B6D11' : (v >= 40 ? '#854F0B' : '#A32D2D');
+}
+function bilanEchapper(t){
+  return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+function pageBilanGlobal(){
+  var liste = bilanParClient();
+  var totCA = liste.reduce(function(s,c){return s+c.ca;},0);
+  var totDu = liste.reduce(function(s,c){return s+c.reste;},0);
+  var totPaye = liste.reduce(function(s,c){return s+c.paye;},0);
+  var totMarge = liste.reduce(function(s,c){return s+c.marge;},0);
+  var totExpose = liste.reduce(function(s,c){return s+c.expose;},0);
+  var tauxGlobal = totCA > 0 ? (totMarge / totCA * 100) : null;
+  var pctGlobal = totCA > 0 ? (totPaye / totCA * 100) : null;
+
+  var h = '';
+
+  // Filtres sur une seule ligne, au-dessus du tableau.
+  h += '<div class="card" style="margin-bottom:14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:10px 12px">';
+  h += '<div class="flex gap6"><span class="xs muted">Periode :</span>';
+  [['mois','Ce mois'],['trimestre','Ce trimestre'],['annee','Cette annee'],['tout','Tout']].forEach(function(p){
+    h += '<button class="btn btn-sm' + (bilanPeriode === p[0] ? ' btn-primary' : '') + '" onclick="bilanSetPeriode(\'' + p[0] + '\')">' + p[1] + '</button>';
+  });
+  h += '</div>';
+  h += '<div class="flex gap6" style="align-items:center"><span class="xs muted">Du</span>';
+  h += '<input type="date" class="inp" style="width:auto;font-size:11px" data-bd="debut" value="' + bilanEchapper(bilanDebut) + '" onchange="bilanSetDateByEl(this)">';
+  h += '<span class="xs muted">au</span>';
+  h += '<input type="date" class="inp" style="width:auto;font-size:11px" data-bd="fin" value="' + bilanEchapper(bilanFin) + '" onchange="bilanSetDateByEl(this)">';
+  h += '</div>';
+  h += '<div class="flex gap6" style="align-items:center"><span class="xs muted">Trier par</span>';
+  h += '<select class="inp" style="width:auto;font-size:11px" onchange="bilanSetTriByEl(this)">';
+  [['ca','CA genere'],['du','Montant du'],['marge','Marge'],['taux','Taux de rentabilite'],['client','Nom du client']].forEach(function(t){
+    h += '<option value="' + t[0] + '"' + (bilanTri === t[0] ? ' selected' : '') + '>' + t[1] + '</option>';
+  });
+  h += '</select></div></div>';
+
+  h += '<div class="kgrid k4" style="margin-bottom:14px">';
+  h += kpi('CA genere', totCA ? Math.round(totCA).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA' : '—', 'blue');
+  h += kpi('Reste du', totDu ? Math.round(totDu).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA' : '—', totDu > 0 ? 'red' : 'green');
+  h += kpi('Part encaissee', bilanPct(pctGlobal), pctGlobal === null ? '' : (pctGlobal >= 80 ? 'green' : 'amber'));
+  h += kpi('Marge brute', totMarge ? Math.round(totMarge).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA' : '—', totMarge >= 0 ? 'green' : 'red');
+  h += '</div>';
+
+  h += '<div class="xs muted" style="margin-bottom:12px;line-height:1.5">'
+     + '<strong>' + liste.length + ' client(s)</strong> sur la periode (' + bilanLibellePeriode() + '), clients devis et forfait reunis. '
+     + 'Un dossier devis entre dans le bilan une fois livre, a sa date de depot de facture. '
+     + 'Le taux de rentabilite est la marge rapportee au chiffre d\'affaires. '
+     + 'Le montant expose est un etat a ce jour : il ne varie pas avec la periode.'
+     + '</div>';
+
+  h += '<div class="card"><div class="tw"><table><thead><tr>';
+  h += '<th>Client</th><th>Type</th><th style="text-align:right">CA genere</th><th style="text-align:right">Montant du</th>';
+  h += '<th style="text-align:right">% encaisse</th><th style="text-align:right">Delai moyen</th>';
+  h += '<th style="text-align:right">Expose</th><th style="text-align:right">Marge</th><th style="text-align:right">Rentabilite</th>';
+  h += '</tr></thead><tbody>';
+
+  if(!liste.length){
+    h += '<tr><td colspan="9"><div class="empty">Aucune facture sur cette periode.</div></td></tr>';
+  }
+
+  liste.forEach(function(c){
+    var ouvert = !!bilanClientsOuverts[c.client];
+    var badge = c.nature === 'mixte' ? '<span class="badge b-purple">Devis + Forfait</span>'
+              : (c.nature === 'forfait' ? '<span class="badge b-amber">Forfait</span>' : '<span class="badge b-blue">Devis</span>');
+    h += '<tr style="cursor:pointer" data-bcl="' + bilanEchapper(c.client) + '" onclick="bilanBasculerClient(this)" title="Cliquer pour voir le detail des factures">';
+    h += '<td><strong>' + (ouvert ? '&#x25BC;' : '&#x25B6;') + ' ' + bilanEchapper(c.client) + '</strong> <span class="xs muted">(' + c.factures.length + ')</span></td>';
+    h += '<td>' + badge + '</td>';
+    h += '<td style="text-align:right;font-family:monospace;font-weight:700">' + Math.round(c.ca).toLocaleString('fr-FR', GOS_FMT0) + '</td>';
+    h += '<td style="text-align:right;font-family:monospace;color:' + (c.reste > 0 ? '#A32D2D' : '#3B6D11') + '">' + (c.reste ? Math.round(c.reste).toLocaleString('fr-FR', GOS_FMT0) : '—') + '</td>';
+    h += '<td style="text-align:right;color:' + bilanCouleurPct(c.pctEncaisse) + '">' + bilanPct(c.pctEncaisse) + '</td>';
+    h += '<td style="text-align:right" class="xs">' + (c.delaiMoyen === null ? '—' : c.delaiMoyen + ' j') + '</td>';
+    h += '<td style="text-align:right;font-family:monospace;color:' + (c.expose > 0 ? '#A32D2D' : '#888') + '" class="xs">' + (c.expose ? Math.round(c.expose).toLocaleString('fr-FR', GOS_FMT0) : '—') + '</td>';
+    h += '<td style="text-align:right;font-family:monospace;color:' + (c.marge >= 0 ? '#3B6D11' : '#A32D2D') + '">' + Math.round(c.marge).toLocaleString('fr-FR', GOS_FMT0) + '</td>';
+    h += '<td style="text-align:right;color:' + (c.taux === null ? '#888' : (c.taux >= 30 ? '#3B6D11' : (c.taux >= 0 ? '#854F0B' : '#A32D2D'))) + '">' + bilanPct(c.taux) + '</td>';
+    h += '</tr>';
+
+    if(ouvert){
+      h += '<tr><td colspan="9" style="background:#fafbfc;padding:0">';
+      h += '<div style="padding:10px 14px">';
+      h += '<div class="xs muted" style="margin-bottom:6px">Factures impayees en premier, puis de la plus recente a la plus ancienne.</div>';
+      h += '<div class="tw"><table><thead><tr><th>Facture</th><th>Type</th><th>Depot</th><th class="xs">Depuis</th>'
+         + '<th style="text-align:right">Montant</th><th style="text-align:right">Encaisse</th><th style="text-align:right">Reste</th><th>Etat</th></tr></thead><tbody>';
+      c.factures.forEach(function(f){
+        var solde = (f.reste <= 0);
+        h += '<tr>';
+        h += '<td class="xs"><strong>' + bilanEchapper(f.libelle || '—') + '</strong>' + (f.numero ? '<div class="muted" style="font-family:monospace">' + bilanEchapper(f.numero) + '</div>' : '') + '</td>';
+        h += '<td class="xs">' + (f.type === 'forfait' ? 'Forfait' : 'Devis') + '</td>';
+        h += '<td class="xs">' + (f.dateRef ? new Date(f.dateRef).toLocaleDateString('fr-FR') : '<span class="muted">non deposee</span>') + '</td>';
+        h += '<td class="xs' + (f.jours !== null && f.jours > 60 && !solde ? '" style="color:#A32D2D;font-weight:700' : '') + '">' + (f.jours === null ? '—' : f.jours + ' j') + '</td>';
+        h += '<td style="text-align:right;font-family:monospace">' + Math.round(f.ca).toLocaleString('fr-FR', GOS_FMT0) + '</td>';
+        h += '<td style="text-align:right;font-family:monospace;color:#3B6D11">' + (f.paye ? Math.round(f.paye).toLocaleString('fr-FR', GOS_FMT0) : '—') + '</td>';
+        h += '<td style="text-align:right;font-family:monospace;color:' + (solde ? '#888' : '#A32D2D') + ';font-weight:700">' + (solde ? '—' : Math.round(f.reste).toLocaleString('fr-FR', GOS_FMT0)) + '</td>';
+        h += '<td>' + (solde ? '<span class="badge b-green">Solde</span>'
+             : (f.paye > 0 ? '<span class="badge b-amber">Partiel</span>'
+             : (f.deposee ? '<span class="badge b-red">Impaye</span>' : '<span class="badge b-gray">Non deposee</span>'))) + '</td>';
+        h += '</tr>';
+      });
+      h += '</tbody></table></div></div></td></tr>';
+    }
+  });
+
+  if(liste.length){
+    h += '<tr style="background:#f5f4f1;font-weight:700">';
+    h += '<td colspan="2" style="text-align:right">Totaux :</td>';
+    h += '<td style="text-align:right;font-family:monospace">' + Math.round(totCA).toLocaleString('fr-FR', GOS_FMT0) + '</td>';
+    h += '<td style="text-align:right;font-family:monospace;color:#A32D2D">' + Math.round(totDu).toLocaleString('fr-FR', GOS_FMT0) + '</td>';
+    h += '<td style="text-align:right">' + bilanPct(pctGlobal) + '</td>';
+    h += '<td></td>';
+    h += '<td style="text-align:right;font-family:monospace;color:#A32D2D">' + Math.round(totExpose).toLocaleString('fr-FR', GOS_FMT0) + '</td>';
+    h += '<td style="text-align:right;font-family:monospace;color:' + (totMarge >= 0 ? '#3B6D11' : '#A32D2D') + '">' + Math.round(totMarge).toLocaleString('fr-FR', GOS_FMT0) + '</td>';
+    h += '<td style="text-align:right">' + bilanPct(tauxGlobal) + '</td>';
+    h += '</tr>';
+  }
+  h += '</tbody></table></div></div>';
+  return h;
+}
+
+
 function pageFacturation(){
   // KPI unifies devis + forfait, sans dupliquer la logique de calcul :
   // reutilise collecterEncaissementsAttendus (devis+forfait deja distingues
@@ -9888,7 +10216,11 @@ function pageFacturation(){
 
   var caDevisFacture=0, caForfaitFacture=0;
   vehicles.forEach(function(v){
-    if(!v.chiffrage || !v.chiffrage.lignes || v.typeClient!=='devis') return;
+    // Un dossier n'entre en facturation qu'une fois LIVRE (LIV_ST), comme dans
+    // tous les autres collecteurs. Et on retient devis ET assurance : seuls les
+    // forfaits sont ecartes, ils ont leur propre compteur.
+    if(!v.chiffrage || !v.chiffrage.lignes || v.typeClient==='forfait') return;
+    if(LIV_ST.indexOf(v.status) < 0) return;
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
     caDevisFacture += lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
   });
@@ -9901,7 +10233,8 @@ function pageFacturation(){
   html += '</div>';
 
   html += '<div class="kgrid k4" style="margin-bottom:16px">';
-  html += kpi('CA facture total', caTotalFacture?caTotalFacture.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', 'blue');
+  html += '<div title="Dossiers livres uniquement (devis et assurance), plus les factures forfait. Un devis non livre n\'y figure pas.">'
+        + kpi('CA facture total', caTotalFacture?caTotalFacture.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', 'blue') + '</div>';
   html += kpi('Impayes total', totalImpayes?totalImpayes.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', totalImpayes>0?'red':'green');
   html += kpi('Impayes devis', impayesDevis?impayesDevis.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', impayesDevis>0?'amber':'');
   html += kpi('Impayes forfaits', impayesForfait?impayesForfait.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', impayesForfait>0?'amber':'');
@@ -9913,6 +10246,7 @@ function pageFacturation(){
   html += '<button class="btn'+(facturationOnglet==='forfait'?' btn-primary':'')+'" data-fo="forfait" onclick="setFacturationOngletByEl(this)">Forfaits</button>';
   html += '<button class="btn'+(facturationOnglet==='echeances'?' btn-primary':'')+'" data-fo="echeances" onclick="setFacturationOngletByEl(this)">Echeances</button>';
   html += '<button class="btn'+(facturationOnglet==='exposition'?' btn-primary':'')+'" data-fo="exposition" onclick="setFacturationOngletByEl(this)">&#x1F4C9; Exposition financiere</button>';
+  html += '<button class="btn'+(facturationOnglet==='bilan'?' btn-primary':'')+'" data-fo="bilan" onclick="setFacturationOngletByEl(this)">&#x1F4CA; Bilan global</button>';
   html += '</div>';
 
   if(facturationOnglet==='forfait'){
@@ -9921,6 +10255,8 @@ function pageFacturation(){
     html += pageFacturationEcheances();
   } else if(facturationOnglet==='exposition'){
     html += pageExpositionFinanciere();
+  } else if(facturationOnglet==='bilan'){
+    html += pageBilanGlobal();
   } else {
     html += pageCreances();
   }
