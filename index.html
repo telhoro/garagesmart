@@ -1072,6 +1072,65 @@ tr:hover td{background:#faf9f7}
 </div>
 </div>
 
+<!-- GESTION LIQUIDITE : compte, mouvement, releve -->
+<div class="overlay" id="modalTresoCompte" style="display:none" onclick="if(event.target===this)tresoFermerCompte()">
+<div class="modal" style="max-width:420px">
+  <div class="mhead"><h2>Compte de tresorerie</h2><button class="btn btn-sm" onclick="tresoFermerCompte()">X</button></div>
+  <div class="mbody">
+    <div class="fr"><label class="fl">Nom du compte <span style="color:red">*</span></label><input class="inp" id="tresoCompteNom" placeholder="Ex: Banque Atlantique, Orange Money, Caisse atelier"></div>
+    <div class="fr"><label class="fl">Type</label>
+      <select class="inp" id="tresoCompteType">
+        <option value="banque">Banque</option>
+        <option value="mobile">Mobile money</option>
+        <option value="caisse">Caisse</option>
+        <option value="autre">Autre</option>
+      </select>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="fr"><label class="fl">Solde de depart (FCFA)</label><input type="number" class="inp" id="tresoCompteSolde" value="0"></div>
+      <div class="fr"><label class="fl">A la date du</label><input type="date" class="inp" id="tresoCompteDate"></div>
+    </div>
+    <div class="xs muted" id="tresoCompteNote" style="display:none;background:#FDF3E3;border:1px solid #E8A44A;color:#854F0B;border-radius:5px;padding:7px;line-height:1.45">Des mouvements existent sur ce compte : le solde de depart n'est plus modifiable, il deplacerait tout l'historique. Pour corriger un ecart, utilisez un releve puis l'alignement.</div>
+  </div>
+  <div class="mfoot">
+    <button class="btn" onclick="tresoFermerCompte()">Annuler</button>
+    <button class="btn btn-primary" onclick="tresoValiderCompte()">Enregistrer</button>
+  </div>
+</div>
+</div>
+
+<div class="overlay" id="modalTresoMvt" style="display:none" onclick="if(event.target===this)tresoFermerMouvement()">
+<div class="modal" style="max-width:420px">
+  <div class="mhead"><h2 id="tresoMvtTitre">Mouvement</h2><button class="btn btn-sm" onclick="tresoFermerMouvement()">X</button></div>
+  <div class="mbody">
+    <div class="xs muted" style="margin-bottom:10px">Solde actuel : <strong id="tresoMvtSoldeActuel" style="font-family:monospace">—</strong></div>
+    <div class="fr"><label class="fl">Montant (FCFA) <span style="color:red">*</span></label><input type="number" class="inp" id="tresoMvtMontant" min="0" placeholder="0"></div>
+    <div class="fr"><label class="fl">Motif</label><input class="inp" id="tresoMvtMotif" placeholder="Ex: achat pieces, virement client, retrait"></div>
+    <div class="fr"><label class="fl">Date</label><input type="date" class="inp" id="tresoMvtDate"></div>
+  </div>
+  <div class="mfoot">
+    <button class="btn" onclick="tresoFermerMouvement()">Annuler</button>
+    <button class="btn btn-primary" onclick="tresoValiderMouvement()">Enregistrer</button>
+  </div>
+</div>
+</div>
+
+<div class="overlay" id="modalTresoReleve" style="display:none" onclick="if(event.target===this)tresoFermerReleve()">
+<div class="modal" style="max-width:420px">
+  <div class="mhead"><h2 id="tresoReleveTitre">Releve</h2><button class="btn btn-sm" onclick="tresoFermerReleve()">X</button></div>
+  <div class="mbody">
+    <div class="xs muted" style="margin-bottom:10px;line-height:1.45">Indiquez le solde que vous constatez reellement sur ce compte. Il n'ecrase pas le solde calcule : l'application affichera l'ecart et vous proposera de l'aligner.</div>
+    <div class="xs muted" style="margin-bottom:10px">Solde calcule : <strong id="tresoReleveCalcule" style="font-family:monospace">—</strong></div>
+    <div class="fr"><label class="fl">Solde constate (FCFA) <span style="color:red">*</span></label><input type="number" class="inp" id="tresoReleveSolde" value="0"></div>
+    <div class="fr"><label class="fl">A la date du</label><input type="date" class="inp" id="tresoReleveDate"></div>
+  </div>
+  <div class="mfoot">
+    <button class="btn" onclick="tresoFermerReleve()">Annuler</button>
+    <button class="btn btn-primary" onclick="tresoValiderReleve()">Enregistrer le releve</button>
+  </div>
+</div>
+</div>
+
 <div class="overlay" id="modalBanque" style="display:none" onclick="if(event.target===this)closeBanqueForm()">
 <div class="modal" style="max-width:420px">
   <div class="mhead"><h2>Banque</h2><button class="btn btn-sm" onclick="closeBanqueForm()">X</button></div>
@@ -2072,7 +2131,7 @@ var NAV = {
     {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'},{id:'acces_clients',e:'AC',l:'Acces clients'},{id:'messages_clients',e:'MC',l:'Messages clients'},{id:'import_historique',e:'IH',l:'Import historique'},{id:'presences',e:'Pr',l:'Presences'}]},
     {l:'Finances',items:[{id:'finances_dashboard',e:'FD',l:'Tableau de bord'},{id:'facturation',e:'F',l:'Facturation'},{id:'caisse',e:'Ca',l:'Caisse'},{id:'dettes_fournisseurs',e:'DF',l:'Dettes fournisseurs'},{id:'prevision_treso',e:'PT',l:'Prevision tresorerie'},{id:'historique_paiements',e:'HP',l:'Historique paiements'},{id:'rapport_financier',e:'RF',l:'Rapport financier'}]},
     {l:'Rentabilite',items:[{id:'rentabilite',e:'RD',l:'Clients Devis'},{id:'rentabilite_forfait',e:'RF',l:'Clients Forfait'},{id:'rentabilite_tkm',e:'RT',l:'Clients TKM'},{id:'rentabilite_sinistres',e:'RS',l:'Sinistres'},{id:'analyse_pieces',e:'AP',l:'Analyse pieces'}]},
-    {l:'Gestion',items:[{id:'archives',e:'Ar',l:'Archives'},{id:'banques',e:'B',l:'Banques'},{id:'charges_fixes',e:'CF',l:'Charges fixes'},{id:'engagements_bancaires',e:'EB',l:'Engagements bancaires'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'stock',e:'St',l:'Gestion du stock'},{id:'forfaits_tkm',e:'FT',l:'Forfaits TKM'},{id:'travaux_prevoir',e:'TP',l:'Travaux a prevoir'},{id:'devis_differes',e:'DD',l:'Devis differes'},{id:'sinistres',e:'S',l:'Sinistres'},{id:'val_fin',e:'VF',l:'Validation financiere'},{id:'kpi',e:'K',l:'KPI'},{id:'correction_statut_dir',e:'CS',l:'Correction manuelle statut'}]}
+    {l:'Gestion',items:[{id:'archives',e:'Ar',l:'Archives'},{id:'banques',e:'B',l:'Banques et liquidite'},{id:'charges_fixes',e:'CF',l:'Charges fixes'},{id:'engagements_bancaires',e:'EB',l:'Engagements bancaires'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'stock',e:'St',l:'Gestion du stock'},{id:'forfaits_tkm',e:'FT',l:'Forfaits TKM'},{id:'travaux_prevoir',e:'TP',l:'Travaux a prevoir'},{id:'devis_differes',e:'DD',l:'Devis differes'},{id:'sinistres',e:'S',l:'Sinistres'},{id:'val_fin',e:'VF',l:'Validation financiere'},{id:'kpi',e:'K',l:'KPI'},{id:'correction_statut_dir',e:'CS',l:'Correction manuelle statut'}]}
   ],
   reception:[
     {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'historique',e:'H',l:'Historique'}]},
@@ -2106,7 +2165,7 @@ var TITLES = {
   travaux_prevoir:'Travaux a prevoir',
   dashboard:'Tableau de bord',sinistres:'Sinistres',clients:'Clients et vehicules',
   a_attribuer:'A attribuer',val_devis:'Validation devis',travaux:'Travaux et Tests',
-  equipes:'Equipes et techniciens',chiffrage:'Chiffrage achats',stats_tech:'Mes statistiques',fournisseurs:'Gestion des fournisseurs',tresorerie:'Tresorerie',rentabilite:'Rentabilite clients Devis',rentabilite_forfait:'Rentabilite clients Forfait',rentabilite_tkm:'Rentabilite clients TKM',rentabilite_sinistres:'Rentabilite sinistres',forfaits_tkm:'Forfaits TKM',analyse_pieces:'Analyse des pieces',facturation:'Facturation',creances:'Creances clients',archives:'Archives vehicules',facturation_forfait:'Facturation forfaits',banques:'Gestion des banques',testeur:'Tableau de bord testeur',
+  equipes:'Equipes et techniciens',chiffrage:'Chiffrage achats',stats_tech:'Mes statistiques',fournisseurs:'Gestion des fournisseurs',tresorerie:'Tresorerie',rentabilite:'Rentabilite clients Devis',rentabilite_forfait:'Rentabilite clients Forfait',rentabilite_tkm:'Rentabilite clients TKM',rentabilite_sinistres:'Rentabilite sinistres',forfaits_tkm:'Forfaits TKM',analyse_pieces:'Analyse des pieces',facturation:'Facturation',creances:'Creances clients',archives:'Archives vehicules',facturation_forfait:'Facturation forfaits',banques:'Banques et liquidite',testeur:'Tableau de bord testeur',
   appro:'Approvisionnement',val_fin:'Validation financiere',kpi:'KPI et Analyses',
   messages_clients:'Messages clients',
   import_historique:'Import historique',
@@ -14482,6 +14541,578 @@ function pagePrevisionTresorerie(){
   return html;
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// GESTION LIQUIDITE — suivi de tresorerie (02/10/2026)
+// ══════════════════════════════════════════════════════════════════════════
+// Module AUTONOME, a la demande de la Direction : aucun lien avec les banques
+// de la page ci-dessus, ni avec la caisse, ni avec les chiffrages. Il permet
+// d'eprouver le modele avant de decider s'il faut le raccorder au reste.
+//
+// Stockage LOCAL uniquement (localStorage), sans synchronisation Firebase.
+// Raison : les regles de securite C-09 n'autorisent que les collections
+// declarees. Publier ici sans les avoir etendues ferait refuser chaque
+// ecriture et mettrait les operations en quarantaine. Le branchement se fera
+// en une fois, quand le modele sera valide.
+//
+// Modele :
+//   compte    {id, nom, type, soldeInitial, dateInitiale, actif}
+//   mouvement {id, compteId, date, sens:'entree'|'sortie', montant, motif, auteur}
+//   releve    {id, compteId, date, soldeConstate, auteur}
+// Le solde affiche est TOUJOURS calcule : solde initial + entrees - sorties.
+// Un releve n'ecrase jamais ce calcul : il enregistre ce qui a ete constate et
+// l'application montre l'ecart. L'alignement est un geste explicite, qui cree
+// un mouvement trace — jamais une correction silencieuse.
+// ══════════════════════════════════════════════════════════════════════════
+
+var TRESO_COMPTES = [];
+var TRESO_MOUVEMENTS = [];
+var TRESO_RELEVES = [];
+
+var TRESO_TYPES = [
+  {cle:'banque', libelle:'Banque'},
+  {cle:'mobile', libelle:'Mobile money'},
+  {cle:'caisse', libelle:'Caisse'},
+  {cle:'autre',  libelle:'Autre'}
+];
+function tresoLibelleType(cle){
+  var t = TRESO_TYPES.find(function(x){ return x.cle === cle; });
+  return t ? t.libelle : cle;
+}
+
+// Palette des series du graphique : ordre FIXE, une couleur par compte selon
+// son rang dans la liste. Un filtre ne doit jamais repeindre les comptes
+// restants — la couleur suit le compte, pas sa position a l'ecran.
+var TRESO_COULEURS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948'];
+function tresoCouleurCompte(compteId){
+  var i = TRESO_COMPTES.findIndex(function(c){ return c.id === compteId; });
+  return TRESO_COULEURS[(i < 0 ? 0 : i) % TRESO_COULEURS.length];
+}
+
+// ── Stockage local ───────────────────────────────────────────────────────
+function tresoCharger(){
+  // Nom distinct de la fonction lire() du moteur de synchronisation : portees
+  // differentes, mais le controle de doublons sert a reperer les vraies
+  // collisions, autant ne pas y ajouter de bruit.
+  function lireListe(cle){
+    try{ var v = JSON.parse(localStorage.getItem(cle)); return Array.isArray(v) ? v : []; }
+    catch(e){ return []; }
+  }
+  TRESO_COMPTES    = lireListe('gos_treso_comptes');
+  TRESO_MOUVEMENTS = lireListe('gos_treso_mouvements');
+  TRESO_RELEVES    = lireListe('gos_treso_releves');
+}
+function tresoEnregistrer(){
+  try{
+    localStorage.setItem('gos_treso_comptes', JSON.stringify(TRESO_COMPTES));
+    localStorage.setItem('gos_treso_mouvements', JSON.stringify(TRESO_MOUVEMENTS));
+    localStorage.setItem('gos_treso_releves', JSON.stringify(TRESO_RELEVES));
+    return true;
+  }catch(e){
+    console.error('Tresorerie : stockage local sature', e);
+    alert('Enregistrement impossible : le stockage local du navigateur est plein.');
+    return false;
+  }
+}
+
+// ── Dates : un jour = une cle AAAA-MM-JJ, un mois = AAAA-MM ──────────────
+function tresoJour(ts){
+  var d = new Date(ts);
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function tresoMois(ts){
+  var d = new Date(ts);
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+}
+function tresoFinDeJournee(ts){
+  var d = new Date(ts); d.setHours(23,59,59,999); return d.getTime();
+}
+function tresoDepuisChamp(valeur){
+  // <input type="date"> rend AAAA-MM-JJ : on le lit en heure locale, pas UTC,
+  // sinon la date recule d'un jour selon le fuseau.
+  if(!valeur) return Date.now();
+  var p = String(valeur).split('-');
+  if(p.length !== 3) return Date.now();
+  return new Date(parseInt(p[0],10), parseInt(p[1],10)-1, parseInt(p[2],10), 12, 0, 0).getTime();
+}
+function tresoVersChamp(ts){
+  var d = new Date(ts);
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function tresoFmt(v){
+  return Math.round(v || 0).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA';
+}
+
+// ── Calculs ──────────────────────────────────────────────────────────────
+// Solde d'un compte a une date donnee (incluse). Sans date : solde du jour.
+function tresoSolde(compteId, jusquA){
+  var c = TRESO_COMPTES.find(function(x){ return x.id === compteId; });
+  if(!c) return 0;
+  var limite = (jusquA === undefined || jusquA === null) ? Infinity : tresoFinDeJournee(jusquA);
+  var solde = parseFloat(c.soldeInitial) || 0;
+  TRESO_MOUVEMENTS.forEach(function(m){
+    if(m.compteId !== compteId || m.date > limite) return;
+    solde += (m.sens === 'sortie' ? -1 : 1) * (parseFloat(m.montant) || 0);
+  });
+  return solde;
+}
+function tresoSoldeTotal(jusquA, filtreType){
+  return TRESO_COMPTES.filter(function(c){
+    return c.actif !== false && (!filtreType || c.type === filtreType);
+  }).reduce(function(s, c){ return s + tresoSolde(c.id, jusquA); }, 0);
+}
+function tresoDernierReleve(compteId){
+  var liste = TRESO_RELEVES.filter(function(r){ return r.compteId === compteId; })
+                           .sort(function(a,b){ return b.date - a.date; });
+  return liste.length ? liste[0] : null;
+}
+// Ecart = ce qui a ete constate moins ce que le calcul donne A LA MEME DATE.
+// Comparer un releve d'hier au solde d'aujourd'hui n'aurait aucun sens.
+function tresoEcart(compteId){
+  var r = tresoDernierReleve(compteId);
+  if(!r) return null;
+  return (parseFloat(r.soldeConstate) || 0) - tresoSolde(compteId, r.date);
+}
+
+// ── Vues ─────────────────────────────────────────────────────────────────
+var tresoVue = 'liste';              // 'liste' | 'historique'
+var tresoCompteEditId = null;
+var tresoMvtCompteId = null;
+var tresoMvtSens = 'sortie';
+var tresoReleveCompteId = null;
+var tresoHistoGranularite = 'jour';  // 'jour' | 'mois'
+var tresoHistoPeriode = '3m';        // '1m' | '3m' | '12m' | 'tout'
+var tresoHistoDetail = false;        // false = total, true = une ligne par compte
+
+function tresoOuvrirHistorique(){ tresoVue = 'historique'; renderPage(); }
+function tresoRetourListe(){ tresoVue = 'liste'; renderPage(); }
+function tresoSetGranularite(g){ tresoHistoGranularite = g; renderPage(); }
+function tresoSetPeriode(p){ tresoHistoPeriode = p; renderPage(); }
+function tresoBasculerDetail(){ tresoHistoDetail = !tresoHistoDetail; renderPage(); }
+
+// ── Tableau principal : Gestion liquidite ────────────────────────────────
+function renderGestionLiquidite(){
+  if(tresoVue === 'historique') return renderTresoHistorique();
+
+  var actifs = TRESO_COMPTES.filter(function(c){ return c.actif !== false; });
+  var total = tresoSoldeTotal();
+
+  var h = '<div style="margin-top:26px">';
+  h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:8px">';
+  h += '<h2 style="font-size:16px;font-weight:700;margin:0">Gestion liquidite</h2>';
+  h += '<div class="flex gap6">';
+  h += '<button class="btn btn-sm" onclick="tresoOuvrirHistorique()">&#x1F4C8; Historique</button>';
+  h += '<button class="btn btn-primary btn-sm" onclick="tresoOuvrirCompte(null)">+ Ajouter un compte</button>';
+  h += '</div></div>';
+  h += '<div class="xs muted" style="margin-bottom:12px;line-height:1.5">Suivi autonome, enregistre sur ce poste uniquement. Le solde est calcule a partir des entrees et sorties ; un releve enregistre le solde reellement constate et fait apparaitre l\'ecart.</div>';
+
+  // Indicateurs : la tresorerie totale, puis sa repartition par nature.
+  h += '<div class="kgrid k4" style="margin-bottom:16px">';
+  h += kpi('Tresorerie totale', total ? tresoFmt(total) : '—', total > 0 ? 'green' : (total < 0 ? 'red' : ''));
+  h += kpi('Banques', tresoFmt(tresoSoldeTotal(null, 'banque')), '');
+  h += kpi('Mobile money', tresoFmt(tresoSoldeTotal(null, 'mobile')), '');
+  h += kpi('Caisse et autres', tresoFmt(tresoSoldeTotal(null, 'caisse') + tresoSoldeTotal(null, 'autre')), '');
+  h += '</div>';
+
+  h += '<div class="card"><div class="tw"><table><thead><tr>';
+  h += '<th>Compte</th><th>Type</th><th style="text-align:right">Solde calcule</th>';
+  h += '<th>Dernier releve</th><th style="text-align:right">Ecart</th><th>Statut</th><th></th>';
+  h += '</tr></thead><tbody>';
+
+  if(!TRESO_COMPTES.length){
+    h += '<tr><td colspan="7"><div class="empty">Aucun compte enregistre. Commencez par en ajouter un.</div></td></tr>';
+  }
+
+  TRESO_COMPTES.forEach(function(c){
+    var solde = tresoSolde(c.id);
+    var releve = tresoDernierReleve(c.id);
+    var ecart = tresoEcart(c.id);
+    var inactif = (c.actif === false);
+    h += '<tr style="' + (inactif ? 'opacity:0.5;background:#fafafa' : '') + '">';
+    h += '<td><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:' + tresoCouleurCompte(c.id) + ';margin-right:7px"></span><strong>' + tresoEchapper(c.nom) + '</strong></td>';
+    h += '<td><span class="badge b-blue">' + tresoLibelleType(c.type) + '</span></td>';
+    h += '<td style="text-align:right;font-family:monospace;font-weight:700;color:' + (solde < 0 ? '#A32D2D' : '#185FA5') + '">' + tresoFmt(solde) + '</td>';
+    h += '<td class="xs">' + (releve
+          ? tresoFmt(releve.soldeConstate) + '<div class="muted">le ' + new Date(releve.date).toLocaleDateString('fr-FR') + '</div>'
+          : '<span class="muted">aucun</span>') + '</td>';
+    if(ecart === null){
+      h += '<td style="text-align:right" class="xs muted">—</td>';
+    } else if(Math.round(ecart) === 0){
+      h += '<td style="text-align:right"><span class="badge b-green">&#x2714; conforme</span></td>';
+    } else {
+      h += '<td style="text-align:right;font-family:monospace;color:#A32D2D">' + (ecart > 0 ? '+' : '') + Math.round(ecart).toLocaleString('fr-FR', GOS_FMT0)
+         + '<div><button class="btn btn-sm" style="font-size:10px;padding:1px 6px" data-tcid="' + c.id + '" onclick="tresoAligner(this)">Aligner</button></div></td>';
+    }
+    h += '<td><span class="badge ' + (inactif ? 'b-gray' : 'b-green') + '">' + (inactif ? 'Inactif' : 'Actif') + '</span></td>';
+    h += '<td><div class="flex gap6" style="flex-wrap:wrap">';
+    if(!inactif){
+      h += '<button class="btn btn-success btn-sm" style="font-size:10px" data-tcid="' + c.id + '" onclick="tresoOuvrirMouvement(this,\'entree\')">+ Entree</button>';
+      h += '<button class="btn btn-danger btn-sm" style="font-size:10px" data-tcid="' + c.id + '" onclick="tresoOuvrirMouvement(this,\'sortie\')">&minus; Sortie</button>';
+      h += '<button class="btn btn-sm" style="font-size:10px" data-tcid="' + c.id + '" onclick="tresoOuvrirReleve(this)">Releve</button>';
+    }
+    h += '<button class="btn btn-sm" data-tcid="' + c.id + '" onclick="tresoOuvrirCompteById(this)">&#x270F;</button>';
+    h += '<button class="btn btn-sm" data-tcid="' + c.id + '" onclick="tresoBasculerActif(this)">' + (inactif ? 'Activer' : 'Desactiver') + '</button>';
+    if(currentRole === 'direction'){
+      h += '<button class="btn btn-sm" data-tcid="' + c.id + '" onclick="tresoSupprimerCompte(this)" style="color:#A32D2D;border-color:#E0A0A0">&#x2715;</button>';
+    }
+    h += '</div></td></tr>';
+  });
+
+  if(actifs.length){
+    h += '<tr style="background:#f5f4f1;font-weight:700"><td colspan="2" style="text-align:right">Total :</td>';
+    h += '<td style="text-align:right;font-family:monospace">' + tresoFmt(total) + '</td><td colspan="4"></td></tr>';
+  }
+  h += '</tbody></table></div></div>';
+
+  h += renderTresoDerniersMouvements();
+  h += '</div>';
+  return h;
+}
+
+function tresoEchapper(t){
+  return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+// Les dix derniers mouvements, pour verifier d'un coup d'oeil ce qui vient
+// d'etre saisi sans ouvrir l'historique complet.
+function renderTresoDerniersMouvements(){
+  var derniers = TRESO_MOUVEMENTS.slice().sort(function(a,b){ return b.date - a.date; }).slice(0, 10);
+  if(!derniers.length) return '';
+  var h = '<div class="card" style="margin-top:14px"><div style="font-weight:700;font-size:13px;margin-bottom:8px">Derniers mouvements</div>';
+  h += '<div class="tw"><table><thead><tr><th>Date</th><th>Compte</th><th>Motif</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
+  derniers.forEach(function(m){
+    var c = TRESO_COMPTES.find(function(x){ return x.id === m.compteId; });
+    var sortie = (m.sens === 'sortie');
+    h += '<tr><td class="xs">' + new Date(m.date).toLocaleDateString('fr-FR') + '</td>';
+    h += '<td class="xs">' + tresoEchapper(c ? c.nom : 'compte supprime') + '</td>';
+    h += '<td class="xs">' + tresoEchapper(m.motif || '—') + '</td>';
+    h += '<td style="text-align:right;font-family:monospace;color:' + (sortie ? '#A32D2D' : '#3B6D11') + '">'
+       + (sortie ? '-' : '+') + Math.round(parseFloat(m.montant) || 0).toLocaleString('fr-FR', GOS_FMT0) + '</td>';
+    h += '<td><button class="btn btn-sm" style="font-size:10px" data-tmid="' + m.id + '" onclick="tresoSupprimerMouvement(this)" title="Supprimer ce mouvement">&#x2715;</button></td></tr>';
+  });
+  h += '</tbody></table></div></div>';
+  return h;
+}
+
+// ── Comptes ──────────────────────────────────────────────────────────────
+function tresoOuvrirCompteById(btn){ tresoOuvrirCompte(btn.getAttribute('data-tcid')); }
+function tresoOuvrirCompte(id){
+  tresoCompteEditId = id;
+  var c = id ? TRESO_COMPTES.find(function(x){ return x.id === id; }) : null;
+  document.getElementById('tresoCompteNom').value = c ? c.nom : '';
+  document.getElementById('tresoCompteType').value = c ? c.type : 'banque';
+  document.getElementById('tresoCompteSolde').value = c ? (c.soldeInitial || 0) : 0;
+  document.getElementById('tresoCompteDate').value = tresoVersChamp(c && c.dateInitiale ? c.dateInitiale : Date.now());
+  // Le solde initial ne se modifie plus une fois des mouvements enregistres :
+  // il deplacerait tout l'historique du compte sans trace.
+  var aDesMouvements = !!(c && TRESO_MOUVEMENTS.some(function(m){ return m.compteId === c.id; }));
+  document.getElementById('tresoCompteSolde').disabled = aDesMouvements;
+  document.getElementById('tresoCompteDate').disabled = aDesMouvements;
+  var note = document.getElementById('tresoCompteNote');
+  if(note) note.style.display = aDesMouvements ? 'block' : 'none';
+  document.getElementById('modalTresoCompte').style.display = 'flex';
+}
+function tresoFermerCompte(){ document.getElementById('modalTresoCompte').style.display = 'none'; }
+function tresoValiderCompte(){
+  var nom = (document.getElementById('tresoCompteNom').value || '').trim();
+  if(!nom){ alert('Le nom du compte est obligatoire.'); return; }
+  var type = document.getElementById('tresoCompteType').value;
+  var solde = parseFloat(document.getElementById('tresoCompteSolde').value) || 0;
+  var date = tresoDepuisChamp(document.getElementById('tresoCompteDate').value);
+  if(tresoCompteEditId){
+    var c = TRESO_COMPTES.find(function(x){ return x.id === tresoCompteEditId; });
+    if(c){
+      c.nom = nom; c.type = type;
+      if(!TRESO_MOUVEMENTS.some(function(m){ return m.compteId === c.id; })){
+        c.soldeInitial = solde; c.dateInitiale = date;
+      }
+    }
+  } else {
+    TRESO_COMPTES.push({
+      id: 'tc_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+      nom: nom, type: type, soldeInitial: solde, dateInitiale: date, actif: true
+    });
+  }
+  if(tresoEnregistrer()){ tresoFermerCompte(); renderPage(); }
+}
+function tresoBasculerActif(btn){
+  var c = TRESO_COMPTES.find(function(x){ return x.id === btn.getAttribute('data-tcid'); });
+  if(!c) return;
+  c.actif = (c.actif === false);
+  if(tresoEnregistrer()) renderPage();
+}
+function tresoSupprimerCompte(btn){
+  var id = btn.getAttribute('data-tcid');
+  var c = TRESO_COMPTES.find(function(x){ return x.id === id; });
+  if(!c) return;
+  var nbM = TRESO_MOUVEMENTS.filter(function(m){ return m.compteId === id; }).length;
+  var nbR = TRESO_RELEVES.filter(function(r){ return r.compteId === id; }).length;
+  var msg = 'Supprimer le compte "' + c.nom + '" ?';
+  if(nbM || nbR) msg += '\n\n' + nbM + ' mouvement(s) et ' + nbR + ' releve(s) seront supprimes avec lui.';
+  msg += '\n\nCette action est irreversible.';
+  if(!confirm(msg)) return;
+  TRESO_COMPTES = TRESO_COMPTES.filter(function(x){ return x.id !== id; });
+  TRESO_MOUVEMENTS = TRESO_MOUVEMENTS.filter(function(m){ return m.compteId !== id; });
+  TRESO_RELEVES = TRESO_RELEVES.filter(function(r){ return r.compteId !== id; });
+  if(tresoEnregistrer()) renderPage();
+}
+
+// ── Mouvements ───────────────────────────────────────────────────────────
+function tresoOuvrirMouvement(btn, sens){
+  tresoMvtCompteId = btn.getAttribute('data-tcid');
+  tresoMvtSens = sens;
+  var c = TRESO_COMPTES.find(function(x){ return x.id === tresoMvtCompteId; });
+  document.getElementById('tresoMvtTitre').textContent = (sens === 'sortie' ? 'Sortie' : 'Entree') + ' — ' + (c ? c.nom : '');
+  document.getElementById('tresoMvtSoldeActuel').textContent = c ? tresoFmt(tresoSolde(c.id)) : '—';
+  document.getElementById('tresoMvtMontant').value = '';
+  document.getElementById('tresoMvtMotif').value = '';
+  document.getElementById('tresoMvtDate').value = tresoVersChamp(Date.now());
+  document.getElementById('modalTresoMvt').style.display = 'flex';
+}
+function tresoFermerMouvement(){ document.getElementById('modalTresoMvt').style.display = 'none'; }
+function tresoValiderMouvement(){
+  var montant = parseFloat(document.getElementById('tresoMvtMontant').value);
+  if(!montant || montant <= 0){ alert('Indiquez un montant superieur a zero.'); return; }
+  var motif = (document.getElementById('tresoMvtMotif').value || '').trim();
+  var date = tresoDepuisChamp(document.getElementById('tresoMvtDate').value);
+  // Une sortie qui rend le solde negatif n'est pas interdite — un compte peut
+  // etre a decouvert — mais elle est signalee avant d'etre enregistree.
+  if(tresoMvtSens === 'sortie'){
+    var apres = tresoSolde(tresoMvtCompteId) - montant;
+    if(apres < 0 && !confirm('Cette sortie rendra le solde negatif (' + tresoFmt(apres) + ').\n\nContinuer ?')) return;
+  }
+  TRESO_MOUVEMENTS.push({
+    id: 'tm_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+    compteId: tresoMvtCompteId, date: date, sens: tresoMvtSens,
+    montant: montant, motif: motif,
+    auteur: (typeof currentUser !== 'undefined' && currentUser) ? currentUser.login : 'direction'
+  });
+  if(tresoEnregistrer()){ tresoFermerMouvement(); renderPage(); }
+}
+function tresoSupprimerMouvement(btn){
+  var id = btn.getAttribute('data-tmid');
+  var m = TRESO_MOUVEMENTS.find(function(x){ return x.id === id; });
+  if(!m) return;
+  if(!confirm('Supprimer ce mouvement de ' + tresoFmt(m.montant) + ' ?\nLe solde du compte sera recalcule.')) return;
+  TRESO_MOUVEMENTS = TRESO_MOUVEMENTS.filter(function(x){ return x.id !== id; });
+  if(tresoEnregistrer()) renderPage();
+}
+
+// ── Releves (solde reellement constate) ──────────────────────────────────
+function tresoOuvrirReleve(btn){
+  tresoReleveCompteId = btn.getAttribute('data-tcid');
+  var c = TRESO_COMPTES.find(function(x){ return x.id === tresoReleveCompteId; });
+  document.getElementById('tresoReleveTitre').textContent = 'Releve — ' + (c ? c.nom : '');
+  document.getElementById('tresoReleveCalcule').textContent = c ? tresoFmt(tresoSolde(c.id)) : '—';
+  document.getElementById('tresoReleveSolde').value = c ? Math.round(tresoSolde(c.id)) : 0;
+  document.getElementById('tresoReleveDate').value = tresoVersChamp(Date.now());
+  document.getElementById('modalTresoReleve').style.display = 'flex';
+}
+function tresoFermerReleve(){ document.getElementById('modalTresoReleve').style.display = 'none'; }
+function tresoValiderReleve(){
+  var solde = parseFloat(document.getElementById('tresoReleveSolde').value);
+  if(isNaN(solde)){ alert('Indiquez le solde constate.'); return; }
+  var date = tresoDepuisChamp(document.getElementById('tresoReleveDate').value);
+  TRESO_RELEVES.push({
+    id: 'tr_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+    compteId: tresoReleveCompteId, date: date, soldeConstate: solde,
+    auteur: (typeof currentUser !== 'undefined' && currentUser) ? currentUser.login : 'direction'
+  });
+  if(tresoEnregistrer()){ tresoFermerReleve(); renderPage(); }
+}
+// Aligner = creer un mouvement d'ajustement visible, pas corriger en douce.
+function tresoAligner(btn){
+  var id = btn.getAttribute('data-tcid');
+  var ecart = tresoEcart(id);
+  if(ecart === null || Math.round(ecart) === 0) return;
+  var r = tresoDernierReleve(id);
+  var sens = ecart > 0 ? 'entree' : 'sortie';
+  var libelle = (sens === 'entree' ? 'Entree' : 'Sortie') + ' de ' + tresoFmt(Math.abs(ecart));
+  if(!confirm('Aligner le solde calcule sur le releve du ' + new Date(r.date).toLocaleDateString('fr-FR') + ' ?\n\n'
+    + libelle + ' sera enregistre comme ajustement, a cette date.\nLe mouvement restera visible et pourra etre supprime.')) return;
+  TRESO_MOUVEMENTS.push({
+    id: 'tm_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+    compteId: id, date: r.date, sens: sens, montant: Math.abs(ecart),
+    motif: 'Ajustement sur releve du ' + new Date(r.date).toLocaleDateString('fr-FR'),
+    ajustement: true,
+    auteur: (typeof currentUser !== 'undefined' && currentUser) ? currentUser.login : 'direction'
+  });
+  if(tresoEnregistrer()) renderPage();
+}
+
+// ── Historique et graphique ──────────────────────────────────────────────
+// Bornes de la periode choisie. 'tout' part du plus ancien element connu.
+function tresoBornesPeriode(){
+  var fin = tresoFinDeJournee(Date.now());
+  var d = new Date();
+  if(tresoHistoPeriode === '1m') d.setMonth(d.getMonth() - 1);
+  else if(tresoHistoPeriode === '3m') d.setMonth(d.getMonth() - 3);
+  else if(tresoHistoPeriode === '12m') d.setMonth(d.getMonth() - 12);
+  else {
+    var dates = TRESO_MOUVEMENTS.map(function(m){ return m.date; })
+      .concat(TRESO_COMPTES.map(function(c){ return c.dateInitiale || Date.now(); }));
+    d = new Date(dates.length ? Math.min.apply(null, dates) : Date.now());
+  }
+  d.setHours(0,0,0,0);
+  return {debut: d.getTime(), fin: fin};
+}
+// Suite de points : un par jour ou un par mois, chacun portant le solde a la
+// FIN de la periode — c'est l'evolution d'un stock, pas d'un flux.
+function tresoSeriePoints(){
+  var b = tresoBornesPeriode();
+  var points = [];
+  if(tresoHistoGranularite === 'jour'){
+    var jour = new Date(b.debut);
+    var garde = 0;
+    while(jour.getTime() <= b.fin && garde < 800){
+      points.push({cle: tresoJour(jour.getTime()), ts: tresoFinDeJournee(jour.getTime()),
+                   libelle: jour.toLocaleDateString('fr-FR', {day:'2-digit', month:'2-digit'})});
+      jour.setDate(jour.getDate() + 1);
+      garde++;
+    }
+  } else {
+    var mois = new Date(b.debut); mois.setDate(1);
+    var g2 = 0;
+    while(mois.getTime() <= b.fin && g2 < 240){
+      var finMois = new Date(mois.getFullYear(), mois.getMonth() + 1, 0);
+      points.push({cle: tresoMois(mois.getTime()), ts: tresoFinDeJournee(Math.min(finMois.getTime(), b.fin)),
+                   libelle: mois.toLocaleDateString('fr-FR', {month:'short', year:'2-digit'})});
+      mois.setMonth(mois.getMonth() + 1);
+      g2++;
+    }
+  }
+  return points;
+}
+function renderTresoHistorique(){
+  var points = tresoSeriePoints();
+  var actifs = TRESO_COMPTES.filter(function(c){ return c.actif !== false; });
+  var totaux = points.map(function(p){
+    return actifs.reduce(function(s, c){ return s + tresoSolde(c.id, p.ts); }, 0);
+  });
+
+  var h = '<div style="margin-top:26px">';
+  h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px">';
+  h += '<h2 style="font-size:16px;font-weight:700;margin:0">Historique de tresorerie</h2>';
+  h += '<button class="btn btn-sm" onclick="tresoRetourListe()">&#x2190; Retour aux comptes</button>';
+  h += '</div>';
+
+  // Filtres sur une seule ligne, au-dessus du graphique.
+  h += '<div class="card" style="margin-bottom:14px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:10px 12px">';
+  h += '<div class="flex gap6"><span class="xs muted">Periode :</span>';
+  [['1m','1 mois'],['3m','3 mois'],['12m','12 mois'],['tout','Tout']].forEach(function(p){
+    h += '<button class="btn btn-sm' + (tresoHistoPeriode === p[0] ? ' btn-primary' : '') + '" onclick="tresoSetPeriode(\'' + p[0] + '\')">' + p[1] + '</button>';
+  });
+  h += '</div>';
+  h += '<div class="flex gap6"><span class="xs muted">Pas :</span>';
+  [['jour','Par jour'],['mois','Par mois']].forEach(function(g){
+    h += '<button class="btn btn-sm' + (tresoHistoGranularite === g[0] ? ' btn-primary' : '') + '" onclick="tresoSetGranularite(\'' + g[0] + '\')">' + g[1] + '</button>';
+  });
+  h += '</div>';
+  h += '<button class="btn btn-sm" onclick="tresoBasculerDetail()">' + (tresoHistoDetail ? 'Voir le total' : 'Detailler par compte') + '</button>';
+  h += '</div>';
+
+  if(!TRESO_COMPTES.length){
+    h += '<div class="card"><div class="empty">Aucun compte enregistre : rien a retracer.</div></div></div>';
+    return h;
+  }
+
+  var variation = totaux.length > 1 ? totaux[totaux.length-1] - totaux[0] : 0;
+  var plusBas = totaux.length ? Math.min.apply(null, totaux) : 0;
+  h += '<div class="kgrid k3" style="margin-bottom:14px">';
+  h += kpi('Solde en fin de periode', totaux.length ? tresoFmt(totaux[totaux.length-1]) : '—', '');
+  h += kpi('Variation sur la periode', (variation > 0 ? '+' : '') + Math.round(variation).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA', variation >= 0 ? 'green' : 'red');
+  h += kpi('Point le plus bas', tresoFmt(plusBas), plusBas < 0 ? 'red' : '');
+  h += '</div>';
+
+  h += '<div class="card" style="margin-bottom:14px"><div style="position:relative;height:300px"><canvas id="tresoGraphique"></canvas></div></div>';
+
+  // Le tableau accompagne toujours le graphique : il porte les valeurs exactes,
+  // reste lisible en noir et blanc, et ne depend d'aucune distinction de couleur.
+  h += '<div class="card"><div style="font-weight:700;font-size:13px;margin-bottom:8px">Valeurs</div><div class="tw"><table><thead><tr>';
+  h += '<th>' + (tresoHistoGranularite === 'jour' ? 'Jour' : 'Mois') + '</th>';
+  if(tresoHistoDetail){ actifs.forEach(function(c){ h += '<th style="text-align:right">' + tresoEchapper(c.nom) + '</th>'; }); }
+  h += '<th style="text-align:right">Total</th><th style="text-align:right">Variation</th>';
+  h += '</tr></thead><tbody>';
+  var lignes = points.slice().reverse();
+  lignes.slice(0, 60).forEach(function(p, idx){
+    var i = points.length - 1 - idx;
+    var diff = i > 0 ? totaux[i] - totaux[i-1] : 0;
+    h += '<tr><td class="xs">' + p.libelle + '</td>';
+    if(tresoHistoDetail){
+      actifs.forEach(function(c){
+        h += '<td style="text-align:right;font-family:monospace" class="xs">' + Math.round(tresoSolde(c.id, p.ts)).toLocaleString('fr-FR', GOS_FMT0) + '</td>';
+      });
+    }
+    h += '<td style="text-align:right;font-family:monospace;font-weight:700">' + Math.round(totaux[i]).toLocaleString('fr-FR', GOS_FMT0) + '</td>';
+    h += '<td style="text-align:right;font-family:monospace;color:' + (diff > 0 ? '#3B6D11' : (diff < 0 ? '#A32D2D' : '#999')) + '" class="xs">'
+       + (diff === 0 ? '—' : (diff > 0 ? '+' : '') + Math.round(diff).toLocaleString('fr-FR', GOS_FMT0)) + '</td></tr>';
+  });
+  h += '</tbody></table></div>';
+  if(points.length > 60) h += '<div class="xs muted" style="margin-top:8px">60 dernieres lignes affichees sur ' + points.length + '. Choisissez un pas mensuel pour une vue complete.</div>';
+  h += '</div></div>';
+
+  setTimeout(function(){ tresoDessinerGraphique(); }, 50);
+  return h;
+}
+function tresoDessinerGraphique(){
+  if(typeof Chart === 'undefined') return;
+  var canvas = document.getElementById('tresoGraphique');
+  if(!canvas) return;
+  var points = tresoSeriePoints();
+  var actifs = TRESO_COMPTES.filter(function(c){ return c.actif !== false; });
+  var jeux = [];
+  if(tresoHistoDetail){
+    actifs.forEach(function(c){
+      var couleur = tresoCouleurCompte(c.id);
+      jeux.push({
+        label: c.nom,
+        data: points.map(function(p){ return Math.round(tresoSolde(c.id, p.ts)); }),
+        borderColor: couleur, backgroundColor: couleur,
+        borderWidth: 2, pointRadius: points.length > 40 ? 0 : 4, pointHoverRadius: 8, tension: 0.15, fill: false
+      });
+    });
+  } else {
+    jeux.push({
+      label: 'Tresorerie totale',
+      data: points.map(function(p){
+        return Math.round(actifs.reduce(function(s, c){ return s + tresoSolde(c.id, p.ts); }, 0));
+      }),
+      borderColor: TRESO_COULEURS[0], backgroundColor: 'rgba(42,120,214,0.08)',
+      borderWidth: 2, pointRadius: points.length > 40 ? 0 : 4, pointHoverRadius: 8, tension: 0.15, fill: true
+    });
+  }
+  if(window._tresoChart) window._tresoChart.destroy();
+  window._tresoChart = new Chart(canvas, {
+    type: 'line',
+    data: {labels: points.map(function(p){ return p.libelle; }), datasets: jeux},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: {mode: 'index', intersect: false},
+      plugins: {
+        // Une seule serie se nomme dans le titre du bloc : pas de legende.
+        legend: {display: jeux.length > 1, position: 'bottom', labels: {boxWidth: 10, font: {size: 11}}},
+        tooltip: {
+          callbacks: {
+            label: function(ctx){ return ctx.dataset.label + ' : ' + Math.round(ctx.parsed.y).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA'; }
+          }
+        }
+      },
+      scales: {
+        y: {
+          ticks: {callback: function(v){ return Math.round(v).toLocaleString('fr-FR', GOS_FMT0); }, font: {size: 11}},
+          grid: {color: 'rgba(0,0,0,0.06)'}
+        },
+        x: {grid: {display: false}, ticks: {font: {size: 10}, maxRotation: 0, autoSkip: true}}
+      }
+    }
+  });
+}
+
+tresoCharger();   // chargement initial depuis le stockage local
+
+
+
 function pageBanques(){
   var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Gestion des banques</h2>';
@@ -14511,6 +15142,7 @@ function pageBanques(){
     html += '</div></td></tr>';
   });
   html += '</tbody></table></div></div>';
+  html += renderGestionLiquidite();   // Gestion liquidite (module autonome)
   return html;
 }
 
