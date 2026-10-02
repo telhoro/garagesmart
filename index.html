@@ -9979,7 +9979,7 @@ function bilanCollecterFactures(){
                         .reduce(function(s, cl){ return s + (parseFloat(cl.prixAchat)||0) * (parseInt(cl.qte)||1); }, 0);
     var paye = parseFloat(v.montantPaye) || 0;
     factures.push({
-      type: 'devis', client: v.client || 'Client non renseigne',
+      type: 'devis', client: v.client || 'Client non renseigne', vehId: v.id,
       libelle: (v.immat || '') + ' ' + (v.marque || '') + ' ' + (v.modele || ''),
       ca: ca, paye: paye, reste: Math.max(0, ca - paye), cout: cout,
       dateRef: dateRef, deposee: !!v.factureDeposeeLe,
@@ -10032,11 +10032,16 @@ function bilanParClient(){
   // {buckets: {client -> {client, totalExpose, ...}}, totalEngageGlobal}.
   // On ne recalcule rien : deux formules pour une meme notion finiraient par
   // diverger, et c'est exactement ce qu'on passe la semaine a corriger.
-  var expo = {};
+  var expo = {}, expoDossier = {};
   try{
     var buckets = (collecterExpositionFinanciere() || {}).buckets || {};
     Object.keys(buckets).forEach(function(k){
-      expo[buckets[k].client || k] = buckets[k].totalExpose || 0;
+      var bk = buckets[k];
+      expo[bk.client || k] = bk.totalExpose || 0;
+      // Exposition dossier par dossier, pour la colonne du detail. Elle
+      // n'existe que pour les dossiers devis : en forfait, l'exposition est
+      // un grand livre par client, elle ne se repartit pas par facture.
+      (bk.dossiers || []).forEach(function(d){ if(d && d.id) expoDossier[d.id] = d.montantExpose || 0; });
     });
   }catch(e){ console.error('Bilan global : exposition indisponible', e); }
 
@@ -10061,6 +10066,20 @@ function bilanParClient(){
     c.delaiMoyen = (typeof delaiMoyenReglementClient === 'function') ? delaiMoyenReglementClient(c.client) : null;
     c.expose = expo[c.client] || 0;
     c.nature = (c.types.devis && c.types.forfait) ? 'mixte' : (c.types.forfait ? 'forfait' : 'devis');
+    // Chaque facture porte ses propres indicateurs, pour que le detail reponde
+    // aux memes questions que la ligne client.
+    c.factures.forEach(function(f){
+      if(f.type === 'forfait'){
+        // Un abonnement mensuel ne porte ni cout ni exposition propres : ils
+        // vivent sur les dossiers du client. Afficher un chiffre ici
+        // reviendrait a presenter la marge comme egale au CA, ce qui est faux.
+        f.expose = null; f.marge = null; f.taux = null;
+      } else {
+        f.expose = expoDossier[f.vehId] || 0;
+        f.marge = f.ca - f.cout;
+        f.taux = f.ca > 0 ? (f.marge / f.ca * 100) : null;
+      }
+    });
     // Detail : les impayees d'abord, puis de la plus recente a la plus ancienne.
     c.factures.sort(function(x, y){
       var ix = x.reste > 0 ? 0 : 1, iy = y.reste > 0 ? 0 : 1;
@@ -10168,7 +10187,9 @@ function pageBilanGlobal(){
       h += '<div style="padding:10px 14px">';
       h += '<div class="xs muted" style="margin-bottom:6px">Factures impayees en premier, puis de la plus recente a la plus ancienne.</div>';
       h += '<div class="tw"><table><thead><tr><th>Facture</th><th>Type</th><th>Depot</th><th class="xs">Depuis</th>'
-         + '<th style="text-align:right">Montant</th><th style="text-align:right">Encaisse</th><th style="text-align:right">Reste</th><th>Etat</th></tr></thead><tbody>';
+         + '<th style="text-align:right">Montant</th><th style="text-align:right">Encaisse</th><th style="text-align:right">Reste</th>'
+         + '<th style="text-align:right">Expose</th><th style="text-align:right">Marge</th><th style="text-align:right">Rentabilite</th>'
+         + '<th>Etat</th></tr></thead><tbody>';
       c.factures.forEach(function(f){
         var solde = (f.reste <= 0);
         h += '<tr>';
@@ -10179,6 +10200,14 @@ function pageBilanGlobal(){
         h += '<td style="text-align:right;font-family:monospace">' + Math.round(f.ca).toLocaleString('fr-FR', GOS_FMT0) + '</td>';
         h += '<td style="text-align:right;font-family:monospace;color:#3B6D11">' + (f.paye ? Math.round(f.paye).toLocaleString('fr-FR', GOS_FMT0) : '—') + '</td>';
         h += '<td style="text-align:right;font-family:monospace;color:' + (solde ? '#888' : '#A32D2D') + ';font-weight:700">' + (solde ? '—' : Math.round(f.reste).toLocaleString('fr-FR', GOS_FMT0)) + '</td>';
+        h += '<td style="text-align:right;font-family:monospace;color:' + (f.expose > 0 ? '#A32D2D' : '#888') + '" class="xs">'
+           + (f.expose === null ? '<span class="muted" title="L\'exposition d\'un client forfait est un grand livre : elle ne se repartit pas par facture">—</span>'
+              : (f.expose ? Math.round(f.expose).toLocaleString('fr-FR', GOS_FMT0) : '—')) + '</td>';
+        h += '<td style="text-align:right;font-family:monospace;color:' + (f.marge === null ? '#888' : (f.marge >= 0 ? '#3B6D11' : '#A32D2D')) + '">'
+           + (f.marge === null ? '<span class="muted" title="Le cout d\'un client forfait porte sur ses dossiers, pas sur la facture d\'abonnement : la marge se lit au niveau du client">—</span>'
+              : Math.round(f.marge).toLocaleString('fr-FR', GOS_FMT0)) + '</td>';
+        h += '<td style="text-align:right;color:' + (f.taux === null ? '#888' : (f.taux >= 30 ? '#3B6D11' : (f.taux >= 0 ? '#854F0B' : '#A32D2D'))) + '">'
+           + bilanPct(f.taux === undefined ? null : f.taux) + '</td>';
         h += '<td>' + (solde ? '<span class="badge b-green">Solde</span>'
              : (f.paye > 0 ? '<span class="badge b-amber">Partiel</span>'
              : (f.deposee ? '<span class="badge b-red">Impaye</span>' : '<span class="badge b-gray">Non deposee</span>'))) + '</td>';
