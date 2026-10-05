@@ -2,6 +2,12 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8"/>
+<script>
+/* APERCU UNIQUEMENT — absent du fichier de production. */
+(function(){ var rien = function(){};
+  try{ console.log = rien; console.info = rien; console.debug = rien; console.warn = rien; }catch(e){}
+})();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>GarageOS</title>
 <style>
@@ -10105,10 +10111,367 @@ function bilanCouleurPct(v){
   if(v === null) return '#888';
   return v >= 80 ? '#3B6D11' : (v >= 40 ? '#854F0B' : '#A32D2D');
 }
-function bilanEchapper(t){
+function bilanEchapper(t){ return gosExpEchapper(t); }
+
+// ══════════════════════════════════════════════════════════════════════════
+// SORTIES PAPIER ET EXCEL — plomberie commune (05/10/2026)
+// ══════════════════════════════════════════════════════════════════════════
+// Ce module ne connait aucun ecran en particulier. Il sait seulement :
+//  - fabriquer un tableau HTML a partir d'une liste de colonnes, d'un
+//    alignement par colonne et de lignes de cellules ;
+//  - ouvrir une fenetre d'impression au format maison (logo, cadre de titre,
+//    A4 paysage) ;
+//  - ecrire un classeur Excel avec le SheetJS deja charge dans l'application.
+//
+// Chaque ecran qui veut s'imprimer decrit SES colonnes et SES lignes, une
+// seule fois, et les trois destinations — ecran, papier, Excel — lisent la
+// meme description. C'est la regle qui evite qu'un chiffre imprime diverge du
+// chiffre affiche : tous les ecarts corriges ce mois-ci venaient d'un calcul
+// ecrit deux fois.
+//
+// Les montants partent en NOMBRES dans Excel, deja arrondis, pour rester
+// triables et additionnables. Une case vide reste vide : mettre 0 a la place
+// d'une valeur qui n'existe pas fausserait la somme de la colonne.
+// ══════════════════════════════════════════════════════════════════════════
+
+function gosExpNombre(v){
+  return (v === null || v === undefined || v === '') ? '' : Math.round(v);
+}
+function gosExpPct(v){
+  return (v === null || v === undefined || v === '') ? '' : Math.round(v * 10) / 10;
+}
+// Rendu papier d'une cellule : un nombre est formate a la francaise, un texte
+// est echappe, une case vide devient un tiret.
+function gosExpTexte(v){
+  if(v === '' || v === null || v === undefined) return '&mdash;';
+  return typeof v === 'number' ? v.toLocaleString('fr-FR', GOS_FMT0) : gosExpEchapper(v);
+}
+function gosExpEchapper(t){
   return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
   });
+}
+// aligns : un entier par colonne, 1 = colonne de chiffres alignee a droite.
+function gosExpTableHtml(cols, aligns, lignes, ligneTotaux, messageVide){
+  var h = '<table><thead><tr style="background:#e8e8e8">';
+  cols.forEach(function(c, i){
+    h += '<th style="border:1px solid #bbb;padding:5px 7px;font-size:10px;text-align:'
+       + (aligns[i] ? 'right' : 'left') + '">' + c + '</th>';
+  });
+  h += '</tr></thead><tbody>';
+  if(!lignes.length){
+    h += '<tr><td colspan="' + cols.length + '" style="border:1px solid #bbb;padding:10px;'
+       + 'text-align:center;color:#888;font-size:10px">'
+       + (messageVide || 'Aucune donnee sur cette periode.') + '</td></tr>';
+  }
+  lignes.forEach(function(l){
+    h += '<tr>';
+    l.forEach(function(v, i){
+      h += '<td style="border:1px solid #bbb;padding:4px 7px;font-size:10px;text-align:'
+         + (aligns[i] ? 'right' : 'left') + '">' + gosExpTexte(v) + '</td>';
+    });
+    h += '</tr>';
+  });
+  if(ligneTotaux){
+    h += '<tr style="background:#f0efec;font-weight:700">';
+    ligneTotaux.forEach(function(v, i){
+      h += '<td style="border:1px solid #bbb;padding:5px 7px;font-size:10px;text-align:'
+         + (aligns[i] ? 'right' : 'left') + '">' + gosExpTexte(v) + '</td>';
+    });
+    h += '</tr>';
+  }
+  return h + '</tbody></table>';
+}
+function gosExpEntete(titre, sousTitre, periodeTxt){
+  var h = '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">';
+  h += '<img src="' + LOGO_BASE64 + '" style="height:55px;width:auto" alt="Smart Services">';
+  h += '<div style="text-align:center"><div style="border:3px solid #1a1a1a;padding:6px 18px;display:inline-block">'
+     + '<span style="font-size:16px;font-weight:900">' + titre + '</span></div></div>';
+  h += '</div>';
+  if(sousTitre) h += '<div style="font-size:12px;font-weight:700;margin-bottom:3px">' + sousTitre + '</div>';
+  h += '<div style="font-size:10px;color:#555;margin-bottom:14px">Periode : ' + periodeTxt
+     + ' &nbsp;&bull;&nbsp; Edite le ' + new Date().toLocaleDateString('fr-FR') + '</div>';
+  return h;
+}
+// Pied de page : un document sorti du logiciel doit se lire sans le logiciel
+// a cote, donc les conventions de calcul l'accompagnent toujours.
+function gosExpPied(texte){
+  return '<div style="margin-top:14px;padding-top:8px;border-top:1px solid #ccc;font-size:8.5px;color:#666;line-height:1.5">'
+       + texte + '</div>';
+}
+function gosExpImprimer(titre, corps){
+  var w = window.open('', '_blank');
+  if(!w){ afficherToastNotif('Impression bloquee', 'Autorisez les fenetres surgissantes pour ce site, puis reessayez.', 'alerte'); return; }
+  var style = '<style>'
+    + '*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}'
+    + '*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}'
+    + '@page{size:A4 landscape;margin:10mm}'
+    + 'html,body{background:#fff;font-size:10px;color:#1a1a1a}'
+    + 'table{width:100%;border-collapse:collapse}'
+    + 'thead{display:table-header-group}'
+    + 'tr{page-break-inside:avoid}'
+    + '.bloc{page-break-inside:avoid;margin-bottom:14px}'
+    + '.page{padding:4mm}'
+    + '@media print{*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}'
+    + '</style>';
+  w.document.write('<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">'
+    + '<meta name="viewport" content="width=device-width, initial-scale=1">'
+    + '<title>' + titre + '</title>' + style + '</head><body><div class="page">'
+    + corps + '</div></body></html>');
+  w.document.close();
+  setTimeout(function(){ w.print(); }, 350);
+}
+// Bandeau de titre d'un bloc, dans une sortie detaillee : le nom a gauche,
+// les deux chiffres qui comptent a droite.
+function gosExpBandeauBloc(nom, precision, droite){
+  return '<div style="background:#1a1a1a;color:#fff;padding:5px 9px;font-size:11px;font-weight:700;display:flex;justify-content:space-between">'
+       + '<span>' + gosExpEchapper(nom) + (precision ? ' &nbsp;<span style="font-weight:400;opacity:.85">(' + precision + ')</span>' : '') + '</span>'
+       + '<span>' + droite + '</span></div>';
+}
+
+function gosExpXlsxPret(){
+  if(typeof XLSX === 'undefined'){
+    afficherToastNotif('Export Excel indisponible', 'La bibliotheque Excel n\'est pas chargee. Verifiez la connexion, puis reessayez.', 'alerte');
+    return false;
+  }
+  return true;
+}
+function gosExpFeuille(wb, nom, cols, largeurs, lignes, ligneTotaux, enTete){
+  var aoa = [];
+  (enTete || []).forEach(function(l){ aoa.push(l); });
+  if(enTete && enTete.length) aoa.push([]);
+  aoa.push(cols);
+  lignes.forEach(function(l){ aoa.push(l); });
+  if(ligneTotaux){ aoa.push([]); aoa.push(ligneTotaux); }
+  var ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = largeurs.map(function(w){ return {wch: w}; });
+  // Excel refuse ces caracteres dans un nom d'onglet, et le limite a 31 signes.
+  XLSX.utils.book_append_sheet(wb, ws, String(nom).replace(/[\[\]\*\?\/\\:]/g, ' ').substring(0, 31));
+}
+function gosExpNomFichier(base){
+  return base.replace(/[^\w\s\-]/g, '').trim().replace(/\s+/g, '_')
+       + '_' + new Date().toISOString().split('T')[0] + '.xlsx';
+}
+function gosExpEnTeteFichier(titreDoc, sousTitre, periodeTxt){
+  var l = [[titreDoc]];
+  if(sousTitre) l.push([sousTitre]);
+  l.push(['Periode', periodeTxt]);
+  l.push(['Edite le', new Date().toLocaleDateString('fr-FR')]);
+  return l;
+}
+// Barre d'actions : quatre sorties, les memes partout dans l'application.
+// nb = nombre de lignes exportables ; a zero, les boutons sont eteints.
+function gosExpBarre(nb, fnImprSynth, fnImprDetail, fnExcelSynth, fnExcelDetail, note){
+  var dis = nb ? '' : ' disabled title="Aucune donnee a exporter sur cette periode"';
+  var h = '<div class="card" style="margin-bottom:10px;padding:8px 12px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">';
+  h += '<div class="flex gap6" style="align-items:center"><span class="xs muted">&#x1F5A8; Imprimer / PDF :</span>';
+  h += '<button class="btn btn-sm"' + dis + ' onclick="' + fnImprSynth + '" title="Le tableau de synthese seul, sans le detail">Synthese</button>';
+  h += '<button class="btn btn-sm"' + dis + ' onclick="' + fnImprDetail + '" title="La synthese, puis le detail de chaque ligne">Avec le detail</button>';
+  h += '</div>';
+  h += '<div class="flex gap6" style="align-items:center"><span class="xs muted">&#128202; Excel :</span>';
+  h += '<button class="btn btn-sm"' + dis + ' onclick="' + fnExcelSynth + '" title="Un onglet : la synthese">Synthese</button>';
+  h += '<button class="btn btn-sm"' + dis + ' onclick="' + fnExcelDetail + '" title="Deux onglets : la synthese, et le detail a plat">Avec le detail</button>';
+  h += '</div>';
+  h += '<span class="xs muted" style="flex:1;min-width:180px">' + (note || 'Les sorties reprennent la periode affichee.') + '</span>';
+  h += '</div>';
+  return h;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// BILAN GLOBAL — sorties papier et Excel (05/10/2026)
+// ══════════════════════════════════════════════════════════════════════════
+// Demande Direction : sortir le tableau de synthese seul, et le detail par
+// client, en impression (donc en PDF via l'imprimante) comme en Excel.
+//
+// Ce module ne decrit que les COLONNES et les VALEURS du Bilan global. Toute
+// la mecanique — tableau HTML, fenetre d'impression, classeur Excel — vient de
+// gos_export_commun.js, partagee avec les autres ecrans exportables.
+//
+// Aucun calcul n'est refait ici : tout vient de bilanParClient(), le meme
+// collecteur que le tableau a l'ecran.
+//
+// Les cases vides d'Excel sont volontaires : une facture forfait n'a ni cout
+// ni exposition propres (voir la note dans le module Bilan global). Mettre 0
+// ferait croire a une marge nulle, et la somme de la colonne serait fausse.
+// ══════════════════════════════════════════════════════════════════════════
+
+var BILAN_EXP_COLS_SYNTHESE = ['Client', 'Type', 'CA genere', 'Montant du',
+  '% encaisse', 'Delai moyen (j)', 'Expose', 'Marge', 'Rentabilite (%)'];
+// 1 = colonne de chiffres, alignee a droite.
+var BILAN_EXP_ALIGN_SYNTHESE = [0, 0, 1, 1, 1, 1, 1, 1, 1];
+var BILAN_EXP_LARG_SYNTHESE = [30, 15, 14, 14, 11, 14, 14, 14, 15];
+
+var BILAN_EXP_COLS_DETAIL = ['Client', 'Facture', 'Type', 'Depot', 'Depuis (j)',
+  'Montant', 'Encaisse', 'Reste', 'Expose', 'Marge', 'Rentabilite (%)', 'Etat'];
+var BILAN_EXP_ALIGN_DETAIL = [0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0];
+var BILAN_EXP_LARG_DETAIL = [26, 28, 10, 12, 11, 13, 13, 13, 13, 13, 15, 13];
+
+var BILAN_EXP_PIED = 'Un dossier devis entre dans le bilan une fois livre, a sa date de depot de facture ; '
+  + 'une facture forfait des son emission. '
+  + 'Le taux de rentabilite est la marge rapportee au chiffre d\'affaires. '
+  + 'Le montant expose est un etat a ce jour : il ne varie pas avec la periode choisie. '
+  + 'Une facture forfait ne porte ni cout ni exposition propres (ils vivent sur les dossiers du client) : '
+  + 'ses colonnes Expose, Marge et Rentabilite restent vides.';
+
+// ── Valeurs : une ligne de tableau, sous forme de tableau de cellules ────
+function bilanExpNature(c){
+  return c.nature === 'mixte' ? 'Devis + Forfait' : (c.nature === 'forfait' ? 'Forfait' : 'Devis');
+}
+function bilanExpEtat(f){
+  if(f.reste <= 0) return 'Solde';
+  if(f.paye > 0) return 'Partiel';
+  return f.deposee ? 'Impaye' : 'Non deposee';
+}
+function bilanExpLigneSynthese(c){
+  return [c.client, bilanExpNature(c), Math.round(c.ca), Math.round(c.reste),
+          gosExpPct(c.pctEncaisse), (c.delaiMoyen === null ? '' : c.delaiMoyen),
+          Math.round(c.expose), Math.round(c.marge), gosExpPct(c.taux)];
+}
+function bilanExpLigneDetail(client, f){
+  return [client,
+          (f.libelle || '').trim() + (f.numero ? ' (' + f.numero + ')' : ''),
+          f.type === 'forfait' ? 'Forfait' : 'Devis',
+          f.dateRef ? new Date(f.dateRef).toLocaleDateString('fr-FR') : 'non deposee',
+          (f.jours === null || f.jours === undefined) ? '' : f.jours,
+          Math.round(f.ca), Math.round(f.paye), Math.round(f.reste),
+          gosExpNombre(f.expose), gosExpNombre(f.marge), gosExpPct(f.taux),
+          bilanExpEtat(f)];
+}
+// Ligne de totaux. Pas de total pour un pourcentage ni pour un delai : on
+// recalcule la part encaissee et le taux SUR LES TOTAUX. Additionner ou
+// moyenner des pourcentages de clients donnerait un chiffre faux.
+function bilanExpLigneTotaux(liste){
+  var ca = liste.reduce(function(s,c){return s+c.ca;}, 0);
+  var du = liste.reduce(function(s,c){return s+c.reste;}, 0);
+  var paye = liste.reduce(function(s,c){return s+c.paye;}, 0);
+  var marge = liste.reduce(function(s,c){return s+c.marge;}, 0);
+  var expo = liste.reduce(function(s,c){return s+c.expose;}, 0);
+  return ['TOTAL ' + liste.length + ' client(s)', '', Math.round(ca), Math.round(du),
+          ca > 0 ? gosExpPct(paye / ca * 100) : '', '',
+          Math.round(expo), Math.round(marge), ca > 0 ? gosExpPct(marge / ca * 100) : ''];
+}
+
+// ── Impression ───────────────────────────────────────────────────────────
+function bilanImprimerSynthese(){
+  var liste = bilanParClient();
+  var corps = gosExpEntete('BILAN GLOBAL', 'Synthese par client', bilanLibellePeriode())
+    + gosExpTableHtml(BILAN_EXP_COLS_SYNTHESE, BILAN_EXP_ALIGN_SYNTHESE,
+        liste.map(bilanExpLigneSynthese), liste.length ? bilanExpLigneTotaux(liste) : null,
+        'Aucune facture sur cette periode.')
+    + gosExpPied(BILAN_EXP_PIED);
+  gosExpImprimer('Bilan global', corps);
+}
+
+function bilanImprimerDetail(){
+  var liste = bilanParClient();
+  var corps = gosExpEntete('BILAN GLOBAL', 'Synthese et detail des factures par client', bilanLibellePeriode())
+    + gosExpTableHtml(BILAN_EXP_COLS_SYNTHESE, BILAN_EXP_ALIGN_SYNTHESE,
+        liste.map(bilanExpLigneSynthese), liste.length ? bilanExpLigneTotaux(liste) : null,
+        'Aucune facture sur cette periode.');
+  if(liste.length){
+    corps += '<div style="margin:16px 0 8px;font-size:13px;font-weight:900;border-bottom:2px solid #1a1a1a;padding-bottom:3px">'
+           + 'DETAIL DES FACTURES</div>';
+    // La colonne Client est retiree du detail : le nom est deja dans le titre
+    // du bloc, le repeter sur chaque ligne volerait de la largeur aux chiffres.
+    var cols = BILAN_EXP_COLS_DETAIL.slice(1);
+    var aligns = BILAN_EXP_ALIGN_DETAIL.slice(1);
+    liste.forEach(function(c){
+      corps += '<div class="bloc">';
+      corps += gosExpBandeauBloc(c.client, bilanExpNature(c) + ', ' + c.factures.length + ' facture(s)',
+        'CA ' + Math.round(c.ca).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA &nbsp;&bull;&nbsp; Du '
+        + Math.round(c.reste).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA');
+      corps += gosExpTableHtml(cols, aligns, c.factures.map(function(f){
+        return bilanExpLigneDetail(c.client, f).slice(1);
+      }), null);
+      corps += '</div>';
+    });
+  }
+  gosExpImprimer('Bilan global detaille', corps + gosExpPied(BILAN_EXP_PIED));
+}
+
+function bilanImprimerClient(client){
+  var c = bilanParClient().filter(function(x){ return x.client === client; })[0];
+  if(!c){ afficherToastNotif('Client introuvable', 'Ce client n\'a aucune facture sur la periode affichee.', 'alerte'); return; }
+  var kpis = [['CA genere', Math.round(c.ca).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA'],
+              ['Montant du', Math.round(c.reste).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA'],
+              ['% encaisse', bilanPct(c.pctEncaisse)],
+              ['Delai moyen', c.delaiMoyen === null ? '—' : c.delaiMoyen + ' j'],
+              ['Expose', Math.round(c.expose).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA'],
+              ['Marge', Math.round(c.marge).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA'],
+              ['Rentabilite', bilanPct(c.taux)]];
+  var bande = '<div style="display:flex;gap:6px;margin-bottom:12px">';
+  kpis.forEach(function(k){
+    bande += '<div style="flex:1;border:1px solid #bbb;padding:5px 7px">'
+           + '<div style="font-size:8.5px;color:#555;text-transform:uppercase">' + k[0] + '</div>'
+           + '<div style="font-size:11px;font-weight:700">' + k[1] + '</div></div>';
+  });
+  bande += '</div>';
+  var corps = gosExpEntete('BILAN CLIENT', gosExpEchapper(c.client) + ' — ' + bilanExpNature(c), bilanLibellePeriode())
+    + bande
+    + gosExpTableHtml(BILAN_EXP_COLS_DETAIL.slice(1), BILAN_EXP_ALIGN_DETAIL.slice(1),
+        c.factures.map(function(f){ return bilanExpLigneDetail(c.client, f).slice(1); }), null)
+    + gosExpPied(BILAN_EXP_PIED);
+  gosExpImprimer('Bilan ' + client, corps);
+}
+// Le clic est arrete dans l'attribut onclick, comme ailleurs dans
+// l'application : sans cela il remonterait a la ligne du client et replierait
+// le detail au moment meme ou on l'imprime.
+function bilanImprimerClientByEl(btn){
+  bilanImprimerClient(btn.getAttribute('data-bex'));
+}
+
+// ── Excel ────────────────────────────────────────────────────────────────
+function bilanExcelSynthese(){
+  if(!gosExpXlsxPret()) return;
+  var liste = bilanParClient();
+  var wb = XLSX.utils.book_new();
+  gosExpFeuille(wb, 'Synthese', BILAN_EXP_COLS_SYNTHESE, BILAN_EXP_LARG_SYNTHESE,
+    liste.map(bilanExpLigneSynthese), liste.length ? bilanExpLigneTotaux(liste) : null,
+    gosExpEnTeteFichier('BILAN GLOBAL', 'Synthese par client', bilanLibellePeriode()));
+  XLSX.writeFile(wb, gosExpNomFichier('Bilan_global'));
+}
+
+function bilanExcelDetail(){
+  if(!gosExpXlsxPret()) return;
+  var liste = bilanParClient();
+  var wb = XLSX.utils.book_new();
+  // Deux onglets : la synthese pour lire, le detail pour filtrer. Le detail est
+  // a plat, une ligne par facture avec le nom du client repete — c'est ce qui
+  // permet un tableau croise dynamique dans Excel.
+  gosExpFeuille(wb, 'Synthese', BILAN_EXP_COLS_SYNTHESE, BILAN_EXP_LARG_SYNTHESE,
+    liste.map(bilanExpLigneSynthese), liste.length ? bilanExpLigneTotaux(liste) : null,
+    gosExpEnTeteFichier('BILAN GLOBAL', 'Synthese par client', bilanLibellePeriode()));
+  var detail = [];
+  liste.forEach(function(c){
+    c.factures.forEach(function(f){ detail.push(bilanExpLigneDetail(c.client, f)); });
+  });
+  gosExpFeuille(wb, 'Detail factures', BILAN_EXP_COLS_DETAIL, BILAN_EXP_LARG_DETAIL,
+    detail, null, gosExpEnTeteFichier('BILAN GLOBAL', 'Detail des factures, tous clients', bilanLibellePeriode()));
+  XLSX.writeFile(wb, gosExpNomFichier('Bilan_global_detaille'));
+}
+
+function bilanExcelClient(client){
+  if(!gosExpXlsxPret()) return;
+  var c = bilanParClient().filter(function(x){ return x.client === client; })[0];
+  if(!c){ afficherToastNotif('Client introuvable', 'Ce client n\'a aucune facture sur la periode affichee.', 'alerte'); return; }
+  var wb = XLSX.utils.book_new();
+  gosExpFeuille(wb, 'Synthese', BILAN_EXP_COLS_SYNTHESE, BILAN_EXP_LARG_SYNTHESE,
+    [bilanExpLigneSynthese(c)], null,
+    gosExpEnTeteFichier('BILAN GLOBAL', 'Client : ' + c.client, bilanLibellePeriode()));
+  gosExpFeuille(wb, 'Factures', BILAN_EXP_COLS_DETAIL.slice(1), BILAN_EXP_LARG_DETAIL.slice(1),
+    c.factures.map(function(f){ return bilanExpLigneDetail(c.client, f).slice(1); }), null,
+    gosExpEnTeteFichier('BILAN GLOBAL', 'Factures de ' + c.client, bilanLibellePeriode()));
+  XLSX.writeFile(wb, gosExpNomFichier('Bilan_' + client));
+}
+function bilanExcelClientByEl(btn){
+  bilanExcelClient(btn.getAttribute('data-bex'));
+}
+
+// ── Barre d'actions, au-dessus du tableau ────────────────────────────────
+function bilanBarreExport(nb){
+  return gosExpBarre(nb, 'bilanImprimerSynthese()', 'bilanImprimerDetail()',
+    'bilanExcelSynthese()', 'bilanExcelDetail()',
+    'Les sorties reprennent la periode et le tri affiches.');
 }
 
 function pageBilanGlobal(){
@@ -10156,6 +10519,8 @@ function pageBilanGlobal(){
      + 'Le montant expose est un etat a ce jour : il ne varie pas avec la periode.'
      + '</div>';
 
+  h += bilanBarreExport(liste.length);
+
   h += '<div class="card"><div class="tw"><table><thead><tr>';
   h += '<th>Client</th><th>Type</th><th style="text-align:right">CA genere</th><th style="text-align:right">Montant du</th>';
   h += '<th style="text-align:right">% encaisse</th><th style="text-align:right">Delai moyen</th>';
@@ -10185,7 +10550,13 @@ function pageBilanGlobal(){
     if(ouvert){
       h += '<tr><td colspan="9" style="background:#fafbfc;padding:0">';
       h += '<div style="padding:10px 14px">';
-      h += '<div class="xs muted" style="margin-bottom:6px">Factures impayees en premier, puis de la plus recente a la plus ancienne.</div>';
+      h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:10px">';
+      h += '<span class="xs muted">Factures impayees en premier, puis de la plus recente a la plus ancienne.</span>';
+      h += '<span class="flex gap6">'
+         + '<button class="btn btn-sm" data-bex="' + bilanEchapper(c.client) + '" onclick="event.stopPropagation();bilanImprimerClientByEl(this)" title="Imprimer / PDF le detail de ce client">&#x1F5A8; Imprimer</button>'
+         + '<button class="btn btn-sm" data-bex="' + bilanEchapper(c.client) + '" onclick="event.stopPropagation();bilanExcelClientByEl(this)" title="Exporter en Excel le detail de ce client">&#128202; Excel</button>'
+         + '</span>';
+      h += '</div>';
       h += '<div class="tw"><table><thead><tr><th>Facture</th><th>Type</th><th>Depot</th><th class="xs">Depuis</th>'
          + '<th style="text-align:right">Montant</th><th style="text-align:right">Encaisse</th><th style="text-align:right">Reste</th>'
          + '<th style="text-align:right">Expose</th><th style="text-align:right">Marge</th><th style="text-align:right">Rentabilite</th>'
@@ -15931,6 +16302,395 @@ function bornesFiltrePeriode(filtre, debutStr, finStr){
 // Page unique : les deux tableaux (Clients, puis Fournisseurs/Charges
 // fixes/Engagements) sont TOUJOURS affiches ensemble, chacun avec son
 // propre selecteur de periode.
+// ══════════════════════════════════════════════════════════════════════════
+// HISTORIQUE DES PAIEMENTS — sorties papier et Excel (05/10/2026)
+// ══════════════════════════════════════════════════════════════════════════
+// Demande Direction : les memes sorties que le Bilan global, sur les deux
+// tableaux de la page — les encaissements clients, et les decaissements
+// (fournisseurs, charges fixes, engagements bancaires).
+//
+// Chaque tableau a sa propre barre, parce qu'il a sa propre periode a
+// l'ecran : exporter les deux ensemble melangerait deux periodes differentes
+// dans un meme document, ce qui serait trompeur.
+//
+// Comme pour le Bilan global, les colonnes et les valeurs sont decrites une
+// seule fois ici, et la mecanique vient de gos_export_commun.js.
+//
+// CONVENTION SUR LE DELAI MOYEN : il est recalcule sur l'ENSEMBLE des
+// versements de la selection (somme des delais / nombre de versements qui en
+// ont un), jamais comme la moyenne des delais moyens par client. Un client
+// avec un seul versement pese alors autant qu'un client qui en a trente, et
+// le chiffre global serait faux.
+// ══════════════════════════════════════════════════════════════════════════
+
+var HP_COLS_CLI_SYNTH  = ['Client', 'Nb paiements', 'Delai moyen (j)', 'Total encaisse'];
+var HP_ALIGN_CLI_SYNTH = [0, 1, 1, 1];
+var HP_LARG_CLI_SYNTH  = [34, 14, 16, 18];
+
+var HP_COLS_CLI_DET  = ['Client', 'Date reglement', 'Reference facture', 'Type', 'Delai (j)', 'Note', 'Montant'];
+var HP_ALIGN_CLI_DET = [0, 0, 0, 0, 1, 0, 1];
+var HP_LARG_CLI_DET  = [26, 15, 32, 10, 11, 28, 15];
+
+var HP_COLS_AUT_SYNTH  = ['Categorie', 'Nb paiements', 'Delai moyen (j)', 'Total paye'];
+var HP_ALIGN_AUT_SYNTH = [0, 1, 1, 1];
+var HP_LARG_AUT_SYNTH  = [28, 14, 16, 18];
+
+var HP_COLS_AUT_DET  = ['Categorie', 'Nom', 'Date reglement', 'Delai (j)', 'Montant', 'Detail'];
+var HP_ALIGN_AUT_DET = [0, 0, 0, 1, 1, 0];
+var HP_LARG_AUT_DET  = [22, 32, 15, 11, 15, 40];
+
+var HP_PIED_CLI = 'Un versement apparait a sa date de reglement reelle. '
+  + 'Le delai est compte depuis le depot de la facture : positif = regle apres le depot. '
+  + 'Il reste vide pour une facture jamais deposee, faute de point de depart. '
+  + 'Le delai moyen est recalcule sur l\'ensemble des versements de la selection, '
+  + 'et non comme une moyenne des delais moyens par client.';
+var HP_PIED_AUT = 'Un versement apparait a sa date de reglement reelle, et compte pour lui seul : '
+  + 'une dette reglee en trois fois donne trois lignes. '
+  + 'Le delai est compte depuis l\'echeance prevue : positif = regle en retard, negatif = regle en avance. '
+  + 'Il reste vide quand aucune echeance n\'etait fixee. '
+  + 'Le delai moyen est recalcule sur l\'ensemble des versements de la selection.';
+
+// ── Periode : l'intitule exact de ce qui est affiche ─────────────────────
+function histPaieLibellePeriode(filtre, debutStr, finStr){
+  var b = bornesFiltrePeriode(filtre, debutStr, finStr);
+  var noms = {mois: 'ce mois', trimestre: 'ce trimestre', annee: 'cette annee'};
+  // Le repli de bornesFiltrePeriode pousse la fin loin dans le futur : on la
+  // ramene a aujourd'hui pour l'affichage, sinon le document annoncerait une
+  // periode qui se termine dans onze jours.
+  var fin = Math.min(b.fin, Date.now());
+  var bornes = 'du ' + new Date(b.deb || Date.now()).toLocaleDateString('fr-FR')
+             + ' au ' + new Date(fin).toLocaleDateString('fr-FR');
+  if(noms[filtre]) return noms[filtre] + ' (' + bornes + ')';
+  if(filtre === 'custom' && debutStr && finStr) return bornes;
+  return 'tout l\'historique (jusqu\'au ' + new Date(fin).toLocaleDateString('fr-FR') + ')';
+}
+function histPaieLibellePeriodeClients(){
+  return histPaieLibellePeriode(histPaieClientFiltre, histPaieClientDebut, histPaieClientFin);
+}
+function histPaieLibellePeriodeAutres(){
+  return histPaieLibellePeriode(histPaieAutresFiltre, histPaieAutresDebut, histPaieAutresFin);
+}
+
+// Delai moyen d'une liste de versements : pondere par versement, et vide
+// quand aucun versement n'a de delai connu.
+function histPaieDelaiMoyen(liste){
+  var avec = liste.filter(function(h){ return h.delai !== null && h.delai !== undefined; });
+  if(!avec.length) return '';
+  return Math.round(avec.reduce(function(s,h){ return s + h.delai; }, 0) / avec.length);
+}
+
+// ── Reference de facture : une seule ecriture, ecran et papier ───────────
+// Pour un forfait, le mois concerne DOIT toujours apparaitre, meme quand un
+// numero de facture externe existe deja.
+function histPaieRefFacture(p){
+  var ref = [p.numFacture, p.numSecondaire].filter(Boolean).join(' / ') || (p.immat || '—');
+  if(p.type === 'forfait' && p.periodeKey){
+    var mois = formaterLabelPeriode(p.periodeKey, 'mois');
+    ref = (ref === '—') ? ('Forfait ' + mois) : (ref + ' — Forfait ' + mois);
+  }
+  return ref;
+}
+
+// ── Encaissements clients ────────────────────────────────────────────────
+// La recherche en cours est reprise : ce qui est a l'ecran est ce qui sort.
+// Elle ne vit que dans le champ de saisie, d'ou la lecture du DOM.
+function histPaieRechercheCourante(){
+  var el = (typeof document !== 'undefined') ? document.getElementById('histPaieRechClient') : null;
+  var q = el ? el.value.trim().toLowerCase() : '';
+  return q.length >= 2 ? q : '';
+}
+function histPaieGroupesClients(){
+  var b = bornesFiltrePeriode(histPaieClientFiltre, histPaieClientDebut, histPaieClientFin);
+  var hist = collecterHistoriquePaiementsClients().filter(function(h){
+    return h.datePaiement >= b.deb && h.datePaiement <= b.fin;
+  });
+  var groupes = regrouperHistoriqueParClient(hist);
+  var q = histPaieRechercheCourante();
+  if(q) groupes = groupes.filter(function(g){ return g.client.toLowerCase().indexOf(q) >= 0; });
+  return groupes;
+}
+function histPaieLigneSyntheseClient(g){
+  return [g.client, g.paiements.length, histPaieDelaiMoyen(g.paiements), Math.round(g.total)];
+}
+function histPaieLigneDetailClient(client, p){
+  return [client,
+          p.datePaiement ? new Date(p.datePaiement).toLocaleDateString('fr-FR') : '',
+          histPaieRefFacture(p),
+          p.type === 'forfait' ? 'Forfait' : 'Devis',
+          (p.delai === null || p.delai === undefined) ? '' : p.delai,
+          p.note || '',
+          Math.round(p.montant)];
+}
+function histPaieTotauxClients(groupes){
+  var tous = [];
+  groupes.forEach(function(g){ g.paiements.forEach(function(p){ tous.push(p); }); });
+  return ['TOTAL ' + groupes.length + ' client(s)', tous.length,
+          histPaieDelaiMoyen(tous),
+          Math.round(groupes.reduce(function(s,g){ return s + g.total; }, 0))];
+}
+// Les versements d'un client, du plus recent au plus ancien — meme ordre qu'a
+// l'ecran, pour que la lecture du papier suive la lecture de l'ecran.
+function histPaiePaiementsTries(g){
+  return g.paiements.slice().sort(function(a,b){ return b.datePaiement - a.datePaiement; });
+}
+
+function histPaieImprimerClientsSynthese(){
+  var groupes = histPaieGroupesClients();
+  var corps = gosExpEntete('HISTORIQUE DES PAIEMENTS', 'Encaissements clients — synthese', histPaieLibellePeriodeClients())
+    + gosExpTableHtml(HP_COLS_CLI_SYNTH, HP_ALIGN_CLI_SYNTH,
+        groupes.map(histPaieLigneSyntheseClient),
+        groupes.length ? histPaieTotauxClients(groupes) : null,
+        'Aucun paiement sur cette periode.')
+    + gosExpPied(HP_PIED_CLI);
+  gosExpImprimer('Historique paiements clients', corps);
+}
+function histPaieImprimerClientsDetail(){
+  var groupes = histPaieGroupesClients();
+  var corps = gosExpEntete('HISTORIQUE DES PAIEMENTS', 'Encaissements clients — synthese et detail', histPaieLibellePeriodeClients())
+    + gosExpTableHtml(HP_COLS_CLI_SYNTH, HP_ALIGN_CLI_SYNTH,
+        groupes.map(histPaieLigneSyntheseClient),
+        groupes.length ? histPaieTotauxClients(groupes) : null,
+        'Aucun paiement sur cette periode.');
+  if(groupes.length){
+    corps += '<div style="margin:16px 0 8px;font-size:13px;font-weight:900;border-bottom:2px solid #1a1a1a;padding-bottom:3px">'
+           + 'DETAIL DES VERSEMENTS</div>';
+    groupes.forEach(function(g){
+      corps += '<div class="bloc">';
+      corps += gosExpBandeauBloc(g.client,
+        g.paiements.length + ' versement(s)',
+        'Encaisse ' + Math.round(g.total).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA'
+        + (histPaieDelaiMoyen(g.paiements) === '' ? '' : ' &nbsp;&bull;&nbsp; Delai moyen ' + histPaieDelaiMoyen(g.paiements) + ' j'));
+      corps += gosExpTableHtml(HP_COLS_CLI_DET.slice(1), HP_ALIGN_CLI_DET.slice(1),
+        histPaiePaiementsTries(g).map(function(p){ return histPaieLigneDetailClient(g.client, p).slice(1); }), null);
+      corps += '</div>';
+    });
+  }
+  gosExpImprimer('Historique paiements clients detaille', corps + gosExpPied(HP_PIED_CLI));
+}
+function histPaieImprimerUnClient(client){
+  var g = histPaieGroupesClients().filter(function(x){ return x.client === client; })[0];
+  if(!g){ afficherToastNotif('Client introuvable', 'Ce client n\'a aucun paiement sur la periode affichee.', 'alerte'); return; }
+  var dm = histPaieDelaiMoyen(g.paiements);
+  var corps = gosExpEntete('HISTORIQUE DES PAIEMENTS', gosExpEchapper(client), histPaieLibellePeriodeClients())
+    + '<div style="display:flex;gap:6px;margin-bottom:12px">'
+    + '<div style="flex:1;border:1px solid #bbb;padding:5px 7px"><div style="font-size:8.5px;color:#555;text-transform:uppercase">Versements</div><div style="font-size:11px;font-weight:700">' + g.paiements.length + '</div></div>'
+    + '<div style="flex:1;border:1px solid #bbb;padding:5px 7px"><div style="font-size:8.5px;color:#555;text-transform:uppercase">Delai moyen</div><div style="font-size:11px;font-weight:700">' + (dm === '' ? '—' : dm + ' j') + '</div></div>'
+    + '<div style="flex:1;border:1px solid #bbb;padding:5px 7px"><div style="font-size:8.5px;color:#555;text-transform:uppercase">Total encaisse</div><div style="font-size:11px;font-weight:700">' + Math.round(g.total).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA</div></div>'
+    + '</div>'
+    + gosExpTableHtml(HP_COLS_CLI_DET.slice(1), HP_ALIGN_CLI_DET.slice(1),
+        histPaiePaiementsTries(g).map(function(p){ return histPaieLigneDetailClient(client, p).slice(1); }), null)
+    + gosExpPied(HP_PIED_CLI);
+  gosExpImprimer('Paiements ' + client, corps);
+}
+function histPaieImprimerUnClientByEl(btn){
+  histPaieImprimerUnClient(decodeURIComponent(btn.getAttribute('data-hpcli')));
+}
+
+function histPaieExcelClientsSynthese(){
+  if(!gosExpXlsxPret()) return;
+  var groupes = histPaieGroupesClients();
+  var wb = XLSX.utils.book_new();
+  gosExpFeuille(wb, 'Synthese', HP_COLS_CLI_SYNTH, HP_LARG_CLI_SYNTH,
+    groupes.map(histPaieLigneSyntheseClient), groupes.length ? histPaieTotauxClients(groupes) : null,
+    gosExpEnTeteFichier('HISTORIQUE DES PAIEMENTS', 'Encaissements clients', histPaieLibellePeriodeClients()));
+  XLSX.writeFile(wb, gosExpNomFichier('Historique_paiements_clients'));
+}
+function histPaieExcelClientsDetail(){
+  if(!gosExpXlsxPret()) return;
+  var groupes = histPaieGroupesClients();
+  var wb = XLSX.utils.book_new();
+  gosExpFeuille(wb, 'Synthese', HP_COLS_CLI_SYNTH, HP_LARG_CLI_SYNTH,
+    groupes.map(histPaieLigneSyntheseClient), groupes.length ? histPaieTotauxClients(groupes) : null,
+    gosExpEnTeteFichier('HISTORIQUE DES PAIEMENTS', 'Encaissements clients', histPaieLibellePeriodeClients()));
+  var detail = [];
+  groupes.forEach(function(g){
+    histPaiePaiementsTries(g).forEach(function(p){ detail.push(histPaieLigneDetailClient(g.client, p)); });
+  });
+  gosExpFeuille(wb, 'Detail versements', HP_COLS_CLI_DET, HP_LARG_CLI_DET, detail, null,
+    gosExpEnTeteFichier('HISTORIQUE DES PAIEMENTS', 'Detail des versements, tous clients', histPaieLibellePeriodeClients()));
+  XLSX.writeFile(wb, gosExpNomFichier('Historique_paiements_clients_detaille'));
+}
+function histPaieExcelUnClient(client){
+  if(!gosExpXlsxPret()) return;
+  var g = histPaieGroupesClients().filter(function(x){ return x.client === client; })[0];
+  if(!g){ afficherToastNotif('Client introuvable', 'Ce client n\'a aucun paiement sur la periode affichee.', 'alerte'); return; }
+  var wb = XLSX.utils.book_new();
+  // Six colonnes une fois "Client" retiree : le total en compte six aussi.
+  gosExpFeuille(wb, 'Versements', HP_COLS_CLI_DET.slice(1), HP_LARG_CLI_DET.slice(1),
+    histPaiePaiementsTries(g).map(function(p){ return histPaieLigneDetailClient(client, p).slice(1); }),
+    ['TOTAL', '', '', histPaieDelaiMoyen(g.paiements), '', Math.round(g.total)],
+    gosExpEnTeteFichier('HISTORIQUE DES PAIEMENTS', 'Versements de ' + client, histPaieLibellePeriodeClients()));
+  XLSX.writeFile(wb, gosExpNomFichier('Paiements_' + client));
+}
+function histPaieExcelUnClientByEl(btn){
+  histPaieExcelUnClient(decodeURIComponent(btn.getAttribute('data-hpcli')));
+}
+
+// ── Decaissements : fournisseurs, charges fixes, engagements ─────────────
+// Les trois categories sont decrites ICI, une seule fois : la page les
+// affiche en bouclant sur cette liste, et les exports lisent la meme. Avant,
+// les trois appels etaient ecrits a la main dans la page, et un export aurait
+// forcement reecrit les memes libelles une seconde fois.
+function histPaieCategories(){
+  var b = bornesFiltrePeriode(histPaieAutresFiltre, histPaieAutresDebut, histPaieAutresFin);
+  function dansPeriode(h){ return h.datePaiement >= b.deb && h.datePaiement <= b.fin; }
+  var modeLabels = {especes:'Especes', virement:'Virement', cheque:'Cheque', mobile_money:'Mobile Money', autre:'Autre'};
+  return [
+    {cle:'fournisseur', label:'Fournisseurs',
+     liste: collecterHistoriquePaiementsFournisseurs().filter(dansPeriode),
+     nom: function(h){ return h.fournisseur; },
+     detail: function(h){
+       var modeTxt = h.mode ? (modeLabels[h.mode] || h.mode) : '';
+       return [h.piece, modeTxt, h.note].filter(Boolean).join(' — ');
+     }},
+    {cle:'charges', label:'Charges fixes',
+     liste: collecterHistoriquePaiementsChargesFixes().filter(dansPeriode),
+     nom: function(h){ return h.nom; },
+     detail: function(){ return ''; }},
+    {cle:'engagements', label:'Engagements bancaires',
+     liste: collecterHistoriquePaiementsEngagements().filter(dansPeriode),
+     nom: function(h){ return h.nom + (h.organisme ? ' (' + h.organisme + ')' : ''); },
+     detail: function(){ return ''; }}
+  ];
+}
+function histPaieLigneSyntheseCat(cat){
+  return [cat.label, cat.liste.length, histPaieDelaiMoyen(cat.liste),
+          Math.round(cat.liste.reduce(function(s,h){ return s + h.montant; }, 0))];
+}
+function histPaieLigneDetailCat(cat, h){
+  return [cat.label, cat.nom(h),
+          h.datePaiement ? new Date(h.datePaiement).toLocaleDateString('fr-FR') : '',
+          (h.delai === null || h.delai === undefined) ? '' : h.delai,
+          Math.round(h.montant), cat.detail(h)];
+}
+function histPaieTotauxCats(cats){
+  var tous = [];
+  cats.forEach(function(c){ c.liste.forEach(function(h){ tous.push(h); }); });
+  return ['TOTAL ' + cats.length + ' categorie(s)', tous.length, histPaieDelaiMoyen(tous),
+          Math.round(tous.reduce(function(s,h){ return s + h.montant; }, 0))];
+}
+function histPaieVersementsTries(liste){
+  return liste.slice().sort(function(a,b){ return b.datePaiement - a.datePaiement; });
+}
+function histPaieNbAutres(){
+  return histPaieCategories().reduce(function(s,c){ return s + c.liste.length; }, 0);
+}
+
+function histPaieImprimerAutresSynthese(){
+  var cats = histPaieCategories();
+  var corps = gosExpEntete('HISTORIQUE DES PAIEMENTS', 'Fournisseurs, charges fixes et engagements — synthese', histPaieLibellePeriodeAutres())
+    + gosExpTableHtml(HP_COLS_AUT_SYNTH, HP_ALIGN_AUT_SYNTH,
+        cats.map(histPaieLigneSyntheseCat), histPaieTotauxCats(cats),
+        'Aucun paiement sur cette periode.')
+    + gosExpPied(HP_PIED_AUT);
+  gosExpImprimer('Historique paiements decaissements', corps);
+}
+function histPaieImprimerAutresDetail(){
+  var cats = histPaieCategories();
+  var corps = gosExpEntete('HISTORIQUE DES PAIEMENTS', 'Fournisseurs, charges fixes et engagements — synthese et detail', histPaieLibellePeriodeAutres())
+    + gosExpTableHtml(HP_COLS_AUT_SYNTH, HP_ALIGN_AUT_SYNTH,
+        cats.map(histPaieLigneSyntheseCat), histPaieTotauxCats(cats),
+        'Aucun paiement sur cette periode.');
+  corps += '<div style="margin:16px 0 8px;font-size:13px;font-weight:900;border-bottom:2px solid #1a1a1a;padding-bottom:3px">'
+         + 'DETAIL DES VERSEMENTS</div>';
+  cats.forEach(function(cat){
+    var total = cat.liste.reduce(function(s,h){ return s + h.montant; }, 0);
+    var dm = histPaieDelaiMoyen(cat.liste);
+    corps += '<div class="bloc">';
+    corps += gosExpBandeauBloc(cat.label, cat.liste.length + ' versement(s)',
+      'Paye ' + Math.round(total).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA'
+      + (dm === '' ? '' : ' &nbsp;&bull;&nbsp; Delai moyen ' + dm + ' j'));
+    corps += gosExpTableHtml(HP_COLS_AUT_DET.slice(1), HP_ALIGN_AUT_DET.slice(1),
+      histPaieVersementsTries(cat.liste).map(function(h){ return histPaieLigneDetailCat(cat, h).slice(1); }),
+      null, 'Aucun paiement sur cette periode.');
+    corps += '</div>';
+  });
+  gosExpImprimer('Historique paiements decaissements detaille', corps + gosExpPied(HP_PIED_AUT));
+}
+function histPaieImprimerCategorie(cle){
+  var cat = histPaieCategories().filter(function(c){ return c.cle === cle; })[0];
+  if(!cat) return;
+  var total = cat.liste.reduce(function(s,h){ return s + h.montant; }, 0);
+  var dm = histPaieDelaiMoyen(cat.liste);
+  var corps = gosExpEntete('HISTORIQUE DES PAIEMENTS', cat.label, histPaieLibellePeriodeAutres())
+    + '<div style="display:flex;gap:6px;margin-bottom:12px">'
+    + '<div style="flex:1;border:1px solid #bbb;padding:5px 7px"><div style="font-size:8.5px;color:#555;text-transform:uppercase">Versements</div><div style="font-size:11px;font-weight:700">' + cat.liste.length + '</div></div>'
+    + '<div style="flex:1;border:1px solid #bbb;padding:5px 7px"><div style="font-size:8.5px;color:#555;text-transform:uppercase">Delai moyen</div><div style="font-size:11px;font-weight:700">' + (dm === '' ? '—' : dm + ' j') + '</div></div>'
+    + '<div style="flex:1;border:1px solid #bbb;padding:5px 7px"><div style="font-size:8.5px;color:#555;text-transform:uppercase">Total paye</div><div style="font-size:11px;font-weight:700">' + Math.round(total).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA</div></div>'
+    + '</div>'
+    + gosExpTableHtml(HP_COLS_AUT_DET.slice(1), HP_ALIGN_AUT_DET.slice(1),
+        histPaieVersementsTries(cat.liste).map(function(h){ return histPaieLigneDetailCat(cat, h).slice(1); }),
+        null, 'Aucun paiement sur cette periode.')
+    + gosExpPied(HP_PIED_AUT);
+  gosExpImprimer('Paiements ' + cat.label, corps);
+}
+function histPaieImprimerCategorieByEl(btn){
+  histPaieImprimerCategorie(btn.getAttribute('data-hpcat'));
+}
+
+function histPaieExcelAutresSynthese(){
+  if(!gosExpXlsxPret()) return;
+  var cats = histPaieCategories();
+  var wb = XLSX.utils.book_new();
+  gosExpFeuille(wb, 'Synthese', HP_COLS_AUT_SYNTH, HP_LARG_AUT_SYNTH,
+    cats.map(histPaieLigneSyntheseCat), histPaieTotauxCats(cats),
+    gosExpEnTeteFichier('HISTORIQUE DES PAIEMENTS', 'Fournisseurs, charges fixes et engagements', histPaieLibellePeriodeAutres()));
+  XLSX.writeFile(wb, gosExpNomFichier('Historique_paiements_decaissements'));
+}
+function histPaieExcelAutresDetail(){
+  if(!gosExpXlsxPret()) return;
+  var cats = histPaieCategories();
+  var wb = XLSX.utils.book_new();
+  gosExpFeuille(wb, 'Synthese', HP_COLS_AUT_SYNTH, HP_LARG_AUT_SYNTH,
+    cats.map(histPaieLigneSyntheseCat), histPaieTotauxCats(cats),
+    gosExpEnTeteFichier('HISTORIQUE DES PAIEMENTS', 'Fournisseurs, charges fixes et engagements', histPaieLibellePeriodeAutres()));
+  var detail = [];
+  cats.forEach(function(cat){
+    histPaieVersementsTries(cat.liste).forEach(function(h){ detail.push(histPaieLigneDetailCat(cat, h)); });
+  });
+  gosExpFeuille(wb, 'Detail versements', HP_COLS_AUT_DET, HP_LARG_AUT_DET, detail, null,
+    gosExpEnTeteFichier('HISTORIQUE DES PAIEMENTS', 'Detail des versements, toutes categories', histPaieLibellePeriodeAutres()));
+  XLSX.writeFile(wb, gosExpNomFichier('Historique_paiements_decaissements_detaille'));
+}
+function histPaieExcelCategorie(cle){
+  if(!gosExpXlsxPret()) return;
+  var cat = histPaieCategories().filter(function(c){ return c.cle === cle; })[0];
+  if(!cat) return;
+  var wb = XLSX.utils.book_new();
+  // Cinq colonnes une fois "Categorie" retiree : le total en compte cinq aussi.
+  gosExpFeuille(wb, 'Versements', HP_COLS_AUT_DET.slice(1), HP_LARG_AUT_DET.slice(1),
+    histPaieVersementsTries(cat.liste).map(function(h){ return histPaieLigneDetailCat(cat, h).slice(1); }),
+    cat.liste.length ? ['TOTAL', '', histPaieDelaiMoyen(cat.liste),
+      Math.round(cat.liste.reduce(function(s,h){ return s + h.montant; }, 0)), ''] : null,
+    gosExpEnTeteFichier('HISTORIQUE DES PAIEMENTS', cat.label, histPaieLibellePeriodeAutres()));
+  XLSX.writeFile(wb, gosExpNomFichier('Paiements_' + cat.label));
+}
+function histPaieExcelCategorieByEl(btn){
+  histPaieExcelCategorie(btn.getAttribute('data-hpcat'));
+}
+
+// ── Barres d'actions ────────────────────────────────────────────────────
+function histPaieBarreClients(nb){
+  return gosExpBarre(nb, 'histPaieImprimerClientsSynthese()', 'histPaieImprimerClientsDetail()',
+    'histPaieExcelClientsSynthese()', 'histPaieExcelClientsDetail()',
+    'Les sorties reprennent la periode et la recherche affichees.');
+}
+function histPaieBarreAutres(nb){
+  return gosExpBarre(nb, 'histPaieImprimerAutresSynthese()', 'histPaieImprimerAutresDetail()',
+    'histPaieExcelAutresSynthese()', 'histPaieExcelAutresDetail()',
+    'Les sorties reprennent la periode affichee pour cette section.');
+}
+// Les deux boutons d'une ligne depliee. Le clic doit etre arrete : sinon il
+// remonte a l'en-tete et replie le detail au moment ou on l'imprime.
+function histPaieBoutonsLigne(attr, valeur, titreImpr, titreExcel){
+  return '<span class="flex gap6">'
+    + '<button class="btn btn-sm" ' + attr + '="' + valeur + '" onclick="event.stopPropagation();'
+      + (attr === 'data-hpcli' ? 'histPaieImprimerUnClientByEl' : 'histPaieImprimerCategorieByEl') + '(this)" title="' + titreImpr + '">&#x1F5A8; Imprimer</button>'
+    + '<button class="btn btn-sm" ' + attr + '="' + valeur + '" onclick="event.stopPropagation();'
+      + (attr === 'data-hpcli' ? 'histPaieExcelUnClientByEl' : 'histPaieExcelCategorieByEl') + '(this)" title="' + titreExcel + '">&#128202; Excel</button>'
+    + '</span>';
+}
+
 function pageHistoriquePaiements(){
   var html = '<div style="margin-bottom:16px"><h2 style="font-size:16px;font-weight:700;margin:0">Historique des paiements</h2></div>';
   html += htmlHistoriquePaiementsClients();
@@ -15957,6 +16717,7 @@ function htmlHistoriquePaiementsClients(){
   html += kpi('Total encaisse', totalGeneral?totalGeneral.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', 'green');
   html += '</div>';
 
+  html += histPaieBarreClients(groupes.length);
   html += '<div id="histPaieClientsWrap">';
   html += htmlTableauHistPaieClients(groupes);
   html += '</div>';
@@ -15976,19 +16737,19 @@ function htmlTableauHistPaieClients(groupes){
     html += '</tr>';
     if(expanded){
       html += '<tr><td colspan="3" style="padding:0;background:#faf9f7"><div style="padding:8px 16px 12px 32px">';
+      html += '<div style="display:flex;justify-content:flex-end;margin-bottom:6px">'
+            + histPaieBoutonsLigne('data-hpcli', encodeURIComponent(g.client),
+                'Imprimer / PDF les versements de ce client',
+                'Exporter en Excel les versements de ce client') + '</div>';
       html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:#888">';
-      html += '<th style="text-align:left;padding:4px 8px;font-size:11px">Date reglement</th><th style="text-align:left;padding:4px 8px;font-size:11px">Reference facture</th><th style="text-align:center;padding:4px 8px;font-size:11px">Delai</th><th style="text-align:left;padding:4px 8px;font-size:11px">Mode / Note</th><th style="text-align:right;padding:4px 8px;font-size:11px">Montant</th><th></th>';
+      html += '<th style="text-align:left;padding:4px 8px;font-size:11px">Date reglement</th><th style="text-align:left;padding:4px 8px;font-size:11px">Reference facture</th><th style="text-align:center;padding:4px 8px;font-size:11px">Delai</th><th style="text-align:left;padding:4px 8px;font-size:11px">Note</th><th style="text-align:right;padding:4px 8px;font-size:11px">Montant</th><th></th>';
       html += '</tr></thead><tbody>';
       g.paiements.sort(function(a,b){return b.datePaiement-a.datePaiement;}).forEach(function(p){
-        var refFacture = [p.numFacture, p.numSecondaire].filter(Boolean).join(' / ') || (p.immat||'—');
-        // Pour un forfait, le mois concerne DOIT toujours apparaitre —
-        // meme quand un numero de facture externe existe deja (avant
-        // cette correction, le mois n'etait montre qu'en dernier recours,
-        // donc invisible des qu'un numero de facture etait present).
-        if(p.type==='forfait' && p.periodeKey){
-          var moisLabelForfait = formaterLabelPeriode(p.periodeKey,'mois');
-          refFacture = (refFacture==='—') ? ('Forfait '+moisLabelForfait) : (refFacture+' — Forfait '+moisLabelForfait);
-        }
+        // Reference construite par histPaieRefFacture : une seule ecriture,
+        // partagee avec les sorties papier et Excel. Pour un forfait, le mois
+        // concerne y apparait toujours, meme quand un numero de facture
+        // externe existe deja.
+        var refFacture = histPaieRefFacture(p);
         var delaiTxt = p.delai===null ? '—' : (p.delai+' j');
         var delaiColor = p.delai===null ? '#888' : (p.delai>0 ? '#A32D2D' : '#3B6D11');
         var refKeyP = p.type==='forfait' ? refKeyFacture('forfait', (p.periodeKey||'')+'::'+p.client) : refKeyFacture('devis', p.vehId);
@@ -16034,10 +16795,10 @@ function rechercherHistPaieClient(texte){
 // libelle, son total et son delai moyen de reglement, et se deplie au
 // clic pour montrer le detail (date, delai, montant) de chaque paiement.
 function htmlHistoriquePaiementsAutres(){
-  var bornes = bornesFiltrePeriode(histPaieAutresFiltre, histPaieAutresDebut, histPaieAutresFin);
-  var histFourn   = collecterHistoriquePaiementsFournisseurs().filter(function(h){return h.datePaiement>=bornes.deb && h.datePaiement<=bornes.fin;});
-  var histCharges = collecterHistoriquePaiementsChargesFixes().filter(function(h){return h.datePaiement>=bornes.deb && h.datePaiement<=bornes.fin;});
-  var histEngage  = collecterHistoriquePaiementsEngagements().filter(function(h){return h.datePaiement>=bornes.deb && h.datePaiement<=bornes.fin;});
+  // Les trois categories — libelle, collecteur, nom et detail de chaque
+  // versement — sont decrites une seule fois dans histPaieCategories(), que
+  // les sorties papier et Excel lisent aussi.
+  var cats = histPaieCategories();
 
   var html = '<div class="card" style="padding:14px 16px;margin-bottom:12px">';
   html += '<div class="fw7" style="margin-bottom:8px">&#x1F3EA; Fournisseurs, charges fixes &amp; engagements bancaires</div>';
@@ -16045,22 +16806,19 @@ function htmlHistoriquePaiementsAutres(){
   html += '</div>';
 
   // KPI globaux sur les 3 categories combinees, pour la periode choisie.
-  var nbPaiementsTotal = histFourn.length + histCharges.length + histEngage.length;
-  var totalPayeTotal = histFourn.reduce(function(s,h){return s+h.montant;},0)
-    + histCharges.reduce(function(s,h){return s+h.montant;},0)
-    + histEngage.reduce(function(s,h){return s+h.montant;},0);
+  var nbPaiementsTotal = cats.reduce(function(s,c){return s+c.liste.length;},0);
+  var totalPayeTotal = cats.reduce(function(s,c){
+    return s + c.liste.reduce(function(t,h){return t+h.montant;},0);
+  },0);
   html += '<div class="kgrid k2" style="margin-bottom:16px">';
   html += kpi('Nombre de paiements effectues', nbPaiementsTotal, '');
   html += kpi('Total paye', totalPayeTotal?totalPayeTotal.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', '');
   html += '</div>';
 
-  html += htmlBlocCategoriePaiement('fournisseur', 'Fournisseurs', histFourn, function(h){return h.fournisseur;}, function(h){
-    var modeLabels = {especes:'Especes', virement:'Virement', cheque:'Cheque', mobile_money:'Mobile Money', autre:'Autre'};
-    var modeTxt = h.mode ? (modeLabels[h.mode]||h.mode) : '';
-    return [h.piece, modeTxt, h.note].filter(Boolean).join(' — ');
+  html += histPaieBarreAutres(nbPaiementsTotal);
+  cats.forEach(function(cat){
+    html += htmlBlocCategoriePaiement(cat.cle, cat.label, cat.liste, cat.nom, cat.detail);
   });
-  html += htmlBlocCategoriePaiement('charges', 'Charges fixes', histCharges, function(h){return h.nom;}, function(){return '';});
-  html += htmlBlocCategoriePaiement('engagements', 'Engagements bancaires', histEngage, function(h){return h.nom+(h.organisme?' ('+h.organisme+')':'');}, function(){return '';});
   return html;
 }
 
@@ -16088,6 +16846,10 @@ function htmlBlocCategoriePaiement(cle, label, liste, nomFn, detailFn){
     if(!liste.length){
       html += '<div class="empty" style="padding:0 16px 16px">Aucun paiement sur cette periode.</div>';
     } else {
+      html += '<div style="padding:0 16px 6px;display:flex;justify-content:flex-end">'
+            + histPaieBoutonsLigne('data-hpcat', cle,
+                'Imprimer / PDF les versements de cette categorie',
+                'Exporter en Excel les versements de cette categorie') + '</div>';
       html += '<div style="padding:0 16px 16px;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:#888">';
       html += '<th style="text-align:left;padding:4px 8px;font-size:11px">Nom</th><th style="text-align:left;padding:4px 8px;font-size:11px">Date reglement</th><th style="text-align:center;padding:4px 8px;font-size:11px">Delai</th><th style="text-align:right;padding:4px 8px;font-size:11px">Montant</th>';
       html += '</tr></thead><tbody>';
@@ -34854,6 +35616,7 @@ var GOS_AUTH = (function(){
     });
   }
   function bandeauTransition(visible){
+    visible = false;   // APERCU : bandeau masque
     var el = document.getElementById('gosBandeauTransition');
     if(!visible){ if(el) el.remove(); return; }
     if(!el){ el = document.createElement('div'); el.id = 'gosBandeauTransition';
@@ -34873,7 +35636,11 @@ var GOS_AUTH = (function(){
       surUtilisateur(cred.user);
     }).catch(function(e){
       var code = e && e.code || '';
-      if(code === 'auth/network-request-failed'){ erreurConnexion('Connexion Internet obligatoire pour se connecter.'); return; }
+      if(code === 'auth/network-request-failed'){
+        // APERCU : pas de reseau — on tente l'ancienne connexion locale.
+        if(GOS_AUTH_CFG.connexionLocaleTransitoire && saisie.indexOf('@') < 0){ connexionAncienne(saisie.toLowerCase(), mdp); return; }
+        erreurConnexion('Sans reseau : utilisez un identifiant simple (ex. direction), pas une adresse e-mail.'); return;
+      }
       if(code === 'auth/user-disabled'){ erreurConnexion('Ce compte est desactive. Contactez la Direction.'); return; }
       if(GOS_AUTH_CFG.connexionLocaleTransitoire && saisie.indexOf('@') < 0){ connexionAncienne(saisie.toLowerCase(), mdp); return; }
       erreurConnexion('Identifiant ou mot de passe incorrect.');
@@ -35124,14 +35891,14 @@ function pageComptes(){ return GOS_M1_OUTIL.html() + GOS_PERSONNEL.html() + page
 
 
 var firebaseConfig = {
-  apiKey: "AIzaSyDJncdc6aaiOO0Nl3_bGQ-8peSVa8gdmMU",
-  authDomain: "garage-smart-erp.firebaseapp.com",
-  projectId: "garage-smart-erp",
-  storageBucket: "garage-smart-erp.firebasestorage.app",
-  messagingSenderId: "200279404694",
-  appId: "1:200279404694:web:ab323a97692797967952b7",
-  databaseURL: "https://garage-smart-erp-default-rtdb.firebaseio.com"
-};
+  "apiKey": "AIzaSyADjw-1tjNY0kw9ZoEQ0bohex8vuetn0Zw",
+  "authDomain": "garageos-test-c09.firebaseapp.com",
+  "databaseURL": "https://garageos-test-c09-default-rtdb.firebaseio.com",
+  "projectId": "garageos-test-c09",
+  "storageBucket": "garageos-test-c09.firebasestorage.app",
+  "messagingSenderId": "528984721490",
+  "appId": "1:528984721490:web:39c7e1ff9a61086e56778b"
+}; // C-09 : projet Firebase de TEST
 
 // ID unique par appareil - défini en premier
 var deviceId = localStorage.getItem('gos_device_id');
@@ -35154,7 +35921,7 @@ function initFirebase(){
       fbApp = firebase.app(); // déjà initialisé
     }
     fbDb = firebase.database();
-    console.log('Firebase OK, db:', fbDb.ref().toString());
+    /* APERCU : message de demarrage retire */
     
     // Indicateur de connexion
     fbDb.ref('.info/connected').on('value', function(snap){
@@ -35719,9 +36486,44 @@ window.onload=function(){
 
 </script>
   <!-- Firebase SDK chargé en dernier -->
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js" onload="onFirebaseLoaded()"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js" onload="onFirebaseDatabaseLoaded()"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js" onload="onFirebaseAuthLoaded()"></script>
+  <!-- APERCU UNIQUEMENT — absent du fichier de production.
+       Charge le kit Firebase depuis gstatic, et bascule sur jsdelivr si ce
+       domaine est bloque par l'environnement d'affichage. Les fichiers sont
+       charges dans l'ordre : le module app doit etre pret avant database et auth. -->
+  <script>
+  (function(){
+    var SOURCES = ['https://www.gstatic.com/firebasejs/10.7.1/',
+                   'https://cdn.jsdelivr.net/npm/firebase@10.7.1/'];
+    var FICHIERS = [['firebase-app-compat.js', 'onFirebaseLoaded'],
+                    ['firebase-database-compat.js', 'onFirebaseDatabaseLoaded'],
+                    ['firebase-auth-compat.js', 'onFirebaseAuthLoaded']];
+    function charger(iSource){
+      var base = SOURCES[iSource];
+      if(!base){
+        console.error('Firebase : aucune source joignable. Utilisez le serveur local pour vos essais.');
+        return;
+      }
+      var i = 0;
+      (function suivant(){
+        if(i >= FICHIERS.length){ console.log('Firebase charge depuis ' + base); return; }
+        var f = FICHIERS[i];
+        var sc = document.createElement('script');
+        sc.src = base + f[0];
+        sc.onload = function(){
+          try{ if(typeof window[f[1]] === 'function') window[f[1]](); }
+          catch(e){ console.error(f[1], e); }
+          i++; suivant();
+        };
+        sc.onerror = function(){
+
+          charger(iSource + 1);
+        };
+        document.head.appendChild(sc);
+      })();
+    }
+    charger(0);
+  })();
+  </script>
 <div class="overlay" id="modalCommentaires" style="display:none" onclick="if(event.target===this)this.style.display='none'">
 <div class="modal" style="max-width:520px">
   <div id="commBody"></div>
