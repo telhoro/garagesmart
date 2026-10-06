@@ -19556,7 +19556,14 @@ function ouvrirAttribTech(btn){
 // circuit TKM (voir validerAttribTech()). Une seule piece manquante ou
 // non liee au stock desactive le raccourci (retombe sur le circuit
 // normal, ou achats pourra commander ce qui manque).
-function toutesPiecesTkmEnStock(v){
+// Rend la liste des raisons qui EMPECHENT le raccourci TKM, vide quand tout
+// est reuni. Chaque raison est une phrase lisible par l'atelier, nommant la
+// piece et les quantites en jeu.
+// Effet de bord assume : une ligne trouvee au stock par son nom est liee a
+// l'article au passage, sinon reserverStockVehicule() ne trouverait rien a
+// reserver malgre un stock physiquement suffisant.
+function obstaclesRaccourciTkm(v){
+  if(v.tkm !== true) return ['Ce dossier n\'est pas un dossier TKM.'];
   // Un vehicule converti depuis un devis prospect (confirmerEnTravaux)
   // a son v.chiffrage volontairement vide a ce stade — les pieces
   // validees par le client sont conservees dans v.tapReprisDe en
@@ -19564,39 +19571,72 @@ function toutesPiecesTkmEnStock(v){
   // verification ne trouvait jamais rien et le raccourci ne se
   // declenchait jamais pour un dossier issu d'un devis prospect.
   if((!v.chiffrage || !v.chiffrage.lignes || !v.chiffrage.lignes.length) && v.tapReprisDe && v.tapReprisDe.length){
+    // Reconstruire depuis le DEVIS, et non depuis tapReprisDe directement :
+    // chaque ligne porte alors son devisId, et la resynchronisation
+    // devis -> chiffrage la reconnait au lieu de l'ajouter une seconde fois.
+    // Avant ce correctif, les lignes du raccourci portaient un "libreId" sans
+    // devisId : les achats ouvraient le dossier et se retrouvaient avec les
+    // pieces du forfait en double, la seconde copie non validee.
+    var dTkm = ensureDevis(v);
+    // Le devis doit porter les pieces reprises, puisque c'est lui qui donne
+    // son identifiant a chaque ligne. S'il est encore vide (dossier cree avec
+    // un devis brouillon), on l'alimente ici, exactement comme ensureDevis.
+    if(!dTkm.lignes.filter(function(dl){ return (dl.piece||'').trim(); }).length){
+      dTkm.lignes = v.tapReprisDe.map(function(t, i){
+        return {id:'dl'+Date.now()+'_'+i, piece:t.piece, qte:parseInt(t.qte,10)||1,
+                observation:'', reporte:true, dateOrigine:t.dateOrigine};
+      });
+    }
     v.chiffrage = {
       valide:false,
-      lignes: v.tapReprisDe.map(function(t, i){
-        return {
-          libreId: 'cl_tap_'+Date.now()+'_'+i, piece: t.piece, qte: t.qte,
-          prixAchat: t.prixAchat, prixVente: t.prixVente,
-          source: t.source||'local', stockArticleId: t.stockArticleId||'',
-          fournisseurId: t.fournisseurId||''
-        };
-      })
+      lignes: dTkm.lignes.filter(function(dl){ return (dl.piece||'').trim(); })
+                         .map(function(dl){ return ligneChiffrageDepuisDevis(v, dl); })
     };
   }
-  if(!v.chiffrage || !v.chiffrage.lignes || !v.chiffrage.lignes.length) return false;
+  if(!v.chiffrage || !v.chiffrage.lignes || !v.chiffrage.lignes.length){
+    return ['Aucune piece au chiffrage : le forfait n\'a pas ete applique, ou le devis est vide.'];
+  }
   var lignesValides = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
-  if(!lignesValides.length) return false;
-  return lignesValides.every(function(cl){
+  if(!lignesValides.length) return ['Aucune piece renseignee au chiffrage.'];
+  var obstacles = [];
+  lignesValides.forEach(function(cl){
     var qteNeeded = parseInt(cl.qte,10)||1;
     // Lien deja explicite vers un article de stock (le plus fiable)
     if(cl.stockArticleId){
       var article = stockArticleById(cl.stockArticleId);
-      return !!article && stockDispo(article) >= qteNeeded;
+      if(!article){
+        obstacles.push(cl.piece+' : l\'article de stock lie est introuvable (supprime ou renomme).');
+        return;
+      }
+      var dispo = stockDispo(article);
+      if(dispo < qteNeeded){
+        obstacles.push(cl.piece+' : '+qteNeeded+' demande(s), '+dispo+' disponible(s) en stock.');
+      }
+      return;
     }
     // Sinon (piece juste tapee via l'autosuggestion catalogue, sans lien
     // explicite) : rechercher un article correspondant par nom dans le
-    // stock reel. Si trouve, on lie la ligne automatiquement — sinon la
-    // reservation qui suit (reserverStockVehicule) ne trouverait rien a
-    // reserver malgre un stock physiquement suffisant.
+    // stock reel.
     var matches = stockArticlesPour(v, cl.piece);
-    if(!matches.length || stockDispo(matches[0]) < qteNeeded) return false;
+    if(!matches.length){
+      obstacles.push(cl.piece+' : aucun article correspondant dans le stock — la ligne du forfait n\'est liee a aucun article.');
+      return;
+    }
+    var dispoNom = stockDispo(matches[0]);
+    if(dispoNom < qteNeeded){
+      obstacles.push(cl.piece+' : '+qteNeeded+' demande(s), '+dispoNom+' disponible(s) en stock.');
+      return;
+    }
     cl.source = 'stock';
     cl.stockArticleId = matches[0].id;
-    return true;
   });
+  return obstacles;
+}
+
+// Lecture booleenne de la meme regle — une seule implementation, pour que le
+// message affiche a l'atelier ne puisse jamais contredire la decision prise.
+function toutesPiecesTkmEnStock(v){
+  return obstaclesRaccourciTkm(v).length === 0;
 }
 
 function validerAttribTech(){
@@ -19617,7 +19657,8 @@ function validerAttribTech(){
     // puisque tout est deja connu et disponible. Va directement en
     // travaux. Si une seule piece manque au stock, retombe sur le
     // circuit normal (achats pourra commander ce qui manque).
-    if(v.tkm===true && toutesPiecesTkmEnStock(v)){
+    var obstaclesTkmAttrib = obstaclesRaccourciTkm(v);
+    if(v.tkm===true && !obstaclesTkmAttrib.length){
       v.chiffrage.lignes.forEach(function(cl){ if((cl.piece||'').trim()) cl.valideDir = true; });
       v.chiffrage.valide = true;
       v.chiffrage.valideDir = true;
@@ -19630,6 +19671,12 @@ function validerAttribTech(){
       marquerJalonsTemps(v, 'travaux_cours');
       ajouterCommentaireSysteme(v, '&#x26A1; Circuit TKM raccourci — pieces en stock, direct en travaux (diagnostic, chiffrage et validation financiere sautes)', currentUser ? currentUser.login : 'Chef atelier');
     } else {
+      // Meme explication que depuis la fiche detail : le motif ne doit pas
+      // dependre du chemin par lequel l'attribution a ete faite.
+      if(v.tkm===true && obstaclesTkmAttrib.length){
+        ajouterCommentaireSysteme(v, '&#x26A0; Raccourci TKM impossible — '+obstaclesTkmAttrib.join(' ')+' Le dossier passe par le diagnostic.', currentUser ? currentUser.login : 'Chef atelier');
+        afficherToastNotif('Raccourci TKM impossible', obstaclesTkmAttrib.join('<br>')+'<br>Le dossier passe par le diagnostic.', 'alerte');
+      }
       v.status = 'attente_diag';
     }
   } else {
@@ -21068,6 +21115,42 @@ function toggleValidationEdit(){
   openDetKeepEdit(detCurrentVid);
 }
 
+// Fabrique une ligne de chiffrage a partir d'une ligne de devis, en
+// reprenant prix, fournisseur et lien stock du passage precedent
+// (v.tapReprisDe) quand la ligne en vient.
+// C'est la SEULE facon de creer une ligne de chiffrage a partir d'un devis.
+// La resynchronisation ci-dessous et le raccourci TKM
+// (toutesPiecesTkmEnStock) l'utilisent tous les deux : leurs lignes sont
+// donc identiques et portent toutes un devisId, ce qui leur permet de se
+// reconnaitre. Deux fabrications separees, c'est exactement ce qui faisait
+// apparaitre les pieces d'un forfait en double.
+function ligneChiffrageDepuisDevis(v, dl){
+  // Piece reportee d'un passage precedent : pre-remplir les prix
+  // (modifiables) pour les achats.
+  var ref = null;
+  if(dl.reporte && v.tapReprisDe){
+    ref = v.tapReprisDe.find(function(t){ return (t.piece||'').toLowerCase().trim() === (dl.piece||'').toLowerCase().trim(); });
+  }
+  return {
+    devisId: dl.id,
+    piece: dl.piece,
+    qte: (parseInt(dl.qte,10)||1),
+    prixAchat: ref ? (ref.prixAchat||'') : '',
+    prixVente: ref ? (ref.prixVente||'') : '',
+    fournisseurId: ref ? (ref.fournisseurId||'') : '',
+    fournisseur: '',
+    source: ref ? (ref.source||'local') : 'local',
+    // Conserver le lien vers l'article de stock repris du passage precedent,
+    // sinon toutesPiecesTkmEnStock() perd la reference exacte et retombe sur
+    // une recherche par nom qui peut echouer : le dossier part alors en
+    // diagnostic au lieu du raccourci direct.
+    stockArticleId: ref ? (ref.stockArticleId||'') : '',
+    paiement: 'cash',
+    prixReporte: ref ? true : false,
+    dateOrigine: ref ? ref.dateOrigine : null
+  };
+}
+
 function renderChiffrageSection(v){
   if(garantirIdsLignesChiffrage(v)) saveV();   // C-09 v11 : avant tout rendu
   // isForfait masque les colonnes Prix vente/Total vente (paiement forfaitaire
@@ -21170,31 +21253,7 @@ function renderChiffrageSection(v){
   d.lignes.filter(function(l){return (l.piece||'').trim();}).forEach(function(dl){
     var existing = v.chiffrage.lignes.find(function(cl){return cl.devisId===dl.id;});
     if(!existing){
-      // Piece reportee d'un passage precedent : pre-remplir les prix (modifiables) pour les achats
-      var ref = null;
-      if(dl.reporte && v.tapReprisDe){
-        ref = v.tapReprisDe.find(function(t){ return (t.piece||'').toLowerCase().trim() === (dl.piece||'').toLowerCase().trim(); });
-      }
-      v.chiffrage.lignes.push({
-        devisId: dl.id,
-        piece: dl.piece,
-        qte: (parseInt(dl.qte,10)||1),
-        prixAchat: ref ? (ref.prixAchat||'') : '',
-        prixVente: ref ? (ref.prixVente||'') : '',
-        fournisseurId: ref ? (ref.fournisseurId||'') : '',
-        fournisseur: '',
-        source: ref ? (ref.source||'local') : 'local',
-        // IMPORTANT : conserver le lien vers l'article de stock repris du
-        // passage precedent (tapReprisDe), sinon toutesPiecesTkmEnStock()
-        // perd la reference exacte des que cette section est affichee
-        // (achats/direction, sans restriction de statut) — le raccourci
-        // TKM retombe alors sur une recherche par nom qui peut echouer et
-        // envoie le dossier en diagnostic au lieu du raccourci direct.
-        stockArticleId: ref ? (ref.stockArticleId||'') : '',
-        paiement: 'cash',
-        prixReporte: ref ? true : false,
-        dateOrigine: ref ? ref.dateOrigine : null
-      });
+      v.chiffrage.lignes.push(ligneChiffrageDepuisDevis(v, dl));
     } else {
       // Synchroniser le libelle de la piece, mais NE PAS ecraser la quantite du chiffrage :
       // le service achats peut ajuster la quantite a commander independamment du devis.
@@ -28341,7 +28400,8 @@ function detAffecterEquipe(id){
     // — meme logique ici, puisque c'est ce formulaire (attribution depuis
     // la fiche detail) qui est reellement utilise par chef d'atelier,
     // et pas seulement la modale separee.
-    if(v.tkm===true && toutesPiecesTkmEnStock(v)){
+    var obstaclesTkm = obstaclesRaccourciTkm(v);
+    if(v.tkm===true && !obstaclesTkm.length){
       v.chiffrage.lignes.forEach(function(cl){ if((cl.piece||'').trim()) cl.valideDir = true; });
       v.chiffrage.valide = true;
       v.chiffrage.valideDir = true;
@@ -28354,6 +28414,12 @@ function detAffecterEquipe(id){
       ajouterCommentaireSysteme(v, '&#x26A1; Circuit TKM raccourci — pieces en stock, direct en travaux (diagnostic, chiffrage et validation financiere sautes)', currentUser ? currentUser.login : 'Chef atelier');
       afficherToastNotif('Circuit TKM raccourci', v.immat+' est directement en travaux — pieces deja en stock.', 'ok');
     } else {
+      // Le dossier part en diagnostic : dire pourquoi. Sans ce message,
+      // l'atelier constatait le detour sans savoir quelle piece le causait.
+      if(v.tkm===true && obstaclesTkm.length){
+        ajouterCommentaireSysteme(v, '&#x26A0; Raccourci TKM impossible — '+obstaclesTkm.join(' ')+' Le dossier passe par le diagnostic.', currentUser ? currentUser.login : 'Chef atelier');
+        afficherToastNotif('Raccourci TKM impossible', obstaclesTkm.join('<br>')+'<br>Le dossier passe par le diagnostic.', 'alerte');
+      }
       v.status = 'attente_diag';
       v.stepStart = Date.now();
     }
