@@ -1260,7 +1260,7 @@ tr:hover td{background:#faf9f7}
 
 <div class="overlay" id="modalPaiement" style="display:none" onclick="if(event.target===this)closePaiementModal()">
 <div class="modal" style="max-width:460px">
-  <div class="mhead"><h2>&#x1F4B5; Enregistrer un paiement</h2><button class="btn btn-sm" onclick="closePaiementModal()">X</button></div>
+  <div class="mhead"><h2 id="paiementTitre">&#x1F4B5; Enregistrer un paiement</h2><button class="btn btn-sm" onclick="closePaiementModal()">X</button></div>
   <div class="mbody">
     <div id="paiementVehInfo" style="font-weight:700;padding:8px 12px;background:#f5f4f1;border-radius:7px;margin-bottom:14px;font-size:13px"></div>
     <div class="fr"><label class="fl">Montant recu (FCFA) <span style="color:red">*</span></label><input type="number" class="inp" id="paiementMontant" min="0" placeholder="0"></div>
@@ -5202,11 +5202,14 @@ function ouvrirCommentaires(vid){
   h += '<button class="btn btn-sm" onclick="document.getElementById(\'modalCommentaires\').style.display=\'none\'">X</button></div>';
   h += '<div class="mbody" style="max-height:350px;overflow-y:auto" id="commList">';
 
-  if(!v.commentaires.length){
+  var _commLisibles = commentairesVisibles(v);
+  if(!_commLisibles.length){
     h += '<div class="empty">Aucun commentaire</div>';
   } else {
-    // Du plus récent au plus ancien
-    var sorted = v.commentaires.slice().sort(function(a,b){ return b.ts - a.ts; });
+    // Du plus récent au plus ancien. L'index reel pointe toujours dans
+    // v.commentaires : modifier ou supprimer agit sur la bonne entree, meme
+    // quand des commentaires financiers sont masques.
+    var sorted = _commLisibles.slice().sort(function(a,b){ return b.ts - a.ts; });
     var currentAuteur = currentUser ? currentUser.login : (currentTechNom||currentRole||'');
     sorted.forEach(function(c, i){
       var date = new Date(c.ts).toLocaleDateString('fr-FR')+' '+new Date(c.ts).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
@@ -5301,8 +5304,9 @@ function ajouterCommentaire(vid){
 
 function dernierCommentaireHtml(v){
   if(currentRole==='technicien'||currentRole==='testeur') return '';
-  if(!v.commentaires || !v.commentaires.length) return '';
-  var last = v.commentaires.slice().sort(function(a,b){ return b.ts-a.ts; })[0];
+  var _comm = commentairesVisibles(v);
+  if(!_comm.length) return '';
+  var last = _comm.slice().sort(function(a,b){ return b.ts-a.ts; })[0];
   var court = last.texte.length > 60 ? last.texte.substring(0,60)+'...' : last.texte;
   return '<div style="font-size:10px;color:#854F0B;margin-top:3px;cursor:pointer" data-cid="'+v.id+'" onclick="ouvrirCommentairesById(this)">&#x1F4AC; '+court+'</div>';
 }
@@ -5422,14 +5426,29 @@ function auteurAction(){
   return currentUser ? currentUser.login : currentRole;
 }
 
-function ajouterCommentaireSysteme(v, texte, auteur){
+function ajouterCommentaireSysteme(v, texte, auteur, options){
   v.commentaires = v.commentaires || [];
-  v.commentaires.push({
+  var c = {
     ts: Date.now(),
     auteur: auteur || auteurAction(),
     texte: texte,
     systeme: true
-  });
+  };
+  // Un commentaire « financier » porte un montant encaisse : il n'est lisible
+  // que par les profils qui ont a connaitre l'argent du client.
+  if(options && options.financier) c.financier = true;
+  v.commentaires.push(c);
+  return c;
+}
+
+// La SEULE regle qui decide quels commentaires un profil peut lire. Les trois
+// endroits qui affichent des commentaires passent par elle — trois filtres
+// ecrits separement auraient fini par diverger, et une fuite se serait
+// rouverte au premier oubli.
+function commentairesVisibles(v){
+  var liste = (v && v.commentaires) || [];
+  if(peutVoirAcompte()) return liste;
+  return liste.filter(function(c){ return c.financier !== true; });
 }
 
 
@@ -10621,6 +10640,18 @@ function pageFacturation(){
   FORFAIT_FACTURES.forEach(function(f){ caForfaitFacture += f.montant||0; });
   var caTotalFacture = caDevisFacture+caForfaitFacture;
 
+  // Acomptes encaisses sur des dossiers qui ne sont pas encore livres : cet
+  // argent est deja dans les caisses, mais aucun compteur de facturation ne le
+  // montre, puisqu'ils ne retiennent que les dossiers livres (regle LIV_ST).
+  var acomptesEnCours = 0, dossiersAcompte = [];
+  vehicles.forEach(function(v){
+    if(LIV_ST.indexOf(v.status) >= 0) return;   // livre : deja compte ailleurs
+    var a = acomptesRecus(v);
+    if(a > 0){ acomptesEnCours += a; dossiersAcompte.push({v: v, montant: a}); }
+  });
+  dossiersAcompte.sort(function(x, y){ return y.montant - x.montant; });
+  var nbDossiersAcompte = dossiersAcompte.length;
+
   var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Facturation</h2>';
   html += '<button class="btn btn-primary btn-sm" onclick="openFactureManuelleForm()">+ Facture manuelle</button>';
@@ -10633,6 +10664,41 @@ function pageFacturation(){
   html += kpi('Impayes devis', impayesDevis?impayesDevis.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', impayesDevis>0?'amber':'');
   html += kpi('Impayes forfaits', impayesForfait?impayesForfait.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', impayesForfait>0?'amber':'');
   html += '</div>';
+
+  if(acomptesEnCours > 0){
+    html += '<div style="margin-bottom:16px;background:#EAF3DE;border-left:4px solid #3B6D11;border-radius:7px">';
+    html += '<div style="padding:10px 14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;cursor:pointer" onclick="basculerAcomptesEnCours()" title="Cliquer pour voir les dossiers concernes">';
+    html += '<span style="font-weight:700;color:#3B6D11">' + (acomptesDeplies ? '&#x25BC;' : '&#x25B6;')
+         + ' &#x1F4B5; Acomptes recus sur dossiers en cours : '
+         + Math.round(acomptesEnCours).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA</span>';
+    html += '<span class="xs muted">' + nbDossiersAcompte + ' dossier(s) pas encore livre(s). '
+         + 'Cet argent est deja encaisse ; il n\'entre dans le chiffre d\'affaires qu\'a la livraison, '
+         + 'et viendra alors en deduction du montant a reclamer.</span>';
+    html += '</div>';
+    if(acomptesDeplies){
+      html += '<div style="padding:0 14px 12px"><div class="tw"><table><thead><tr>'
+           + '<th>Vehicule</th><th>Client</th><th>Etape</th><th style="text-align:right">Acompte recu</th>'
+           + '<th style="text-align:right">Montant du devis</th><th></th></tr></thead><tbody>';
+      dossiersAcompte.forEach(function(da){
+        var devis = montantDevisDossier(da.v);
+        html += '<tr>';
+        html += '<td class="xs"><strong>' + (da.v.immat||'—') + '</strong> <span class="muted">'
+             + ((da.v.marque||'') + ' ' + (da.v.modele||'')).trim() + '</span></td>';
+        html += '<td class="xs">' + (da.v.client||'—') + '</td>';
+        html += '<td class="xs">' + (typeof STATUSES !== 'undefined' && STATUSES[da.v.status]
+                                     ? STATUSES[da.v.status].l : (da.v.status||'—')) + '</td>';
+        html += '<td style="text-align:right;font-family:monospace;font-weight:700;color:#3B6D11">'
+             + Math.round(da.montant).toLocaleString('fr-FR', GOS_FMT0) + '</td>';
+        html += '<td style="text-align:right;font-family:monospace">'
+             + (devis ? Math.round(devis).toLocaleString('fr-FR', GOS_FMT0) : '—') + '</td>';
+        html += '<td><button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-vid="' + da.v.id
+             + '" onclick="openDetById(this)" title="Voir la fiche">&#x1F441;</button></td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table></div></div>';
+    }
+    html += '</div>';
+  }
 
   // Onglets
   html += '<div class="flex gap6" style="margin-bottom:16px">';
@@ -10713,6 +10779,7 @@ function pageCreances(){
     var delaiJours = (factureDeposee && dateFacture) ? Math.floor((Date.now()-dateFacture)/86400000) : 0;
     var resteARecouvrir = montantFacture - montantPaye;
     return {
+      acompte: acomptesRecus(v),
       id:v.id, immat:v.immat, marque:v.marque, modele:v.modele,
       client:v.client, tel:v.tel, entite:v.entite||'Particulier',
       typeClient:v.typeClient||'devis',
@@ -10847,7 +10914,9 @@ function pageCreances(){
     html += '<td>'+d.client+'<div class="xs muted">'+d.entite+'</div></td>';
     html += '<td>'+tbadge(d.typeClient)+'</td>';
     html += '<td style="font-family:monospace;font-weight:700">'+d.montantFacture.toLocaleString('fr-FR', GOS_FMT0)+'</td>';
-    html += '<td style="font-family:monospace;color:#3B6D11">'+(d.montantPaye?d.montantPaye.toLocaleString('fr-FR', GOS_FMT0):'—')+'</td>';
+    html += '<td style="font-family:monospace;color:#3B6D11">'+(d.montantPaye?d.montantPaye.toLocaleString('fr-FR', GOS_FMT0):'—')
+         + (d.acompte > 0 ? '<div class="xs muted" title="Verse par le client avant la facture">dont acompte '+Math.round(d.acompte).toLocaleString('fr-FR', GOS_FMT0)+'</div>' : '')
+         + '</td>';
     html += '<td style="font-family:monospace;font-weight:700;color:'+(d.resteARecouvrir>0?'#A32D2D':'#3B6D11')+'">'+(d.resteARecouvrir>0?d.resteARecouvrir.toLocaleString('fr-FR', GOS_FMT0):'0')+'</td>';
     html += '<td class="xs">'+(d.isForfaitFacture?'—':((d.numeroFactureExterne?'<span style="font-family:monospace">'+d.numeroFactureExterne+'</span>':'<span class="muted">—</span>')+'<br>'+(d.numeroSecondaire?d.numeroSecondaire:'<span class="muted">—</span>')))+(function(){
       var refKeyD = d.isForfaitFacture ? refKeyFacture('forfait', (d.periodeKey||'')+'::'+d.client) : refKeyFacture('devis', d.id);
@@ -10876,18 +10945,126 @@ function pageCreances(){
 function setCreancesFiltreByEl(el){ creancesFiltre=el.getAttribute('data-cf'); renderPage(); }
 function setCreancesSortByEl(el){ creancesSort=el.getAttribute('data-cs'); renderPage(); }
 
+// Montant total facturable d'un dossier : la somme de ses lignes de
+// chiffrage renseignees. Une seule ecriture, pour que la saisie, le controle
+// de depassement et l'acompte parlent tous du meme montant.
+function montantDevisDossier(v){
+  var lignes = (v && v.chiffrage && v.chiffrage.lignes) ? v.chiffrage.lignes : [];
+  return lignes.filter(function(cl){ return (cl.piece||'').trim(); })
+               .reduce(function(s, cl){ return s + montantChiffrageLigne(cl); }, 0);
+}
+
+// ── ACOMPTE ───────────────────────────────────────────────────────────────
+// Statuts a partir desquels le client s'est engage : son accord est acquis,
+// le montant du devis est connu, mais la facture n'existe pas encore.
+var ACOMPTE_ST = ['accord_client','attente_fin','valide_fin','attente_appro',
+  'pieces_commande','appro_en_cours','pieces_partiel','pieces_livrees',
+  'travaux_attente','travaux_cours','travaux_termines','vehicule_termine',
+  'en_lavage','client_contacte','attente_client','en_cours_livraison',
+  'facture_emettre','facture_emise','livre'];
+
+// Qui peut ENREGISTRER un acompte : ceux qui encaissent l'argent du client.
+// Etat du depliage de l'indicateur des acomptes en cours (page Facturation).
+var acomptesDeplies = false;
+function basculerAcomptesEnCours(){ acomptesDeplies = !acomptesDeplies; renderPage(); }
+
+var ACOMPTE_ROLES_SAISIE = ['direction','reception'];
+// Qui peut VOIR un acompte et sa trace dans l'historique du dossier.
+var ACOMPTE_ROLES_LECTURE = ['direction','reception','chef_atelier','achats'];
+function peutSaisirAcompte(){ return ACOMPTE_ROLES_SAISIE.indexOf(currentRole) >= 0; }
+function peutVoirAcompte(){ return ACOMPTE_ROLES_LECTURE.indexOf(currentRole) >= 0; }
+
+function peutEncaisserAcompte(v){
+  if(!v) return false;
+  // Un client forfait paie un abonnement mensuel : pas d'acompte par dossier.
+  if(v.typeClient === 'forfait') return false;
+  // Facture deposee : ce n'est plus un acompte, c'est un reglement — la
+  // saisie de paiement habituelle prend le relais.
+  if(v.factureDeposeeLe) return false;
+  var accordDonne = (v.isProspect && v.prospectStatut === 'valide_client')
+                 || ACOMPTE_ST.indexOf(v.status) >= 0;
+  if(!accordDonne) return false;
+  return montantDevisDossier(v) > 0;
+}
+
+// Total des acomptes deja recus sur un dossier.
+function acomptesRecus(v){
+  return ((v && v.paiementsClient) || []).filter(function(p){ return p.acompte === true; })
+    .reduce(function(s, p){ return s + (parseFloat(p.montant)||0); }, 0);
+}
+
+// Date du dernier versement qui REPOND A UNE FACTURE — les acomptes sont
+// ecartes : anterieurs a la facture, ils donneraient un delai negatif.
+function datePaiementPourDelai(v){
+  if(v && v.paiementsClient && v.paiementsClient.length){
+    var reglements = v.paiementsClient.filter(function(p){ return p.acompte !== true; });
+    if(!reglements.length) return null;
+    return reglements.reduce(function(d, p){ return Math.max(d, p.date||0); }, 0) || null;
+  }
+  // Dossier anterieur a la liste des versements : on garde l'ancienne lecture.
+  return v && v.paiementDate ? v.paiementDate : null;
+}
+
+// Le bouton, la ou le client vient de donner son accord.
+function htmlBoutonAcompte(v){
+  if(!peutEncaisserAcompte(v)) return '';
+  if(!peutVoirAcompte()) return '';
+  var h = '';
+  // Le bouton n'apparait qu'a ceux qui encaissent ; les autres lecteurs
+  // voient seulement ce qui a deja ete recu.
+  if(peutSaisirAcompte()){
+    h += '<button class="btn btn-success btn-sm" data-vid="' + v.id + '" onclick="ouvrirSaisieAcompte(this)" '
+       + 'title="Enregistrer un acompte verse par le client avant facturation">&#x1F4B5; Acompte</button>';
+  }
+  var deja = acomptesRecus(v);
+  if(deja > 0){
+    h += '<span class="xs" style="color:#3B6D11;font-weight:700">Acompte recu : '
+       + Math.round(deja).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA</span>';
+  }
+  return h;
+}
+
 // Modale saisie paiement
 var paiementVid = null;
+// Vrai quand la modale est ouverte en mode acompte : le versement est alors
+// marque comme tel, ce qui l'ecarte du calcul des delais et l'affiche dans
+// l'indicateur des acomptes sur dossiers en cours.
+var paiementEstAcompte = false;
+
+function ouvrirSaisieAcompte(btn){
+  if(!peutSaisirAcompte()){
+    afficherToastNotif('Droits insuffisants', 'Seules la Direction et la reception enregistrent un acompte.', 'alerte');
+    return;
+  }
+  paiementVid = btn.getAttribute('data-vid');
+  var v = vehicles.find(function(x){return x.id===paiementVid;});
+  if(!v) return;
+  paiementEstAcompte = true;
+  var total = montantDevisDossier(v);
+  var deja = parseFloat(v.montantPaye)||0;
+  document.getElementById('paiementVehInfo').textContent =
+    v.immat+' — '+v.client+' — Devis : '+Math.round(total).toLocaleString('fr-FR', GOS_FMT0)+' FCFA'
+    + (deja > 0 ? ' — deja verse : '+Math.round(deja).toLocaleString('fr-FR', GOS_FMT0)+' FCFA' : '');
+  var titre = document.getElementById('paiementTitre');
+  if(titre) titre.innerHTML = '&#x1F4B5; Enregistrer un acompte';
+  // Montant laisse VIDE, a l'inverse d'un reglement de facture : un acompte
+  // est par nature partiel, pre-remplir le total inviterait a l'erreur.
+  document.getElementById('paiementMontant').value = '';
+  document.getElementById('paiementDate').value = new Date().toISOString().split('T')[0];
+  document.getElementById('paiementNote').value = '';
+  document.getElementById('modalPaiement').style.display='flex';
+}
 function ouvrirSaisiePaiement(btn){
   paiementVid = btn.getAttribute('data-vid');
   var v = vehicles.find(function(x){return x.id===paiementVid;});
   if(!v) return;
-  var lignes = v.chiffrage && v.chiffrage.lignes ? v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
-  var montantFacture = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
+  paiementEstAcompte = false;
+  var montantFacture = montantDevisDossier(v);
   document.getElementById('paiementVehInfo').textContent = v.immat+' — '+v.client+' — Facture : '+montantFacture.toLocaleString('fr-FR', GOS_FMT0)+' FCFA';
-  // Préremplir avec le montant de la facture (modifiable)
-  var lignesPre = v.chiffrage && v.chiffrage.lignes ? v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
-  var montantFacturePre = lignesPre.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
+  var titre = document.getElementById('paiementTitre');
+  if(titre) titre.innerHTML = '&#x1F4B5; Enregistrer un paiement';
+  // Préremplir avec le reste a payer (modifiable)
+  var montantFacturePre = montantFacture;
   var dejaPaye = parseFloat(v.montantPaye)||0;
   var resteAPayer = montantFacturePre - dejaPaye;
   document.getElementById('paiementMontant').value = resteAPayer > 0 ? resteAPayer : montantFacturePre;
@@ -10895,7 +11072,11 @@ function ouvrirSaisiePaiement(btn){
   document.getElementById('paiementNote').value = v.paiementNote||'';
   document.getElementById('modalPaiement').style.display='flex';
 }
-function closePaiementModal(){ document.getElementById('modalPaiement').style.display='none'; paiementVid=null; }
+function closePaiementModal(){
+  document.getElementById('modalPaiement').style.display='none';
+  paiementVid = null;
+  paiementEstAcompte = false;
+}
 function validerPaiement(){
   // Cas facture forfait
   if(window._paiementForfaitPk){
@@ -10935,7 +11116,11 @@ function validerPaiement(){
   // jamais ecraser, sinon un paiement en plusieurs fois efface les
   // versements precedents (bug corrige ici).
   if(!v.paiementsClient) v.paiementsClient = [];
-  v.paiementsClient.push({date: date?new Date(date).getTime():Date.now(), montant: montant, note: note});
+  var versement = {date: date?new Date(date).getTime():Date.now(), montant: montant, note: note};
+  // Un acompte est marque comme tel : son montant compte partout, mais il est
+  // ecarte du calcul des delais de reglement (il precede la facture).
+  if(paiementEstAcompte) versement.acompte = true;
+  v.paiementsClient.push(versement);
   v.montantPaye    = v.paiementsClient.reduce(function(s,p){return s+p.montant;},0);
   v.paiementDate   = date ? new Date(date).getTime() : Date.now(); // conserve pour retro-compat des lectures existantes
   v.paiementNote   = note;
@@ -10946,6 +11131,15 @@ function validerPaiement(){
   // modifie (il ne marque que detCurrentVid), le laissant vulnerable a
   // un ecrasement par une synchronisation perimee venant d'un autre
   // appareil, qui effacerait ce paiement fraichement enregistre.
+  // Trace : un encaissement avant facture doit pouvoir etre retrouve, avec
+  // son auteur et son montant.
+  if(paiementEstAcompte){
+    ajouterCommentaireSysteme(v, '&#x1F4B5; Acompte recu : '+Math.round(montant).toLocaleString('fr-FR', GOS_FMT0)
+      +' FCFA'+(note ? ' ('+note+')' : '')+' — avant facturation.',
+      currentUser ? currentUser.login : (currentRole||''), {financier: true});
+    afficherToastNotif('Acompte enregistre', v.immat+' — '+Math.round(montant).toLocaleString('fr-FR', GOS_FMT0)
+      +' FCFA. Reste a facturer : '+Math.round(Math.max(0, total - v.montantPaye)).toLocaleString('fr-FR', GOS_FMT0)+' FCFA.', 'ok');
+  }
   marquerVehiculeModifie(paiementVid);
   saveV();
   closePaiementModal();
@@ -11618,6 +11812,7 @@ function htmlCellulesFactureDetail(d){
     if(d.factureDeposee && d.delaiJours!==null && d.delaiJours!==undefined){
       delaiTxtF += '<div class="xs muted" style="margin-top:2px">'+d.delaiJours+' j depuis depot</div>';
     }
+    h += '<td></td>';   // colonne Acompte : sans objet pour une facture forfait
     h += '<td>'+delaiTxtF+'</td>';
 
     h += '<td><div class="flex gap6">';
@@ -11651,6 +11846,13 @@ function htmlCellulesFactureDetail(d){
   var engLieD = trouverEngagementPourFacture(refKeyFacture('devis', d.id));
   var badgeAvanceD = engLieD ? '<div style="margin-top:2px"><span class="badge b-amber" style="font-size:9px" title="Facture liee a une avance bancaire">&#x1F517; '+engLieD.nom+'</span></div>' : '';
   h += '<td class="xs">'+numFactCell+'<br>'+refCell+badgeAvanceD+'</td>';
+
+  if(d.acompte > 0){
+    h += '<td class="xs"><span class="badge b-green" style="font-size:9px" title="Acompte verse par le client avant la facture">&#x1F4B5; Acompte '
+       + Math.round(d.acompte).toLocaleString('fr-FR', GOS_FMT0) + '</span></td>';
+  } else {
+    h += '<td></td>';
+  }
 
   var delaiTxt;
   if(!d.factureDeposee) delaiTxt = '<span class="xs muted">En attente de depot</span>';
@@ -12052,7 +12254,7 @@ function rendreQuatreTableauxParClient(dossiers, prefixeExpand, titreNonDeposee)
     }
 
     html += '<div class="tw"><table><thead><tr>';
-    html += '<th>Client</th><th>Vehicule</th><th style="text-align:right">Montant</th><th>N&deg; Facture / Ref.</th><th>Echeance</th><th></th>';
+    html += '<th>Client</th><th>Vehicule</th><th style="text-align:right">Montant</th><th>N&deg; Facture / Ref.</th><th>Acompte</th><th>Echeance</th><th></th>';
     html += '</tr></thead><tbody>';
 
     clientsListe.forEach(function(c){
@@ -12162,8 +12364,11 @@ function calculerLedgerForfaitClient(engageParMois, payeParMois){
 function delaiMoyenReglementClient(client){
   var delais = [];
   vehicles.filter(function(v){return v.client===client && v.chiffrage && v.chiffrage.lignes;}).forEach(function(v){
-    if(v.paiementDate && v.factureDeposeeLe){
-      delais.push(Math.floor((v.paiementDate - v.factureDeposeeLe)/86400000));
+    // datePaiementPourDelai ecarte les acomptes : verses avant la facture,
+    // ils donneraient un delai negatif et fausseraient la moyenne.
+    var dPaie = datePaiementPourDelai(v);
+    if(dPaie && v.factureDeposeeLe){
+      delais.push(Math.floor((dPaie - v.factureDeposeeLe)/86400000));
     }
   });
   FORFAIT_FACTURES.filter(function(f){return f.client===client && f.statut==='payee' && f.paiementDate && f.deposeeDate;}).forEach(function(f){
@@ -14601,7 +14806,10 @@ function collecterHistoriquePaiementsClients(){
       historique.push({
         type:'devis', client:v.client, vehId:v.id, immat:v.immat, marque:v.marque, modele:v.modele,
         datePaiement:p.date, montant:p.montant, note:p.note||'',
-        dateDepot:dateDepot, delai: dateDepot ? Math.round((p.date-dateDepot)/86400000) : null,
+        dateDepot:dateDepot,
+        // Un acompte n'a pas de delai : il precede la facture.
+        delai: (p.acompte === true || !dateDepot) ? null : Math.round((p.date-dateDepot)/86400000),
+        acompte: p.acompte === true,
         numFacture: v.numeroFactureExterne||'', numSecondaire: v.numeroSecondaire||'',
         paiementIndex: idx
       });
@@ -16410,7 +16618,7 @@ function histPaieLigneDetailClient(client, p){
   return [client,
           p.datePaiement ? new Date(p.datePaiement).toLocaleDateString('fr-FR') : '',
           histPaieRefFacture(p),
-          p.type === 'forfait' ? 'Forfait' : 'Devis',
+          (p.type === 'forfait' ? 'Forfait' : 'Devis') + (p.acompte ? ' (acompte)' : ''),
           (p.delai === null || p.delai === undefined) ? '' : p.delai,
           p.note || '',
           Math.round(p.montant)];
@@ -16746,6 +16954,11 @@ function htmlTableauHistPaieClients(groupes){
         var refFacture = histPaieRefFacture(p);
         var delaiTxt = p.delai===null ? '—' : (p.delai+' j');
         var delaiColor = p.delai===null ? '#888' : (p.delai>0 ? '#A32D2D' : '#3B6D11');
+        // Un acompte precede la facture : sa case Delai est vide, et ce badge
+        // dit pourquoi — sans lui, le vide ressemblait a une donnee manquante.
+        if(p.acompte === true){
+          refFacture += ' <span class="badge b-green" style="font-size:9px" title="Verse avant la facture : aucun delai de reglement ne s\'y applique">&#x1F4B5; Acompte</span>';
+        }
         var refKeyP = p.type==='forfait' ? refKeyFacture('forfait', (p.periodeKey||'')+'::'+p.client) : refKeyFacture('devis', p.vehId);
         var engLieP = trouverEngagementPourFacture(refKeyP);
         var badgeAvance = engLieP ? '<div style="margin-top:2px"><span class="badge b-amber" style="font-size:9px" title="Facture liee a une avance bancaire">&#x1F517; '+engLieP.nom+'</span></div>' : '';
@@ -27969,8 +28182,9 @@ function openDet(id){
   var b='<div style="background:#faf9f7;border-radius:9px;padding:12px;margin-bottom:14px">'+chronoHtml(v)+'</div>';
 
   // Dernier commentaire sous le chrono (masqué pour technicien et testeur)
-  if(v.commentaires && v.commentaires.length && currentRole!=='technicien' && currentRole!=='testeur'){
-    var lastComm = v.commentaires.slice().sort(function(a,b){ return b.ts-a.ts; })[0];
+  var _commFiche = commentairesVisibles(v);
+  if(_commFiche.length && currentRole!=='technicien' && currentRole!=='testeur'){
+    var lastComm = _commFiche.slice().sort(function(a,b){ return b.ts-a.ts; })[0];
     var dateComm = new Date(lastComm.ts).toLocaleDateString('fr-FR')+' '+new Date(lastComm.ts).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
     b += '<div style="background:#FFF8E8;border:1px solid #E8A44A;border-radius:6px;padding:8px 14px;margin-bottom:10px;cursor:pointer" data-cid="'+v.id+'" onclick="ouvrirCommentairesById(this)">'; 
     b += '<div style="display:flex;justify-content:space-between;margin-bottom:3px">';
@@ -28032,6 +28246,7 @@ function openDet(id){
       var _peutMettreEnTravaux = (v.prospectStatut==='valide_client');
       if(_peutMettreEnTravaux){
         b += '<button class="btn btn-success btn-sm" onclick="mettreEnTravauxProspect(\''+v.id+'\')">&#x1F527; Mettre en travaux</button>';
+        b += htmlBoutonAcompte(v);
       } else {
         b += '<button class="btn btn-sm" disabled title="Le client doit d\'abord valider le devis" style="opacity:0.5;cursor:not-allowed">&#x1F527; Mettre en travaux</button>';
         b += '<span class="xs muted">(en attente de validation du client)</span>';
@@ -28217,6 +28432,16 @@ function openDet(id){
     if(_showDevisCompl && currentRole!=='achats' && currentRole!=='direction'){
       b += renderDevisComplSection(v);
     }
+  }
+
+  // ── Acompte — des que le client a donne son accord sur le devis ──────────
+  var _htmlAcompte = htmlBoutonAcompte(v);
+  if(_htmlAcompte){
+    b += '<div style="margin-top:14px;padding:10px;background:#EAF3DE;border-radius:7px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">'
+       + '<span class="xs" style="color:#3B6D11;font-weight:700">Accord client obtenu</span>'
+       + _htmlAcompte
+       + '<span class="xs muted">L\'acompte se deduit automatiquement du montant a facturer.</span>'
+       + '</div>';
   }
 
   // ── Historique d'intervention — juste au-dessus du Chiffrage ──────────────
@@ -30180,6 +30405,51 @@ function genNumeroDoc(v, type){
   return prefixClient+'11-'+seq+'/'+dd+mm+yy;
 }
 
+// Pied « acompte / net a payer » d'un devis ou d'une facture imprimes.
+// totalDocument est le total REELLEMENT imprime sur ce document : le net en
+// decoule, pour que le pied tombe toujours juste sur ses propres lignes.
+// Rend une chaine vide quand le client n'a rien verse — le document est alors
+// exactement celui d'avant.
+function blocAcompteDocument(v, totalDocument){
+  var versements = (v && v.paiementsClient) || [];
+  if(!versements.length) return '';
+  var acomptes = versements.filter(function(p){ return p.acompte === true; });
+  var autres   = versements.filter(function(p){ return p.acompte !== true; });
+  var mAcompte = acomptes.reduce(function(s,p){ return s + (parseFloat(p.montant)||0); }, 0);
+  var mAutres  = autres.reduce(function(s,p){ return s + (parseFloat(p.montant)||0); }, 0);
+  if(mAcompte <= 0 && mAutres <= 0) return '';
+  var net = Math.max(0, totalDocument - mAcompte - mAutres);
+
+  function ligne(libelle, montant, signe){
+    return '<tr>'
+      + '<td style="padding:5px 10px;font-size:11px;text-align:right">'+libelle+'</td>'
+      + '<td style="padding:5px 10px;font-size:11px;text-align:right;font-weight:700;width:130px">'
+      + (signe||'') + Math.round(montant).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA</td></tr>';
+  }
+
+  var h = '<div style="margin-top:12px;display:flex;justify-content:flex-end">';
+  h += '<table style="border-collapse:collapse;min-width:330px">';
+  h += ligne('Total', totalDocument);
+  if(mAcompte > 0){
+    // La date du versement, ou leur nombre s'il y en a eu plusieurs : le
+    // client doit pouvoir rapprocher la ligne de son propre recu.
+    var precision = acomptes.length === 1
+      ? (acomptes[0].date ? ' du ' + new Date(acomptes[0].date).toLocaleDateString('fr-FR') : '')
+      : ' (' + acomptes.length + ' versements)';
+    h += ligne('Acompte reçu' + precision, mAcompte, '- ');
+  }
+  if(mAutres > 0){
+    h += ligne(autres.length === 1 ? 'Règlement reçu' : 'Règlements reçus (' + autres.length + ')', mAutres, '- ');
+  }
+  h += '<tr><td colspan="2" style="padding:0"><div style="border-top:2px solid #1a1a1a"></div></td></tr>';
+  h += '<tr>'
+     + '<td style="padding:7px 10px;font-size:12px;font-weight:700;text-align:right">NET À PAYER</td>'
+     + '<td style="padding:7px 10px;font-size:13px;font-weight:900;text-align:right;background:#1a1a1a;color:#fff">'
+     + Math.round(net).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA</td></tr>';
+  h += '</table></div>';
+  return h;
+}
+
 function imprimerDocument(vid, type){
   var v = vehicles.find(function(x){return x.id===vid;});
   if(!v) return;
@@ -30308,7 +30578,13 @@ function imprimerDocument(vid, type){
     +'</tr></tfoot>'
     +'</table>'
 
-    // Montant en lettres
+    // Acompte et net a payer : le client doit retrouver sur son document
+    // l'argent qu'il a deja verse. Le net se calcule sur le total imprime
+    // ci-dessus, et non sur un total recalcule ailleurs.
+    + blocAcompteDocument(v, total)
+
+    // Montant en lettres — celui du TOTAL, pas du net : c'est le montant de
+    // la facture, l'acompte n'en est qu'une deduction au paiement.
     +'<div style="margin-top:16px;font-size:11px">'
     +'Arrêté la présente facture à la somme de : <strong>'+totalLettres+'</strong>'
     +'</div>'
