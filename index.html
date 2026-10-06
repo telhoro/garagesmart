@@ -2,12 +2,6 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8"/>
-<script>
-/* APERCU UNIQUEMENT — absent du fichier de production. */
-(function(){ var rien = function(){};
-  try{ console.log = rien; console.info = rien; console.debug = rien; console.warn = rien; }catch(e){}
-})();
-</script>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>GarageOS</title>
 <style>
@@ -35616,7 +35610,6 @@ var GOS_AUTH = (function(){
     });
   }
   function bandeauTransition(visible){
-    visible = false;   // APERCU : bandeau masque
     var el = document.getElementById('gosBandeauTransition');
     if(!visible){ if(el) el.remove(); return; }
     if(!el){ el = document.createElement('div'); el.id = 'gosBandeauTransition';
@@ -35636,11 +35629,7 @@ var GOS_AUTH = (function(){
       surUtilisateur(cred.user);
     }).catch(function(e){
       var code = e && e.code || '';
-      if(code === 'auth/network-request-failed'){
-        // APERCU : pas de reseau — on tente l'ancienne connexion locale.
-        if(GOS_AUTH_CFG.connexionLocaleTransitoire && saisie.indexOf('@') < 0){ connexionAncienne(saisie.toLowerCase(), mdp); return; }
-        erreurConnexion('Sans reseau : utilisez un identifiant simple (ex. direction), pas une adresse e-mail.'); return;
-      }
+      if(code === 'auth/network-request-failed'){ erreurConnexion('Connexion Internet obligatoire pour se connecter.'); return; }
       if(code === 'auth/user-disabled'){ erreurConnexion('Ce compte est desactive. Contactez la Direction.'); return; }
       if(GOS_AUTH_CFG.connexionLocaleTransitoire && saisie.indexOf('@') < 0){ connexionAncienne(saisie.toLowerCase(), mdp); return; }
       erreurConnexion('Identifiant ou mot de passe incorrect.');
@@ -35891,14 +35880,14 @@ function pageComptes(){ return GOS_M1_OUTIL.html() + GOS_PERSONNEL.html() + page
 
 
 var firebaseConfig = {
-  "apiKey": "AIzaSyADjw-1tjNY0kw9ZoEQ0bohex8vuetn0Zw",
-  "authDomain": "garageos-test-c09.firebaseapp.com",
-  "databaseURL": "https://garageos-test-c09-default-rtdb.firebaseio.com",
-  "projectId": "garageos-test-c09",
-  "storageBucket": "garageos-test-c09.firebasestorage.app",
-  "messagingSenderId": "528984721490",
-  "appId": "1:528984721490:web:39c7e1ff9a61086e56778b"
-}; // C-09 : projet Firebase de TEST
+  apiKey: "AIzaSyDJncdc6aaiOO0Nl3_bGQ-8peSVa8gdmMU",
+  authDomain: "garage-smart-erp.firebaseapp.com",
+  projectId: "garage-smart-erp",
+  storageBucket: "garage-smart-erp.firebasestorage.app",
+  messagingSenderId: "200279404694",
+  appId: "1:200279404694:web:ab323a97692797967952b7",
+  databaseURL: "https://garage-smart-erp-default-rtdb.firebaseio.com"
+};
 
 // ID unique par appareil - défini en premier
 var deviceId = localStorage.getItem('gos_device_id');
@@ -35921,7 +35910,7 @@ function initFirebase(){
       fbApp = firebase.app(); // déjà initialisé
     }
     fbDb = firebase.database();
-    /* APERCU : message de demarrage retire */
+    console.log('Firebase OK, db:', fbDb.ref().toString());
     
     // Indicateur de connexion
     fbDb.ref('.info/connected').on('value', function(snap){
@@ -36486,44 +36475,9 @@ window.onload=function(){
 
 </script>
   <!-- Firebase SDK chargé en dernier -->
-  <!-- APERCU UNIQUEMENT — absent du fichier de production.
-       Charge le kit Firebase depuis gstatic, et bascule sur jsdelivr si ce
-       domaine est bloque par l'environnement d'affichage. Les fichiers sont
-       charges dans l'ordre : le module app doit etre pret avant database et auth. -->
-  <script>
-  (function(){
-    var SOURCES = ['https://www.gstatic.com/firebasejs/10.7.1/',
-                   'https://cdn.jsdelivr.net/npm/firebase@10.7.1/'];
-    var FICHIERS = [['firebase-app-compat.js', 'onFirebaseLoaded'],
-                    ['firebase-database-compat.js', 'onFirebaseDatabaseLoaded'],
-                    ['firebase-auth-compat.js', 'onFirebaseAuthLoaded']];
-    function charger(iSource){
-      var base = SOURCES[iSource];
-      if(!base){
-        console.error('Firebase : aucune source joignable. Utilisez le serveur local pour vos essais.');
-        return;
-      }
-      var i = 0;
-      (function suivant(){
-        if(i >= FICHIERS.length){ console.log('Firebase charge depuis ' + base); return; }
-        var f = FICHIERS[i];
-        var sc = document.createElement('script');
-        sc.src = base + f[0];
-        sc.onload = function(){
-          try{ if(typeof window[f[1]] === 'function') window[f[1]](); }
-          catch(e){ console.error(f[1], e); }
-          i++; suivant();
-        };
-        sc.onerror = function(){
-
-          charger(iSource + 1);
-        };
-        document.head.appendChild(sc);
-      })();
-    }
-    charger(0);
-  })();
-  </script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js" onload="onFirebaseLoaded()"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js" onload="onFirebaseDatabaseLoaded()"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js" onload="onFirebaseAuthLoaded()"></script>
 <div class="overlay" id="modalCommentaires" style="display:none" onclick="if(event.target===this)this.style.display='none'">
 <div class="modal" style="max-width:520px">
   <div id="commBody"></div>
