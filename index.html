@@ -199,7 +199,7 @@ tr:hover td{background:#faf9f7}
 
 <div id="_printContent" style="display:none;position:fixed;inset:0;background:#fff;z-index:99999;overflow:auto;padding:20px;box-sizing:border-box">
   <div style="position:fixed;top:12px;right:12px;display:flex;gap:8px;z-index:100000">
-    <button onclick="window.print()" style="background:#3B6D11;color:#fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:13px">&#x1F5A8; Imprimer / PDF</button>
+    <button onclick="imprimerApercu()" style="background:#3B6D11;color:#fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:13px">&#x1F5A8; Imprimer / PDF</button>
     <button onclick="fermerImpression()" style="background:#A32D2D;color:#fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:13px">&#x2715; Fermer</button>
   </div>
   <div id="_printBody" style="max-width:800px;margin:60px auto 0"></div>
@@ -29824,6 +29824,9 @@ function fermerImpression(){
   if(m) m.style.display = 'none';
   var p = document.getElementById('_printContent');
   if(p) p.style.display = 'none';
+  // Vider le cadre d'apercu : son document n'a plus de raison de vivre.
+  var hote = document.getElementById('_printBody');
+  if(hote) hote.innerHTML = '';
   // Unlock seulement si la fiche détail est aussi fermée
 
   var det = document.getElementById('modalDet');
@@ -29977,10 +29980,11 @@ function imprimerFicheEntree(vid, immatParam, vOverride){
   }
 
   var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Fiche entree - '+v.immat+'</title></head><body>';
-  // IMPORTANT : le style est place ICI, DANS le body (et non dans le
-  // head) car openPrintWindow() n'extrait que le contenu situe entre
-  // <body> et </body> — un style place dans le head serait silencieusement
-  // ignore et aucune des regles ci-dessous ne s'appliquerait jamais.
+  // Le style est place ici, dans le body. Il y restait indispensable tant que
+  // openPrintWindow() n'extrayait que le corps du document ; depuis que
+  // l'apercu s'affiche dans un cadre isole qui recoit le document ENTIER, le
+  // head conviendrait aussi. On n'y touche pas : ces regles ne sortent plus
+  // du cadre, et deplacer un style qui fonctionne n'apporte rien.
   html += '<style>';
   html += '*{box-sizing:border-box}';
   html += '*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}';
@@ -30691,17 +30695,48 @@ function genNumeroDoc(v, type){
 
 
 function openPrintWindow(html){
-  // Extraire juste le contenu body
-  var bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-  var bodyContent = bodyMatch ? bodyMatch[1] : html;
-  // Supprimer les boutons déjà intégrés dans le HTML généré
-  bodyContent = bodyContent.replace(/<div class="btn-bar">[\s\S]*?<\/div>/, '');
-  
-  var body = document.getElementById('_printBody');
+  var hote = document.getElementById('_printBody');
   var overlay = document.getElementById('_printContent');
-  if(!body || !overlay) return;
-  body.innerHTML = bodyContent;
+  if(!hote || !overlay) return;
+  // Le document s'affiche dans un cadre isole, et non injecte dans la page.
+  // Un document imprimable declare body{width:186mm}, h1{}, .box{}... : injecte
+  // tel quel, il restylait TOUTE l'application, et le <style> continuait d'agir
+  // apres la fermeture de l'apercu (un style masque reste actif).
+  hote.innerHTML = '';
+  var cadre = document.createElement('iframe');
+  cadre.id = '_printFrame';
+  cadre.title = 'Apercu avant impression';
+  cadre.style.cssText = 'width:100%;min-height:78vh;border:none;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.15);display:block';
+  hote.appendChild(cadre);
+  var doc = cadre.contentDocument || (cadre.contentWindow && cadre.contentWindow.document);
+  if(!doc){ overlay.style.display = 'block'; return; }
+  doc.open();
+  doc.write(html);
+  doc.close();
+  // Ajuster la hauteur au contenu : l'apercu defile avec la page, et non
+  // dans une barre de defilement interne au cadre. Deux passages, le second
+  // apres le chargement des images et des polices.
+  function ajuster(){
+    try{
+      var h = doc.body ? doc.body.scrollHeight : 0;
+      if(h > 0) cadre.style.height = (h + 40) + 'px';
+    }catch(e){ /* document non lisible : la hauteur minimale suffit */ }
+  }
+  setTimeout(ajuster, 150);
+  setTimeout(ajuster, 900);
   overlay.style.display = 'block';
+}
+
+// Imprime le document de l'apercu, et non la page qui l'entoure : c'est ainsi
+// que ses propres regles @page (format, marges) sont respectees.
+function imprimerApercu(){
+  var cadre = document.getElementById('_printFrame');
+  if(cadre && cadre.contentWindow){
+    cadre.contentWindow.focus();
+    cadre.contentWindow.print();
+    return;
+  }
+  window.print();   // repli : aucun cadre, on imprime la page
 }
 
 
