@@ -21976,6 +21976,7 @@ function annulerModeEditProspect(){
 }
 
 function confirmerChiffrageProspect(){
+  commiterSaisiesChiffrage();
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v || !v.chiffrage) return;
   var lignesValides = v.chiffrage.lignes.filter(function(l){return (l.piece||'').trim();});
@@ -22007,6 +22008,7 @@ function modifierChiffrageProspect(){
 }
 
 function validerChiffrageProspect(){
+  commiterSaisiesChiffrage();
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v || !v.isProspect) return;
   if(!v.chiffrage || !v.chiffrage.lignes || !v.chiffrage.lignes.filter(function(l){return (l.piece||'').trim();}).length){
@@ -22068,6 +22070,39 @@ function verrouilerChiffrageDirection(){
 function toggleChiffrageEdit(){
   chiffrageEditMode = !chiffrageEditMode;
   openDetKeepEdit(detCurrentVid);
+}
+
+// Reprend dans le modele la valeur de TOUS les champs de chiffrage affiches.
+// A appeler avant chaque validation : sans cela, le champ en cours de saisie
+// n'a pas encore transmis sa valeur (il ne le fait qu'a la perte du focus) et
+// la validation enregistrerait l'ancien chiffre — il fallait alors valider
+// une seconde fois.
+// Les deux presentations du chiffrage sont couvertes : la fiche du vehicule
+// (data-clid / data-cfield) et le devis prospect (data-lid / data-field).
+// Rend le nombre de champs repris.
+function commiterSaisiesChiffrage(){
+  if(typeof document === 'undefined' || !document.querySelectorAll) return 0;
+  var repris = 0;
+  var jeux = [['[data-clid][data-cfield]', 'data-clid', 'data-cfield'],
+              ['[data-lid][data-field]',   'data-lid',  'data-field']];
+  jeux.forEach(function(jeu){
+    var champs = document.querySelectorAll(jeu[0]);
+    for(var i = 0; i < champs.length; i++){
+      var el = champs[i];
+      if(el.disabled) continue;
+      if(el.value === undefined || el.value === null) continue;
+      var champ = el.getAttribute(jeu[2]);
+      // « source » et « stockArticleId » redessinent la fiche : les reprendre
+      // ici interromprait la boucle. Ce sont des menus deroulants, dont la
+      // valeur part des la selection — elle n'est jamais en retard.
+      if(champ === 'source' || champ === 'stockArticleId') continue;
+      // Un identifiant inconnu de ce chiffrage (champ d'un devis
+      // complementaire, par exemple) ne trouve aucune ligne : sans effet.
+      updateChiffrageLigne(el.getAttribute(jeu[1]), champ, el.value);
+      repris++;
+    }
+  });
+  return repris;
 }
 
 function updateChiffrageLigneByEl(el){
@@ -22432,6 +22467,9 @@ function rejeterFinancier(){
 }
 
 function validerChiffrage(){
+  // Reprendre d'abord ce qui est affiche : un prix tape juste avant le clic
+  // n'a pas encore ete transmis par le champ.
+  commiterSaisiesChiffrage();
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v || !v.chiffrage) return;
   var lignesChiffrees = v.chiffrage.lignes.filter(function(cl){return cl.prixAchat || cl.prixVente;});
@@ -22815,6 +22853,7 @@ function setSourceFinancement(sel){
 // reservation stock non concernee ici, puisqu'on ne fait que cocher, pas
 // decocher).
 function toutValiderPieces(){
+  commiterSaisiesChiffrage();
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v || !v.chiffrage || !v.chiffrage.lignes) return;
   // C-09 v13 : ce bouton contournait le verrou de validation.
