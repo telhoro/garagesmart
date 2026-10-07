@@ -485,7 +485,9 @@ function renderDashboard(){
     });
     if(facturesAAfficher.length){
       html += '<div class="section-title">Vos factures</div>';
-      html += '<table><thead><tr><th>Vehicule</th><th>Date</th><th style="text-align:right">Montant</th><th>Statut</th><th></th></tr></thead><tbody>';
+      html += '<table><thead><tr><th>Vehicule</th><th>Date</th><th style="text-align:right">Montant</th>'
+           + '<th style="text-align:right">Deja verse</th><th style="text-align:right">Reste a payer</th>'
+           + '<th>Statut</th><th></th></tr></thead><tbody>';
       facturesAAfficher.forEach(function(v){
         var montantFacture = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();})
           .reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
@@ -495,6 +497,11 @@ function renderDashboard(){
         var statutClasse = paye>=montantFacture ? 'b-green' : (paye>0 ? 'b-amber' : 'b-red');
         html += '<tr><td>'+(v.immat||'—')+'</td><td>'+(dateFacture?new Date(dateFacture).toLocaleDateString('fr-FR'):'—')+'</td>';
         html += '<td style="text-align:right;font-family:monospace">'+montantFacture.toLocaleString('fr-FR')+'</td>';
+        // Ce que le client a deja verse, et ce qu'il lui reste : le mot
+        // « Partiel » seul ne lui disait ni l'un ni l'autre.
+        var resteAPayer = Math.max(0, montantFacture - paye);
+        html += '<td style="text-align:right;font-family:monospace;color:#3B6D11">'+(paye?Math.round(paye).toLocaleString('fr-FR'):'—')+'</td>';
+        html += '<td style="text-align:right;font-family:monospace;font-weight:700;color:'+(resteAPayer>0?'#A32D2D':'#3B6D11')+'">'+(resteAPayer?Math.round(resteAPayer).toLocaleString('fr-FR'):'0')+'</td>';
         html += '<td><span class="badge '+statutClasse+'">'+statutLabel+'</span></td>';
         html += '<td><button class="btn-detail" onclick="imprimerFacture(\''+v.id+'\')">Imprimer</button></td></tr>';
       });
@@ -994,6 +1001,16 @@ function imprimerFacture(passageId){
   });
   html += '</tbody></table>';
   html += '<div class="tot">Total : '+total.toLocaleString('fr-FR')+' FCFA</div>';
+  // Versements deja recus et net a payer. Le net se calcule sur le total
+  // imprime juste au-dessus, pour que le pied tombe toujours sur ses propres
+  // lignes. Rien ne s'affiche si le client n'a rien verse.
+  var dejaVerse = Math.round(parseFloat(p.montantPaye)||0);
+  if(dejaVerse > 0){
+    var netAPayer = Math.max(0, total - dejaVerse);
+    html += '<div class="tot" style="font-weight:400">Deja verse : - '+dejaVerse.toLocaleString('fr-FR')+' FCFA</div>';
+    html += '<div class="tot" style="border-top:2px solid #1a1a1a;padding-top:6px;margin-top:6px;font-size:15px">'
+         + 'NET A PAYER : '+netAPayer.toLocaleString('fr-FR')+' FCFA</div>';
+  }
   html += '</body></html>';
 
   var w = window.open('', '_blank');
