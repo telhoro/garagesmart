@@ -22082,6 +22082,8 @@ function toggleChiffrageEdit(){
 // Rend le nombre de champs repris.
 function commiterSaisiesChiffrage(){
   if(typeof document === 'undefined' || !document.querySelectorAll) return 0;
+  var v = vehicles.find(function(x){ return x.id === detCurrentVid; });
+  if(!v || !v.chiffrage || !v.chiffrage.lignes) return 0;
   var repris = 0;
   var jeux = [['[data-clid][data-cfield]', 'data-clid', 'data-cfield'],
               ['[data-lid][data-field]',   'data-lid',  'data-field']];
@@ -22096,9 +22098,20 @@ function commiterSaisiesChiffrage(){
       // ici interromprait la boucle. Ce sont des menus deroulants, dont la
       // valeur part des la selection — elle n'est jamais en retard.
       if(champ === 'source' || champ === 'stockArticleId') continue;
-      // Un identifiant inconnu de ce chiffrage (champ d'un devis
-      // complementaire, par exemple) ne trouve aucune ligne : sans effet.
-      updateChiffrageLigne(el.getAttribute(jeu[1]), champ, el.value);
+      var lid = el.getAttribute(jeu[1]);
+      var cl = v.chiffrage.lignes.find(function(x){ return x.devisId === lid || x.libreId === lid; });
+      // Identifiant inconnu de ce chiffrage (champ d'un devis complementaire,
+      // par exemple) : on n'y touche pas.
+      if(!cl) continue;
+      // N'ECRIRE QUE SI LE CHAMP AFFICHE AUTRE CHOSE QUE L'ENREGISTRE.
+      // Une reecriture a l'identique traverserait la regle v12 « un montant
+      // valide qui change perd sa validation » : un champ vide devenu 0
+      // suffirait a retirer la validation de la Direction, sans que personne
+      // n'ait rien modifie. La comparaison se fait sur la valeur AFFICHEE,
+      // exactement celle que le tableau a ecrite dans le champ.
+      var enregistre = (cl[champ] === undefined || cl[champ] === null) ? '' : String(cl[champ]);
+      if(String(el.value) === enregistre) continue;
+      updateChiffrageLigne(lid, champ, el.value);
       repris++;
     }
   });
@@ -22401,6 +22414,11 @@ function validerPiecesRestantes(){
 }
 
 function validerFinancier(){
+  // Meme precaution que pour le chiffrage : un montant corrige juste avant le
+  // clic doit etre pris en compte. S'il a reellement change sur une ligne deja
+  // validee, la regle v12 retire cette validation ici — au bon moment, plutot
+  // que de valider financierement un montant que la Direction n'a pas vu.
+  commiterSaisiesChiffrage();
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v) return;
   // DC indépendant : même logique que devis normal (cases à cocher)
