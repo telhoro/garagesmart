@@ -32201,12 +32201,130 @@ function doLogout(){
 var importHistoData = null; // resultat du parsing, avant validation
 var importHistoStats = null;
 
+// Denombre et date les dossiers deja entres par cet import. LECTURE SEULE :
+// aucune ecriture, aucune correction — l'objet est de mesurer avant de
+// decider.
+//
+// Signal d'inversion jour/mois : une date mal lue par l'ancienne version a
+// pour JOUR l'ancien MOIS (le 5 novembre devenait le 11 mai, jour 11 = mois
+// d'origine 11). Comme seules les lignes dont le jour d'origine etait <= 12
+// survivaient, TOUTES les dates ainsi abimees ont un jour <= 12. Sur un
+// historique reel, environ 61 % des visites devraient tomber au-dela du 12 :
+// n'en trouver AUCUNE est la signature de l'inversion.
+function ihEtatDesLieux(){
+  var imports = vehicles.filter(function(v){
+    return v.isImportHistorique === true || String(v.id || '').indexOf('imp_') === 0;
+  });
+  if(!imports.length) return {total: 0};
+  var jourSup12 = 0, sansVin = 0, sansKm = 0, actifs = 0;
+  var parClient = {};
+  imports.forEach(function(v){
+    var d = v.entree ? new Date(v.entree) : null;
+    if(d && d.getUTCDate() > 12) jourSup12++;
+    if(!v.vin) sansVin++;
+    if(!v.km) sansKm++;
+    if(LIV_ST.indexOf(v.status) < 0) actifs++;
+    var cl = v.client || '(sans client)';
+    if(!parClient[cl]) parClient[cl] = {n: 0, min: null, max: null};
+    parClient[cl].n++;
+    if(v.entree){
+      if(!parClient[cl].min || v.entree < parClient[cl].min) parClient[cl].min = v.entree;
+      if(!parClient[cl].max || v.entree > parClient[cl].max) parClient[cl].max = v.entree;
+    }
+  });
+  return {total: imports.length, jourSup12: jourSup12, sansVin: sansVin,
+          sansKm: sansKm, actifs: actifs, parClient: parClient, lignes: imports};
+}
+
+function htmlEtatDesLieuxImport(){
+  var e = ihEtatDesLieux();
+  if(!e.total){
+    return '<div class="info-box" style="margin-bottom:16px">Aucun dossier issu d’un import '
+         + 'historique n’est présent dans cette base.</div>';
+  }
+  var inverse = (e.jourSup12 === 0);
+  var html = '<div class="card" style="margin-bottom:16px;border-left:4px solid '
+           + (inverse ? '#A32D2D' : '#8a6d1f') + '">';
+  html += '<div class="card-head">État des lieux des imports déjà effectués '
+       + '<span class="xs muted">(lecture seule — rien n’est modifié)</span></div>';
+
+  html += '<div class="kgrid k3" style="padding:14px 16px 0">';
+  html += kpi('Dossiers importés', e.total, '');
+  html += kpi('Datés après le 12 du mois', e.jourSup12, inverse ? 'red' : 'green');
+  html += kpi('Encore ouverts en atelier', e.actifs, e.actifs ? 'amber' : 'green');
+  html += '</div>';
+
+  if(inverse){
+    html += '<div style="margin:12px 16px;padding:10px 12px;background:#FBE9E7;color:#A32D2D;font-size:13px">';
+    html += '<strong>&#x26A0; Les dates de ces ' + e.total + ' dossiers sont très probablement '
+         + 'inversées (jour et mois permutés).</strong><br>';
+    html += 'Aucun d’entre eux n’est daté après le 12 du mois. Sur un historique réel, '
+         + 'environ six visites sur dix devraient l’être : c’est la signature du défaut de '
+         + 'lecture des dates corrigé dans cette version. Les visites dont le jour dépassait 12 '
+         + 'n’ont, elles, jamais été importées.';
+    html += '</div>';
+  } else {
+    html += '<div style="margin:12px 16px;padding:10px 12px;background:#F4F7F0;color:#3B6D11;font-size:13px">';
+    html += e.jourSup12 + ' dossier(s) sur ' + e.total + ' sont datés après le 12 du mois : '
+         + 'la répartition est normale, ces dates ne portent pas la marque de l’inversion.';
+    html += '</div>';
+  }
+
+  var noms = Object.keys(e.parClient).sort();
+  html += '<div class="tw"><table><thead><tr><th>Client</th><th style="text-align:right">Dossiers</th>'
+       + '<th>Période enregistrée</th></tr></thead><tbody>';
+  noms.forEach(function(nom){
+    var c = e.parClient[nom];
+    html += '<tr><td class="xs"><strong>' + gosExpEchapper(nom) + '</strong></td>';
+    html += '<td class="xs" style="text-align:right">' + c.n + '</td>';
+    html += '<td class="xs">' + (c.min ? new Date(c.min).toLocaleDateString('fr-FR')
+          + ' → ' + new Date(c.max).toLocaleDateString('fr-FR') : '—') + '</td></tr>';
+  });
+  html += '</tbody></table></div>';
+
+  html += '<details style="margin-top:4px"><summary style="cursor:pointer;padding:8px 16px;font-size:13px;'
+       + 'font-weight:700">Voir les ' + e.total + ' dossiers, un par un</summary>';
+  html += '<div class="tw"><table><thead><tr><th>Immat.</th><th>Client</th><th>Date en base</th>'
+       + '<th>Si jour et mois étaient inversés</th><th>Statut</th><th>Châssis</th>'
+       + '<th style="text-align:right">Km</th></tr></thead><tbody>';
+  e.lignes.slice().sort(function(a, b){ return (a.entree || 0) - (b.entree || 0); }).forEach(function(v){
+    var d = v.entree ? new Date(v.entree) : null;
+    // La date telle qu'elle serait si l'on remettait jour et mois a l'endroit
+    // — montree a titre de COMPARAISON seulement, rien n'est ecrit.
+    var permute = null;
+    if(d && d.getUTCDate() <= 12){
+      permute = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCDate() - 1, d.getUTCMonth() + 1));
+      if(permute.getUTCMonth() !== d.getUTCDate() - 1) permute = null; // 31 fevrier
+    }
+    html += '<tr><td class="xs"><strong>' + gosExpEchapper(v.immat || '—') + '</strong></td>';
+    html += '<td class="xs">' + gosExpEchapper(v.client || '—') + '</td>';
+    html += '<td class="xs">' + (d ? d.toLocaleDateString('fr-FR') : '—') + '</td>';
+    html += '<td class="xs" style="color:#3B6D11">' + (permute ? permute.toLocaleDateString('fr-FR') : '—') + '</td>';
+    html += '<td class="xs">' + ((STATUSES[v.status] && STATUSES[v.status].l) || v.status || '—') + '</td>';
+    html += '<td class="xs" style="font-family:monospace">' + (v.vin ? gosExpEchapper(v.vin) : '<span class="muted">—</span>') + '</td>';
+    html += '<td class="xs" style="text-align:right">' + (v.km ? v.km.toLocaleString('fr-FR', GOS_FMT0) + ' km' : '<span class="muted">—</span>') + '</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div></details>';
+  html += '</div>';
+  return html;
+}
+
 function pageImportHistorique(){
   var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Import historique client (Excel)</h2>';
   html += '</div>';
 
-  html += '<div class="info-box" style="margin-bottom:16px">Importez un fichier Excel contenant l\'historique de visites d\'un client (colonnes attendues : Immatriculation, N°Serie, Marque, Modele, Mise en circulation, Date Entree, Date Sortie, Km, Travaux realises). Une ligne = une visite. Les pieces (texte libre, une par ligne dans la cellule) sont automatiquement decoupees en lignes de chiffrage, prix a 0 (a completer ensuite).</div>';
+  html += htmlEtatDesLieuxImport();
+
+  html += '<div class="info-box" style="margin-bottom:16px">Une ligne du fichier = une visite. '
+       + 'Les intitulés de colonnes sont reconnus sans tenir compte des accents ni de la casse '
+       + '(« N° de châssis », « Kilométrage », « Date d’entrée »…). '
+       + 'Avant tout import, l’aperçu affiche la correspondance colonne par colonne, l’ordre '
+       + 'jour/mois retenu pour les dates, et la liste nommée de chaque ligne qui n’entrera pas. '
+       + 'Seules « Immatriculation » et « Date d’entrée » sont indispensables. '
+       + 'Les travaux (texte libre, un par ligne dans la cellule) deviennent des lignes de chiffrage à '
+       + 'prix 0, à compléter ensuite.</div>';
 
   // Liste des clients existants pour la datalist, generee directement ici
   // (au rendu de la page) plutot que via un appel externe separe — evite
@@ -32298,16 +32416,313 @@ function analyserFichierImportHisto(input){
 // Normalise une date Excel (peut arriver en texte 'yyyy-mm-dd', en Date JS
 // deja convertie par cellDates, ou en numero de serie Excel) vers un
 // timestamp JS, ou null si vide/invalide.
-function parserDateImport(val){
-  if(!val) return null;
-  if(val instanceof Date) return val.getTime();
-  if(typeof val==='number'){
-    // Numero de serie Excel (jours depuis 1899-12-30)
-    var epoch = new Date(Date.UTC(1899,11,30));
-    return epoch.getTime() + val*86400000;
+// Compare des intitules de colonnes sans se laisser arreter par un accent,
+// une majuscule, une apostrophe typographique ou un espace en trop.
+// « N° de châssis », « N° DE CHASSIS » et « n de chassis » donnent le meme
+// texte de comparaison.
+function ihSansAccents(s){
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')  // retire les accents
+    .replace(/[’ʼ']/g, ' ')                  // apostrophes -> espace
+    .replace(/[^a-zA-Z0-9]+/g, ' ')                    // ponctuation -> espace
+    .replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+// LA SEULE DESCRIPTION DES COLONNES ATTENDUES. Le reperage, le tableau de
+// correspondance affiche a l'ecran et le message d'erreur en sortent tous :
+// un intitule ajoute ici est reconnu partout, sans risque de divergence.
+// « requis » : sans cette colonne, l'import est refuse.
+var IH_COLONNES = [
+  {cle:'immat',   libelle:'Immatriculation',          requis:true,
+   alias:['immatriculation','immatricul','immat','plaque','numero d immatriculation']},
+  {cle:'entree',  libelle:'Date d’entrée',  requis:true,
+   alias:['date d entree','date entree','entree','arrivee','date d arrivee']},
+  {cle:'sortie',  libelle:'Date de sortie',           requis:false,
+   alias:['date de sortie','date sortie','sortie','restitution','date de restitution']},
+  {cle:'chassis', libelle:'N° de châssis',  requis:false,
+   alias:['n de chassis','numero de chassis','chassis','n serie','numero de serie','serie','vin']},
+  {cle:'marque',  libelle:'Marque',                   requis:false,
+   alias:['marque']},
+  {cle:'modele',  libelle:'Modèle',              requis:false,
+   alias:['modele','type de vehicule']},
+  {cle:'energie', libelle:'Énergie',             requis:false,
+   alias:['energie','carburant','motorisation']},
+  {cle:'mec',     libelle:'1ère mise en circulation', requis:false,
+   alias:['date de premiere mise en circulation','premiere mise en circulation',
+          '1ere mise en circulation','mise en circulation','mise en cir','mec']},
+  {cle:'ct',      libelle:'Date de visite technique', requis:false,
+   alias:['date de visite technique','visite technique','controle technique',
+          'date de controle technique','echeance ct']},
+  {cle:'km',      libelle:'Kilométrage',         requis:false,
+   alias:['kilometrage','kilometres','kilometre','km','kms','compteur']},
+  {cle:'travaux', libelle:'Travaux réalisés', requis:false,
+   alias:['travaux realises','travaux','prestations','prestation',
+          'interventions','intervention','reparations','reparation']}
+];
+
+// Repere chaque colonne attendue dans la ligne d'en-tetes.
+// Deux precautions : une colonne du fichier ne peut servir qu'A UNE SEULE
+// cle (sinon « Date de sortie » pourrait etre prise pour la date d'entree),
+// et un intitule est teste en entier avant d'etre teste comme fragment —
+// « km » ne doit pas rafler une colonne « Kilometrage par mois » avant que
+// « kilometrage » n'ait eu sa chance.
+// Rend {colonnes:{cle:index}, ignorees:[intitules du fichier sans emploi],
+//       manquantes:[libelles attendus et absents], requisesManquantes:[...]}.
+function ihRepererColonnes(entetesBrutes){
+  var entetes = (entetesBrutes || []).map(ihSansAccents);
+  var pris = {}, colonnes = {}, manquantes = [], requisesManquantes = [];
+  function chercher(alias, exact){
+    for(var a = 0; a < alias.length; a++){
+      for(var i = 0; i < entetes.length; i++){
+        if(pris[i] || !entetes[i]) continue;
+        if(exact ? entetes[i] === alias[a] : entetes[i].indexOf(alias[a]) >= 0) return i;
+      }
+    }
+    return -1;
   }
-  var d = new Date(val);
-  return isNaN(d.getTime()) ? null : d.getTime();
+  // Premier tour : correspondances exactes, pour tout le monde. Second tour :
+  // fragments, sur ce qui reste.
+  [true, false].forEach(function(exact){
+    IH_COLONNES.forEach(function(d){
+      if(colonnes[d.cle] !== undefined) return;
+      var i = chercher(d.alias, exact);
+      if(i >= 0){ colonnes[d.cle] = i; pris[i] = true; }
+    });
+  });
+  IH_COLONNES.forEach(function(d){
+    if(colonnes[d.cle] === undefined){
+      manquantes.push(d.libelle);
+      if(d.requis) requisesManquantes.push(d.libelle);
+    }
+  });
+  var ignorees = [];
+  (entetesBrutes || []).forEach(function(h, i){
+    if(!pris[i] && ihSansAccents(h)) ignorees.push(String(h).trim());
+  });
+  return {colonnes:colonnes, ignorees:ignorees, manquantes:manquantes,
+          requisesManquantes:requisesManquantes};
+}
+
+// DEDUIT l'ordre jour/mois de la colonne ENTIERE, au lieu de le supposer.
+// Un seul jour superieur a 12 quelque part dans la colonne suffit a trancher,
+// et c'est le cas de presque tous les fichiers reels. On ne devine que
+// lorsque la colonne entiere est ambigue (tous les nombres <= 12), et ce
+// choix est alors ECRIT A L'ECRAN pour que la Direction puisse le dementir.
+//   'jma'        : jour/mois/annee, certain
+//   'mja'        : mois/jour/annee, certain
+//   'jma_suppose': ambigu, convention francaise retenue
+//   'incoherent' : les deux ordres apparaissent dans la meme colonne
+//   'aucune'     : aucune date au format a/b/c (cellules date ou ISO)
+function ihOrdreDates(valeurs){
+  var premierSup12 = false, secondSup12 = false, vues = 0;
+  (valeurs || []).forEach(function(v){
+    if(v == null || v instanceof Date || typeof v === 'number') return;
+    var m = /^\s*(\d{1,2})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{2,4})/.exec(String(v));
+    if(!m) return;
+    vues++;
+    if(parseInt(m[1], 10) > 12) premierSup12 = true;
+    if(parseInt(m[2], 10) > 12) secondSup12 = true;
+  });
+  if(!vues) return 'aucune';
+  if(premierSup12 && secondSup12) return 'incoherent';
+  if(premierSup12) return 'jma';
+  if(secondSup12) return 'mja';
+  return 'jma_suppose';
+}
+
+function ihLibelleOrdre(ordre){
+  if(ordre === 'jma') return 'jour/mois/année (certain : la colonne contient des jours au-delà de 12)';
+  if(ordre === 'mja') return 'mois/jour/année (certain : la colonne contient des mois au-delà de 12)';
+  if(ordre === 'jma_suppose') return 'jour/mois/année <strong>supposé</strong> : aucune valeur de la colonne ne dépasse 12, l’ordre est indécidable. Vérifiez l’aperçu ci-dessous avant de confirmer.';
+  if(ordre === 'incoherent') return 'INCOHÉRENT : la colonne mélange les deux ordres';
+  return 'sans objet (vraies cellules date ou format ISO)';
+}
+
+// Lit une date d'import SANS JAMAIS passer par new Date(texte), qui lit le
+// mois en premier et qui est la cause du defaut corrige ici.
+// Rend {t: horodatage} ou {err: 'motif lisible'} — le motif est repris tel
+// quel dans la liste des lignes ecartees.
+function ihParserDate(val, ordre){
+  if(val === null || val === undefined || val === '') return {err:'vide'};
+  if(val instanceof Date){
+    return isNaN(val.getTime()) ? {err:'cellule date invalide'} : {t: val.getTime()};
+  }
+  if(typeof val === 'number'){
+    // Numero de serie Excel (jours depuis le 30/12/1899).
+    if(val <= 0 || val > 80000) return {err:'numéro de série Excel hors limites : ' + val};
+    return {t: Date.UTC(1899, 11, 30) + Math.round(val) * 86400000};
+  }
+  var txt = String(val).trim();
+  var iso = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(txt);
+  var j, mo, an;
+  if(iso){
+    an = parseInt(iso[1], 10); mo = parseInt(iso[2], 10); j = parseInt(iso[3], 10);
+  } else {
+    var m = /^(\d{1,2})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{2,4})$/.exec(txt);
+    if(!m) return {err:'format de date non reconnu : « ' + txt + ' »'};
+    if(ordre === 'mja'){ mo = parseInt(m[1], 10); j = parseInt(m[2], 10); }
+    else { j = parseInt(m[1], 10); mo = parseInt(m[2], 10); }
+    an = parseInt(m[3], 10);
+    if(an < 100) an += (an < 70 ? 2000 : 1900);
+  }
+  if(mo < 1 || mo > 12) return {err:'mois ' + mo + ' inexistant dans « ' + txt + ' »'};
+  if(j < 1 || j > 31)   return {err:'jour ' + j + ' inexistant dans « ' + txt + ' »'};
+  // Minuit UTC, comme les dates saisies dans la fiche d'entree : la detection
+  // de doublon « moins de 24 h » reste ainsi une comparaison de jours.
+  var t = Date.UTC(an, mo - 1, j);
+  var d = new Date(t);
+  // Attrape le 31 fevrier et consorts, que Date.UTC reporte silencieusement
+  // sur le mois suivant.
+  if(d.getUTCDate() !== j || d.getUTCMonth() !== mo - 1){
+    return {err:'date inexistante au calendrier : « ' + txt + ' »'};
+  }
+  return {t: t};
+}
+
+// Kilometrage : « 83 012 », « 83.012 » et « 83012 km » donnent tous 83012.
+// L'ancien parseInt rendait 83 sur le premier.
+// Une ligne qui n'apporte qu'une date : ni travaux, ni kilometrage, ni
+// sortie. Le marque, le modele ou le chassis ne comptent pas — ils decrivent
+// le vehicule, pas le passage.
+function ihLigneCoquille(l){
+  return (!l.pieces || !l.pieces.length) && !l.km && !l.sortieReelle;
+}
+
+// Les travaux d'une ligne, ramenes a une forme comparable : minuscules, sans
+// accents, tries. Deux listes ecrites differemment mais portant les memes
+// pieces donnent la meme empreinte.
+function ihEmpreinteTravaux(pieces){
+  return (pieces || []).map(ihSansAccents).filter(function(x){ return x; }).sort().join('|');
+}
+
+// Reunit les lignes de meme immatriculation et de meme jour.
+// Rend {ligne: la ligne reunie, absorbees: [numeros de ligne], conflit: bool}.
+// CONFLIT : au moins deux lignes du groupe portent des travaux non vides et
+// differents. Ce sont alors deux visites distinctes le meme jour (cas reel :
+// 3903KG01 les 2 et 3 avril, filtres puis pneus). On ne reunit pas, on rend
+// le groupe tel quel pour que les deux soient conservees et signalees.
+function ihFusionnerGroupe(groupe){
+  if(groupe.length === 1) return {ligne: groupe[0], absorbees: [], conflit: false};
+  var empreintes = {};
+  groupe.forEach(function(l){
+    var e = ihEmpreinteTravaux(l.pieces);
+    if(e) empreintes[e] = true;
+  });
+  if(Object.keys(empreintes).length > 1){
+    return {conflit: true, lignes: groupe};
+  }
+  // Un seul jeu de travaux (ou aucun) : c'est le meme passage, vu a des
+  // moments differents. La ligne la plus fournie sert de base.
+  var base = groupe.slice().sort(function(a, b){
+    return (b.pieces.length - a.pieces.length) || ((b.km || 0) - (a.km || 0));
+  })[0];
+  var reunie = {};
+  for(var k in base) reunie[k] = base[k];
+  groupe.forEach(function(l){
+    if(l.pieces.length && !reunie.pieces.length) reunie.pieces = l.pieces;
+    if((l.km || 0) > (reunie.km || 0)) reunie.km = l.km;
+    if(l.sortieReelle && (!reunie.sortieReelle || l.sortieReelle > reunie.sortieReelle)){
+      reunie.sortieReelle = l.sortieReelle;
+    }
+    ['chassis', 'marque', 'modele', 'energie'].forEach(function(c){
+      if(!reunie[c] && l[c]) reunie[c] = l[c];
+    });
+    ['mec', 'ct'].forEach(function(c){
+      if(!reunie[c] && l[c]) reunie[c] = l[c];
+    });
+  });
+  reunie.lignesSource = groupe.map(function(l){ return l.ligne; }).sort(function(a,b){ return a-b; });
+  reunie.ligne = reunie.lignesSource[0];
+  return {ligne: reunie, absorbees: reunie.lignesSource.slice(1), conflit: false};
+}
+
+// CE QU'UN DOSSIER DEJA EN BASE N'A PAS ET QUE LA LIGNE EXCEL APPORTE.
+// LA SEULE fonction qui en decide : l'apercu l'appelle pour ANNONCER, et
+// l'import l'appelle pour AGIR. Les deux ne peuvent donc pas diverger.
+// Un champ deja renseigne n'apparait jamais ici : il n'y a aucun ecrasement.
+function ihCompletementPossible(v, l){
+  function vide(x){ return x === undefined || x === null || x === '' || x === 0; }
+  var m = [];
+  if(vide(v.vin) && l.chassis)   m.push({champ:'vin',     libelle:'n° de châssis', valeur:l.chassis, affiche:l.chassis});
+  if(vide(v.km)  && l.km)        m.push({champ:'km',      libelle:'kilométrage', valeur:l.km, affiche:l.km.toLocaleString('fr-FR', GOS_FMT0) + ' km'});
+  if(vide(v.energie) && l.energie) m.push({champ:'energie', libelle:'énergie', valeur:l.energie, affiche:l.energie});
+  if(vide(v.ct_echeance) && l.ct) m.push({champ:'ct_echeance', libelle:'échéance de visite technique',
+                                          valeur:ihDateIso(l.ct), affiche:new Date(l.ct).toLocaleDateString('fr-FR')});
+  if(vide(v.mec) && l.mec)       m.push({champ:'mec',     libelle:'1ère mise en circulation',
+                                          valeur:ihDateIso(l.mec), affiche:new Date(l.mec).toLocaleDateString('fr-FR')});
+  if(vide(v.livraison) && l.sortieReelle) m.push({champ:'livraison', libelle:'date de sortie',
+                                          valeur:l.sortieReelle, affiche:new Date(l.sortieReelle).toLocaleDateString('fr-FR')});
+  // Les travaux UNIQUEMENT si le dossier n'a aucune ligne de chiffrage.
+  // Completer un chiffrage existant toucherait a de l'argent deja saisi,
+  // peut-etre deja valide par la Direction : ce n'est pas un champ vide.
+  var aChiffrage = !!(v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length);
+  if(!aChiffrage && l.pieces && l.pieces.length){
+    m.push({champ:'chiffrage', libelle:'travaux', valeur:l.pieces,
+            affiche:l.pieces.length + ' ligne(s) de travaux'});
+  }
+  return m;
+}
+
+// Les lignes de chiffrage d'une visite importee — ecrites une fois, pour la
+// creation d'un dossier comme pour le completement d'un dossier existant.
+function ihLignesChiffrage(pieces, dateOrigine){
+  return (pieces || []).map(function(nom){
+    return {
+      libreId: 'lib_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+      piece: nom, qte: 1, prixAchat: 0, prixVente: 0,
+      fournisseurId: '', source: 'import_historique', paiement: 'cash',
+      // Meme raisonnement que pour les factures manuelles : cet import ne
+      // passe jamais par le circuit normal de validation d'achat.
+      valideDir: true,
+      dateOrigine: dateOrigine || null
+    };
+  });
+}
+
+// Remplit les champs vides d'un dossier existant et LAISSE UNE TRACE.
+// N'ecrit que ce que ihCompletementPossible a annonce.
+function ihAppliquerCompletement(v, l, manques){
+  var faits = [];
+  (manques || []).forEach(function(m){
+    if(m.champ === 'chiffrage'){
+      v.chiffrage = {lignes: ihLignesChiffrage(l.pieces, l.entree),
+                     soumisLe: l.entree, valideDirLe: l.entree};
+    } else {
+      v[m.champ] = m.valeur;
+    }
+    faits.push(m.libelle + ' (' + m.affiche + ')');
+  });
+  if(faits.length && typeof ajouterCommentaireSysteme === 'function'){
+    ajouterCommentaireSysteme(v, 'Import historique : champ(s) vide(s) complété(s) depuis le fichier Excel '
+      + '— ' + faits.join(' · ') + '. Aucun champ déjà renseigné n’a été modifié.');
+  }
+  return faits.length;
+}
+
+function ihParserKm(val){
+  if(val === null || val === undefined || val === '') return null;
+  if(typeof val === 'number') return Math.round(val) || null;
+  var chiffres = String(val).replace(/[^0-9]/g, '');
+  if(!chiffres) return null;
+  var n = parseInt(chiffres, 10);
+  return (isNaN(n) || n <= 0) ? null : n;
+}
+
+// Date au format de la fiche d'entree ('aaaa-mm-jj'), pour mec et ct_echeance.
+function ihDateIso(t){
+  return t ? new Date(t).toISOString().slice(0, 10) : null;
+}
+
+// Ancienne lecture des dates de l'import. ELLE PORTAIT LE DEFAUT : elle
+// faisait new Date('05/11/2025'), qui lit le mois en premier, et perdait
+// 47 lignes sur 82 du fichier reel de Kaydan tout en inversant jour et mois
+// sur les 35 autres. Plus aucun appel ne la vise — l'import passe par
+// ihParserDate, avec un ordre jour/mois DEDUIT du fichier. Elle est conservee
+// sous cette forme pour qu'un appel oublie ou futur aboutisse a la lecture
+// francaise au lieu de ressusciter le defaut.
+function parserDateImport(val){
+  var r = ihParserDate(val, 'jma');
+  return r.err ? null : r.t;
 }
 
 function decouperPieces(texte){
@@ -32323,104 +32738,380 @@ function traiterLignesImportHisto(rows){
   var entite = document.getElementById('ih_entite').value;
   var tel = document.getElementById('ih_tel').value.trim();
 
-  // Reperer les colonnes par leur en-tete (plus robuste qu'une position fixe)
-  var entetes = (rows[0]||[]).map(function(h){ return (h||'').toString().trim().toLowerCase(); });
-  function idxCol(motCle){
-    for(var i=0;i<entetes.length;i++){ if(entetes[i].indexOf(motCle)>=0) return i; }
-    return -1;
-  }
-  var cImmat = idxCol('immatricul');
-  var cChassis = idxCol('serie');
-  var cMarque = idxCol('marque');
-  var cModele = idxCol('modèle') >= 0 ? idxCol('modèle') : idxCol('modele');
-  var cMec = idxCol('mise en cir');
-  var cEntree = idxCol('entrée')>=0 ? idxCol('entrée') : idxCol('entree');
-  var cSortie = idxCol('sortie');
-  var cKm = idxCol('km');
-  var cTravaux = idxCol('travaux');
+  var rep = ihRepererColonnes(rows[0] || []);
+  var c = rep.colonnes;
 
-  if(cImmat<0 || cEntree<0){
-    document.getElementById('ih_apercu').innerHTML = '<div class="empty" style="color:#A32D2D">Colonnes "Immatriculation" et/ou "Date Entree" introuvables. Verifiez les en-tetes du fichier.</div>';
+  if(rep.requisesManquantes.length){
+    document.getElementById('ih_apercu').innerHTML =
+      '<div class="card" style="margin-top:10px;border-left:4px solid #A32D2D">'
+      + '<div class="card-head">Import impossible</div>'
+      + '<div style="padding:14px 16px;font-size:13px">Colonne(s) indispensable(s) introuvable(s) : <strong>'
+      + rep.requisesManquantes.join(', ') + '</strong>.</div>'
+      + ihTableauCorrespondance(rows[0] || [], rep) + '</div>';
+    importHistoData = null; importHistoStats = null;
     return;
   }
 
-  var lignesTraitees = [];
-  var doublonsIgnores = 0;
+  var valeursDates = [];
+  for(var k = 1; k < rows.length; k++){
+    if(!rows[k]) continue;
+    valeursDates.push(rows[k][c.entree]);
+    if(c.sortie !== undefined) valeursDates.push(rows[k][c.sortie]);
+  }
+  var ordre = ihOrdreDates(valeursDates);
 
-  for(var r=1; r<rows.length; r++){
+  if(ordre === 'incoherent'){
+    document.getElementById('ih_apercu').innerHTML =
+      '<div class="card" style="margin-top:10px;border-left:4px solid #A32D2D">'
+      + '<div class="card-head">Import impossible</div>'
+      + '<div style="padding:14px 16px;font-size:13px">Les dates du fichier mélangent les ordres '
+      + 'jour/mois et mois/jour : certaines lignes ont un premier nombre supérieur à 12, '
+      + 'd’autres un second. Aucun ordre ne peut être retenu sans risque d’inverser '
+      + 'des dates. Harmonisez la colonne dans Excel, puis relancez.</div></div>';
+    importHistoData = null; importHistoStats = null;
+    return;
+  }
+
+  var ecartees = [];       // {ligne, immat, motif} — n'entreront pas
+  var brutes = [];         // lignes lisibles, avant reunion
+  var reunions = [];       // {gardee, absorbees} — pour l'apercu
+  var conflits = [];       // {ligne, immat, motif} — deux visites le meme jour
+
+  for(var r = 1; r < rows.length; r++){
     var row = rows[r];
-    if(!row || !row[cImmat]) continue;
-    var immatBrut = String(row[cImmat]).trim().toUpperCase();
-    var immatNorm = immatBrut.replace(/[\s\-]/g,'');
-    var dateEntree = parserDateImport(row[cEntree]);
-    if(!dateEntree) continue; // ligne inexploitable sans date d'entree
+    var noLigne = r + 1;   // numero affiche dans Excel (en-tete = ligne 1)
+    if(!row || !row.length) continue;
+    var brut = row[c.immat];
+    if(brut === null || brut === undefined || String(brut).trim() === ''){
+      var aDuContenu = row.some(function(x){ return x !== null && x !== undefined && String(x).trim() !== ''; });
+      if(aDuContenu) ecartees.push({ligne:noLigne, immat:'—', motif:'immatriculation absente'});
+      continue;
+    }
+    var immatBrut = String(brut).trim().toUpperCase();
 
-    // Detection de doublon stricte : meme immat normalisee + meme date
-    // d'entree (jour pres) deja presente dans vehicles => on ignore.
-    var dejaExiste = vehicles.some(function(v){
-      var vImmatNorm = (v.immat||'').toUpperCase().replace(/[\s\-]/g,'');
-      if(vImmatNorm !== immatNorm) return false;
-      if(!v.entree) return false;
-      return Math.abs(v.entree - dateEntree) < 86400000; // meme jour
-    });
-    if(dejaExiste){ doublonsIgnores++; continue; }
+    var dE = ihParserDate(row[c.entree], ordre);
+    if(dE.err){
+      ecartees.push({ligne:noLigne, immat:immatBrut,
+                     motif:'date d’entrée ' + (dE.err === 'vide' ? 'absente' : 'illisible — ' + dE.err)});
+      continue;
+    }
 
-    var pieces = cTravaux>=0 ? decouperPieces(row[cTravaux]) : [];
-    lignesTraitees.push({
+    var dS = (c.sortie !== undefined) ? ihParserDate(row[c.sortie], ordre) : {err:'vide'};
+    var dMec = (c.mec !== undefined) ? ihParserDate(row[c.mec], ordre) : {err:'vide'};
+    var dCt  = (c.ct  !== undefined) ? ihParserDate(row[c.ct],  ordre) : {err:'vide'};
+
+    brutes.push({
+      ligne: noLigne,
       immat: immatBrut,
-      chassis: cChassis>=0 ? (row[cChassis]||'') : '',
-      marque: cMarque>=0 ? (row[cMarque]||'') : '',
-      modele: cModele>=0 ? (row[cModele]||'') : '',
-      mec: cMec>=0 ? parserDateImport(row[cMec]) : null,
-      entree: dateEntree,
-      sortie: cSortie>=0 ? parserDateImport(row[cSortie]) : null,
-      km: cKm>=0 ? (parseInt(row[cKm],10)||null) : null,
-      pieces: pieces
+      immatNorm: immatBrut.replace(/[\s\-]/g, ''),
+      chassis: c.chassis !== undefined ? String(row[c.chassis] || '').trim() : '',
+      marque:  c.marque  !== undefined ? String(row[c.marque]  || '').trim() : '',
+      modele:  c.modele  !== undefined ? String(row[c.modele]  || '').trim() : '',
+      energie: c.energie !== undefined ? String(row[c.energie] || '').trim() : '',
+      mec: dMec.err ? null : dMec.t,
+      ct:  dCt.err  ? null : dCt.t,
+      entree: dE.t,
+      // sortieReelle : celle du fichier, ou null. La date de sortie
+      // EFFECTIVE du dossier est calculee plus bas — distinguer les deux
+      // evite de prendre une cloture par defaut pour un vrai renseignement.
+      sortieReelle: dS.err ? null : dS.t,
+      km: c.km !== undefined ? ihParserKm(row[c.km]) : null,
+      pieces: c.travaux !== undefined ? decouperPieces(row[c.travaux]) : []
     });
   }
 
-  importHistoData = {client:clientNom, typeClient:typeClient, entite:entite, tel:tel, lignes:lignesTraitees};
-  importHistoStats = {total: lignesTraitees.length, doublonsIgnores: doublonsIgnores, vehiculesUniques: new Set(lignesTraitees.map(function(l){return l.immat;})).size};
+  // 1. REUNIR les lignes de meme immatriculation et de meme jour.
+  var groupes = {};
+  brutes.forEach(function(l){
+    var cle = l.immatNorm + '|' + Math.floor(l.entree / 86400000);
+    (groupes[cle] = groupes[cle] || []).push(l);
+  });
+  var lignes = [];
+  Object.keys(groupes).forEach(function(cle){
+    var res = ihFusionnerGroupe(groupes[cle]);
+    if(res.conflit){
+      // Deux visites distinctes le meme jour : les deux sont conservees.
+      res.lignes.forEach(function(l){
+        l.conflitMemeJour = true;
+        lignes.push(l);
+        conflits.push({ligne:l.ligne, immat:l.immat,
+          motif:'deux visites le même jour avec des travaux différents — toutes conservées'});
+      });
+    } else {
+      if(res.absorbees.length){
+        reunions.push({gardee: res.ligne.ligne, absorbees: res.absorbees, immat: res.ligne.immat});
+      }
+      lignes.push(res.ligne);
+    }
+  });
+  lignes.sort(function(a, b){ return a.entree - b.entree || a.ligne - b.ligne; });
+
+  var fusionnees = reunions.reduce(function(n, x){ return n + x.absorbees.length; }, 0);
+
+  // 2. ECARTER les coquilles, en les nommant (choix Direction).
+  var retenues = [];
+  lignes.forEach(function(l){
+    if(ihLigneCoquille(l)){
+      ecartees.push({ligne:l.ligne, immat:l.immat,
+        motif:'n’apporte ni travaux, ni kilométrage, ni date de sortie — '
+            + 'créerait un dossier vide'});
+    } else {
+      retenues.push(l);
+    }
+  });
+
+  // 3. Confronter a la base : creer, completer, ou laisser.
+  var aCreer = [], aCompleter = [], dejaPresentes = [];
+  var closesParDefaut = 0, sortiesIncoherentes = 0;
+  retenues.forEach(function(l){
+    var existant = vehicles.find(function(v){
+      var vn = (v.immat || '').toUpperCase().replace(/[\s\-]/g, '');
+      if(vn !== l.immatNorm) return false;
+      if(!v.entree) return false;
+      return Math.abs(v.entree - l.entree) < 86400000;
+    });
+    if(existant){
+      var manques = ihCompletementPossible(existant, l);
+      if(manques.length){
+        aCompleter.push({ligne:l.ligne, immat:l.immat, vid:existant.id, manques:manques, source:l,
+          motif:'dossier déjà présent du '
+              + new Date(existant.entree).toLocaleDateString('fr-FR')
+              + ' — ' + manques.length + ' champ(s) vide(s) à compléter'});
+      } else {
+        dejaPresentes.push({ligne:l.ligne, immat:l.immat,
+          motif:'déjà présente dans GarageOS le '
+              + new Date(existant.entree).toLocaleDateString('fr-FR') + ', rien à ajouter'});
+      }
+      return;
+    }
+    // Sortie effective du dossier a creer. Choix Direction : sans date de
+    // sortie, la visite est cloturee a sa date d'entree.
+    l.sortie = l.sortieReelle;
+    l.sortieManquante = !l.sortie;
+    if(l.sortieManquante){ l.sortie = l.entree; closesParDefaut++; }
+    l.sortieAvantEntree = false;
+    if(l.sortie < l.entree){ l.sortieAvantEntree = true; l.sortie = l.entree; sortiesIncoherentes++; }
+    aCreer.push(l);
+  });
+
+  // LE COMPTE DOIT TOMBER JUSTE — garde-fou central de ce module.
+  var lues = Math.max(0, rows.length - 1);
+  var somme = aCreer.length + aCompleter.length + dejaPresentes.length
+            + ecartees.length + fusionnees;
+
+  importHistoData = {client:clientNom, typeClient:typeClient, entite:entite,
+                     tel:tel, lignes:aCreer, aCompleter:aCompleter, ordre:ordre,
+                     entetes:(rows[0] || []), rep:rep};
+  importHistoStats = {
+    lues: lues,
+    total: aCreer.length,
+    aCompleter: aCompleter.length,
+    champsACompleter: aCompleter.reduce(function(n, x){ return n + x.manques.length; }, 0),
+    doublonsIgnores: dejaPresentes.length,
+    ecartees: ecartees,
+    dejaPresentes: dejaPresentes,
+    reunions: reunions,
+    fusionnees: fusionnees,
+    conflits: conflits,
+    coquilles: ecartees.filter(function(e){ return /dossier vide/.test(e.motif); }).length,
+    closesParDefaut: closesParDefaut,
+    sansChassis: aCreer.filter(function(l){ return !l.chassis; }).length,
+    sansKm: aCreer.filter(function(l){ return !l.km; }).length,
+    kmSuspects: aCreer.filter(function(l){ return l.km && l.km < 100; }).length,
+    sortiesIncoherentes: sortiesIncoherentes,
+    vehiculesUniques: new Set(aCreer.map(function(l){ return l.immat; })).size,
+    somme: somme,
+    compteJuste: (somme === lues)
+  };
 
   afficherApercuImportHisto();
 }
 
+// Tableau de correspondance des colonnes : ce que le fichier propose, ce que
+// l'import en fait. Ecrit une fois, affiche aussi bien en cas de refus que
+// dans l'apercu normal — c'est lui qui rend impossible la perte muette d'une
+// colonne comme « N° de chassis » ou « Kilometrage ».
+function ihTableauCorrespondance(entetes, rep){
+  var h = '<div class="tw" style="margin-top:10px"><table><thead><tr>';
+  h += '<th>Colonne attendue</th><th>Colonne trouvée dans votre fichier</th><th>Devenir</th>';
+  h += '</tr></thead><tbody>';
+  IH_COLONNES.forEach(function(d){
+    var i = rep.colonnes[d.cle];
+    var trouvee = (i !== undefined) ? String(entetes[i] || '').trim() : null;
+    h += '<tr>';
+    h += '<td class="xs"><strong>' + d.libelle + '</strong>' + (d.requis ? ' <span style="color:#A32D2D">*</span>' : '') + '</td>';
+    h += '<td class="xs">' + (trouvee ? gosExpEchapper(trouvee) : '<span style="color:' + (d.requis ? '#A32D2D' : '#8a8578') + '">aucune</span>') + '</td>';
+    h += '<td class="xs">' + (trouvee
+         ? '<span style="color:#3B6D11">importée</span>'
+         : (d.requis ? '<strong style="color:#A32D2D">import impossible</strong>'
+                     : '<span class="muted">laissée vide</span>')) + '</td>';
+    h += '</tr>';
+  });
+  if(rep.ignorees.length){
+    h += '<tr><td colspan="3" class="xs" style="background:#FDF6E3">';
+    h += '<strong>Colonnes de votre fichier sans emploi :</strong> ' + gosExpEchapper(rep.ignorees.join(', '));
+    h += '</td></tr>';
+  }
+  h += '</tbody></table></div>';
+  return h;
+}
+
+// Liste nommee des lignes ecartees ou deja presentes. Repliee par defaut
+// quand elle est longue, mais TOUJOURS presente : c'est le seul moyen pour la
+// Direction de savoir ce qui n'entrera pas, et pourquoi.
+function ihListeLignes(titre, lignes, couleur){
+  if(!lignes.length) return '';
+  var h = '<details style="margin-top:8px"' + (lignes.length <= 12 ? ' open' : '') + '>';
+  h += '<summary style="cursor:pointer;padding:8px 16px;font-size:13px;font-weight:700;color:' + couleur + '">';
+  h += titre + ' (' + lignes.length + ') — cliquez pour ' + (lignes.length <= 12 ? 'replier' : 'déplier') + '</summary>';
+  h += '<div class="tw"><table><thead><tr><th style="width:90px">Ligne Excel</th><th>Immatriculation</th><th>Motif</th></tr></thead><tbody>';
+  lignes.forEach(function(e){
+    h += '<tr><td class="xs" style="font-family:monospace">' + e.ligne + '</td>';
+    h += '<td class="xs"><strong>' + gosExpEchapper(e.immat) + '</strong></td>';
+    h += '<td class="xs">' + e.motif + '</td></tr>';
+  });
+  h += '</tbody></table></div></details>';
+  return h;
+}
+
+// Les dossiers deja en base qui vont etre completes, avec le detail des
+// champs. Lit ihCompletementPossible via ce que le traitement a deja calcule :
+// l'annonce et l'ecriture viennent donc de la meme source.
+function ihListeCompletements(aCompleter){
+  if(!aCompleter.length) return '';
+  var h = '<details open style="margin-top:8px">';
+  h += '<summary style="cursor:pointer;padding:8px 16px;font-size:13px;font-weight:700;color:#1f6d8a">';
+  h += 'Dossiers déjà présents qui seront COMPLÉTÉS (' + aCompleter.length + ')</summary>';
+  h += '<div style="padding:0 16px 8px;font-size:12px;color:#6b6659">';
+  h += 'Seuls les champs <strong>vides</strong> sont remplis. Aucun champ déjà renseigné '
+    + 'n’est touché, et chaque dossier complété reçoit un commentaire qui nomme '
+    + 'ce qui a été rempli.</div>';
+  h += '<div class="tw"><table><thead><tr><th style="width:90px">Ligne Excel</th>'
+    + '<th>Immatriculation</th><th>Champs vides qui seront remplis</th></tr></thead><tbody>';
+  aCompleter.forEach(function(x){
+    h += '<tr><td class="xs" style="font-family:monospace">' + x.ligne + '</td>';
+    h += '<td class="xs"><strong>' + gosExpEchapper(x.immat) + '</strong></td>';
+    h += '<td class="xs">' + x.manques.map(function(m){
+           return m.libelle + ' <span class="muted">→ ' + gosExpEchapper(String(m.affiche)) + '</span>';
+         }).join('<br>') + '</td></tr>';
+  });
+  h += '</tbody></table></div></details>';
+  return h;
+}
+
+// Les lignes du fichier qui decrivaient le meme passage et ont ete reunies.
+function ihListeReunions(reunions){
+  if(!reunions.length) return '';
+  var h = '<details open style="margin-top:8px">';
+  h += '<summary style="cursor:pointer;padding:8px 16px;font-size:13px;font-weight:700;color:#3B6D11">';
+  h += 'Lignes réunies — même véhicule, même jour (' + reunions.length + ')</summary>';
+  h += '<div style="padding:0 16px 8px;font-size:12px;color:#6b6659">';
+  h += 'Ces lignes décrivent un seul passage, vu à des moments différents du fichier. '
+    + 'Travaux mis en commun, kilométrage le plus élevé, sortie la plus tardive : '
+    + 'rien n’est perdu.</div>';
+  h += '<div class="tw"><table><thead><tr><th>Immatriculation</th><th>Lignes réunies</th>'
+    + '<th>Conservée sous</th></tr></thead><tbody>';
+  reunions.forEach(function(x){
+    h += '<tr><td class="xs"><strong>' + gosExpEchapper(x.immat) + '</strong></td>';
+    h += '<td class="xs" style="font-family:monospace">'
+      + [x.gardee].concat(x.absorbees).sort(function(a,b){return a-b;}).join(' + ') + '</td>';
+    h += '<td class="xs" style="font-family:monospace">ligne ' + x.gardee + '</td></tr>';
+  });
+  h += '</tbody></table></div></details>';
+  return h;
+}
+
 function afficherApercuImportHisto(){
   if(!importHistoData) return;
+  var st = importHistoStats;
   var html = '<div class="card" style="margin-top:10px">';
   html += '<div class="card-head" style="display:flex;justify-content:space-between;align-items:center">';
-  html += '<span>Apercu avant import</span>';
-  html += '<button class="btn btn-primary btn-sm" onclick="validerImportHistorique()">&#x2714; Confirmer l\'import</button>';
+  html += '<span>Aperçu avant import</span>';
+  if((st.total > 0 || st.aCompleter > 0) && st.compteJuste){
+    html += '<button class="btn btn-primary btn-sm" onclick="validerImportHistorique()">&#x2714; Confirmer l’import</button>';
+  }
+  html += '</div>';
+
+  // L'EQUATION DE CONTROLE, en premier et en clair. Elle doit tomber juste,
+  // sinon le bouton de confirmation n'apparait pas.
+  html += '<div style="padding:14px 16px;font-size:13px;border-bottom:1px solid #e8e6e1">';
+  html += '<strong>' + st.lues + ' ligne(s) lue(s)</strong> = ';
+  html += '<span style="color:#3B6D11;font-weight:700">' + st.total + ' à importer</span>';
+  if(st.aCompleter) html += ' + <span style="color:#1f6d8a;font-weight:700">' + st.aCompleter + ' à compléter</span>';
+  html += ' + <span style="color:#8a6d1f;font-weight:700">' + st.doublonsIgnores + ' déjà présente(s)</span>';
+  if(st.fusionnees) html += ' + <span style="color:#3B6D11;font-weight:700">' + st.fusionnees + ' réunie(s)</span>';
+  html += ' + <span style="color:#A32D2D;font-weight:700">' + st.ecartees.length + ' écartée(s)</span>';
+  if(!st.compteJuste){
+    html += '<div style="margin-top:8px;padding:8px 10px;background:#FBE9E7;color:#A32D2D;font-weight:700">';
+    html += '&#x26A0; Le compte ne tombe pas juste (' + st.somme + ' lignes classées pour ' + st.lues + ' lues). ';
+    html += 'L’import est bloqué : des lignes seraient perdues sans explication.</div>';
+  }
+  html += '</div>';
+
+  // Ordre des dates retenu — explicitement, parce que c'est le point sur
+  // lequel l'ancienne version se trompait sans le dire.
+  html += '<div style="padding:12px 16px;font-size:12px;border-bottom:1px solid #e8e6e1;'
+       + (importHistoData.ordre === 'jma_suppose' ? 'background:#FDF6E3' : '') + '">';
+  html += '<strong>Lecture des dates :</strong> ' + ihLibelleOrdre(importHistoData.ordre);
   html += '</div>';
 
   html += '<div class="kgrid k3" style="padding:14px 16px 0">';
-  html += kpi('Visites a importer', importHistoStats.total, 'green');
-  html += kpi('Vehicules uniques', importHistoStats.vehiculesUniques, '');
-  html += kpi('Doublons ignores (deja presents)', importHistoStats.doublonsIgnores, importHistoStats.doublonsIgnores>0?'amber':'green');
+  html += kpi('Visites à importer', st.total, st.total ? 'green' : 'amber');
+  html += kpi('Véhicules uniques', st.vehiculesUniques, '');
+  html += kpi('Déjà présentes', st.doublonsIgnores, st.doublonsIgnores > 0 ? 'amber' : 'green');
   html += '</div>';
 
+  // Ce que l'import NE pourra pas renseigner, dit avant et non apres.
+  var avertis = [];
+  if(st.sansChassis) avertis.push(st.sansChassis + ' visite(s) sans numéro de châssis');
+  if(st.sansKm) avertis.push(st.sansKm + ' sans kilométrage');
+  if(st.kmSuspects) avertis.push(st.kmSuspects + ' avec un kilométrage inférieur à 100 km, '
+    + 'sans doute une case remplie par défaut — reprise telle quelle');
+  if(st.closesParDefaut) avertis.push(st.closesParDefaut + ' sans date de sortie — clôturée(s) à leur date d’entrée');
+  if(st.sortiesIncoherentes) avertis.push(st.sortiesIncoherentes + ' avec une sortie antérieure à l’entrée — alignée(s) sur l’entrée');
+  if(avertis.length){
+    html += '<div style="padding:10px 16px;font-size:12px;color:#8a6d1f">&#x26A0; ' + avertis.join(' · ') + '</div>';
+  }
+
+  html += ihTableauCorrespondance(importHistoData.entetes, importHistoData.rep);
+  html += ihListeReunions(st.reunions);
+  html += ihListeCompletements(importHistoData.aCompleter);
+  html += ihListeLignes('Lignes écartées — elles n’entreront PAS', st.ecartees, '#A32D2D');
+  if(st.conflits.length){
+    html += ihListeLignes('Deux visites le même jour — toutes conservées', st.conflits, '#1f6d8a');
+  }
+  html += ihListeLignes('Lignes déjà présentes, rien à ajouter', st.dejaPresentes, '#8a6d1f');
+
   if(!importHistoData.lignes.length){
-    html += '<div class="empty">Aucune nouvelle visite a importer (tout est deja present, ou le fichier est vide).</div></div>';
+    html += '<div class="empty">Aucune nouvelle visite à créer'
+         + (st.aCompleter ? ' — mais ' + st.aCompleter + ' dossier(s) existant(s) à compléter.' : '.')
+         + '</div></div>';
     document.getElementById('ih_apercu').innerHTML = html;
     return;
   }
 
   html += '<div class="tw" style="margin-top:10px"><table><thead><tr>';
-  html += '<th>Vehicule</th><th>Chassis</th><th>Date entree</th><th>Date sortie</th><th>Km</th><th>Pieces</th>';
+  html += '<th style="width:70px">Ligne</th><th>Véhicule</th><th>Châssis</th><th>Date entrée</th>';
+  html += '<th>Date sortie</th><th style="text-align:right">Km</th><th>Visite tech.</th><th>Pièces</th>';
   html += '</tr></thead><tbody>';
-  importHistoData.lignes.slice(0,50).forEach(function(l){
+  importHistoData.lignes.slice(0, 50).forEach(function(l){
     html += '<tr>';
-    html += '<td><strong>'+l.immat+'</strong><br><span class="xs muted">'+l.marque+' '+l.modele+'</span></td>';
-    html += '<td class="xs" style="font-family:monospace">'+(l.chassis||'—')+'</td>';
-    html += '<td class="xs">'+new Date(l.entree).toLocaleDateString('fr-FR')+'</td>';
-    html += '<td class="xs">'+(l.sortie?new Date(l.sortie).toLocaleDateString('fr-FR'):'<span class="muted">En cours</span>')+'</td>';
-    html += '<td class="xs">'+(l.km?l.km.toLocaleString('fr-FR', GOS_FMT0):'—')+'</td>';
-    html += '<td class="xs">'+(l.pieces.length?l.pieces.length+' piece(s)':'<span class="muted">aucune</span>')+'</td>';
+    html += '<td class="xs" style="font-family:monospace">' + l.ligne + '</td>';
+    html += '<td><strong>' + gosExpEchapper(l.immat) + '</strong><br><span class="xs muted">'
+         + gosExpEchapper((l.marque + ' ' + l.modele).trim() || '—') + '</span></td>';
+    html += '<td class="xs" style="font-family:monospace">' + (l.chassis ? gosExpEchapper(l.chassis) : '<span class="muted">—</span>') + '</td>';
+    html += '<td class="xs">' + new Date(l.entree).toLocaleDateString('fr-FR') + '</td>';
+    html += '<td class="xs">' + new Date(l.sortie).toLocaleDateString('fr-FR')
+         + (l.sortieManquante ? ' <span class="xs" style="color:#8a6d1f">(absente, clôturée)</span>' : '') + '</td>';
+    html += '<td class="xs" style="text-align:right">' + (l.km ? l.km.toLocaleString('fr-FR', GOS_FMT0) + ' km' : '<span class="muted">—</span>') + '</td>';
+    html += '<td class="xs">' + (l.ct ? new Date(l.ct).toLocaleDateString('fr-FR') : '<span class="muted">—</span>') + '</td>';
+    html += '<td class="xs">' + (l.pieces.length ? l.pieces.length + ' pièce(s)' : '<span class="muted">aucune</span>') + '</td>';
     html += '</tr>';
   });
   html += '</tbody></table></div>';
-  if(importHistoData.lignes.length>50){
-    html += '<div class="xs muted" style="padding:8px 16px">+ '+(importHistoData.lignes.length-50)+' autre(s) ligne(s) non affichee(s) dans l\'apercu (mais bien incluses dans l\'import)</div>';
+  if(importHistoData.lignes.length > 50){
+    html += '<div class="xs muted" style="padding:8px 16px">+ ' + (importHistoData.lignes.length - 50)
+         + ' autre(s) ligne(s) non affichée(s) ici, mais bien incluses dans l’import.</div>';
   }
   html += '</div>';
   document.getElementById('ih_apercu').innerHTML = html;
@@ -32431,7 +33122,12 @@ function normaliserNomClientGlobal(s){
 }
 
 function validerImportHistorique(){
-  if(!importHistoData || !importHistoData.lignes.length){
+  // Il y a du travail des lors qu'il y a des visites a creer OU des dossiers
+  // existants a completer. Ne regarder que les creations faisait sortir
+  // aussitot quand le fichier n'apportait que des completements.
+  var _rienAFaire = !importHistoData
+    || (!importHistoData.lignes.length && !(importHistoData.aCompleter || []).length);
+  if(_rienAFaire){
     alert('Aucune donnee a importer. Selectionnez a nouveau le fichier Excel.');
     return;
   }
@@ -32461,30 +33157,44 @@ function validerImportHistorique(){
   var nomFinal = clientExistant ? clientExistant.client : d.client;
   var telFinal = clientExistant ? (clientExistant.tel||d.tel||'') : (d.tel||'');
 
+  // La confirmation dit AUSSI ce qui sera ecrit dans des dossiers existants :
+  // creer de nouveaux dossiers et completer des dossiers deja la ne sont pas
+  // le meme engagement.
+  var aCompleter = d.aCompleter || [];
+  var nbChamps = aCompleter.reduce(function(n, x){ return n + x.manques.length; }, 0);
   var messageConfirm = clientExistant
     ? 'Importer '+d.lignes.length+' visite(s) pour le client existant "'+nomFinal+'" ?\nCette action cree de nouveaux dossiers vehicule, elle est irreversible (mais chaque dossier reste modifiable/supprimable individuellement ensuite).'
     : 'Aucun client existant ne correspond exactement a "'+d.client+'" — un NOUVEAU client sera cree.\nImporter '+d.lignes.length+' visite(s) pour ce nouveau client "'+d.client+'" ?';
+  if(aCompleter.length){
+    messageConfirm += '\n\nDe plus, ' + nbChamps + ' champ(s) vide(s) seront remplis dans '
+      + aCompleter.length + ' dossier(s) deja present(s). Aucun champ deja renseigne ne sera modifie, '
+      + 'et chaque dossier complete recevra un commentaire nommant ce qui a ete rempli.';
+  }
   if(!confirm(messageConfirm)) return;
 
   d.lignes.forEach(function(l){
-    var lignesChiffrage = l.pieces.map(function(nom){
-      return {
-        libreId: 'lib_'+Date.now()+'_'+Math.random().toString(36).substr(2,4),
-        piece: nom, qte: 1, prixAchat: 0, prixVente: 0,
-        fournisseurId: '', source: 'import_historique', paiement: 'cash',
-        // Meme raisonnement que pour les factures manuelles : cet import
-        // ne passe jamais par le circuit normal de validation d'achat.
-        valideDir: true
-      };
-    });
+    // Les lignes de chiffrage viennent de ihLignesChiffrage, la meme fonction
+    // qui sert au completement d'un dossier existant : une seule ecriture de
+    // la regle, donc aucune divergence possible entre les deux chemins.
+    var lignesChiffrage = ihLignesChiffrage(l.pieces, l.entree);
     var v = {
       id: 'imp_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),
       immat: l.immat, marque: l.marque||'', modele: l.modele||'', vin: l.chassis||'',
       client: nomFinal, tel: telFinal, email: '',
       typeClient: d.typeClient, entite: d.entite,
       entree: l.entree, livraison: l.sortie||null,
-      km: l.km||null, mec: l.mec ? new Date(l.mec).toISOString().slice(0,10) : null,
-      status: l.sortie ? 'dossier_cloture' : 'travaux_cours',
+      km: l.km||null, mec: ihDateIso(l.mec),
+      // Deux renseignements que le fichier portait deja et que l'import
+      // jetait : l'energie, et surtout l'echeance de visite technique, dont
+      // l'application tire son alerte « echeance ce mois » et son badge
+      // « visite technique echue ».
+      energie: l.energie || '',
+      ct_echeance: ihDateIso(l.ct),
+      // Toute visite importee est un dossier clos : sans date de sortie, elle
+      // est cloturee a sa date d'entree (choix Direction). Sinon un historique
+      // de novembre 2025 resterait indefiniment en « Travaux en cours » dans
+      // le tableau de l'atelier, et pesait sur les delais et les temps morts.
+      status: 'dossier_cloture',
       priorite: 'normal',
       isImportHistorique: true,
       chiffrage: lignesChiffrage.length ? {lignes: lignesChiffrage, soumisLe: l.entree, valideDirLe: l.entree} : null
@@ -32492,10 +33202,27 @@ function validerImportHistorique(){
     vehicles.push(v);
   });
 
+  // Completer les dossiers deja en base : uniquement les champs annonces
+  // par ihCompletementPossible, donc uniquement des champs vides.
+  var nbCompletes = 0, nbChampsRemplis = 0;
+  aCompleter.forEach(function(x){
+    var v = vehicles.find(function(y){ return y.id === x.vid; });
+    if(!v) return;   // dossier supprime entre-temps : on ne cree rien a sa place
+    // Recalcule les manques a l'instant de l'ecriture : le dossier a pu etre
+    // renseigne entre l'apercu et la confirmation, par un collegue ou par une
+    // synchronisation. On n'ecrit que ce qui est ENCORE vide.
+    var manques = ihCompletementPossible(v, x.source);
+    if(!manques.length) return;
+    nbChampsRemplis += ihAppliquerCompletement(v, x.source, manques);
+    nbCompletes++;
+  });
+
   saveV();
   importHistoData = null;
   importHistoStats = null;
-  alert('Import termine : '+d.lignes.length+' visite(s) ajoutee(s) pour '+nomFinal+'.');
+  var bilan = 'Import termine : '+d.lignes.length+' visite(s) ajoutee(s) pour '+nomFinal+'.';
+  if(nbCompletes) bilan += '\n'+nbChampsRemplis+' champ(s) vide(s) rempli(s) dans '+nbCompletes+' dossier(s) deja present(s).';
+  alert(bilan);
   navigate('clients');
 }
 
