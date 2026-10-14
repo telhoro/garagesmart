@@ -1663,6 +1663,31 @@ function estDossierAssurance(v){
   return v.dossierAssurance === true || v.typeClient === 'assurance';
 }
 
+// LA SEULE regle qui dit sur quel prix se lit le montant d'un chiffrage.
+//
+// Un forfait PUR se mesure a son DECAISSEMENT, donc au prix d'achat : son
+// client paie un abonnement mensuel, pas ce dossier-ci — il n'y a pas de
+// facture par dossier, et donc pas de prix de vente a saisir.
+//
+// Tout le reste se facture au prix de VENTE, cout plus marge. Y compris un
+// dossier ASSURANCE : l'assureur recoit une vraie facture, exactement comme
+// un client devis. C'est deja ce que dit le reste de l'application — le
+// circuit assurance suit le circuit devis, et un dossier assurance est
+// explicitement exclu de la facturation mensuelle forfait.
+//
+// Avant cette regle unique, la question etait tranchee a six endroits avec
+// deux reponses differentes : la validation financiere totalisait le prix
+// d'achat d'un dossier assurance pendant que le formulaire de chiffrage lui
+// proposait un prix de vente, et la facture imprimee sortait a zero.
+function chiffrageSurPrixAchat(v){
+  return !!v && v.typeClient === 'forfait' && !estDossierAssurance(v);
+}
+
+// Le champ de prix que porte le montant d'une ligne, pour ce dossier.
+function champMontantChiffrage(v){
+  return chiffrageSurPrixAchat(v) ? 'prixAchat' : 'prixVente';
+}
+
 // Le circuit assurance suit desormais EXACTEMENT le circuit devis — seule
 // difference : c'est l'EXPERT (pas le client final) qui valide le devis,
 // donc les libelles des boutons/statuts s'adaptent en consequence.
@@ -19212,7 +19237,7 @@ function pageDashDir(){
         return true;
       }) : [];
       // Montant par ligne : forfait/assurance = prix ACHAT (decaissement), sinon prix VENTE
-      var estFA = (v.typeClient==='forfait'||estDossierAssurance(v));
+      var estFA = chiffrageSurPrixAchat(v);
       var champMontant = estFA ? 'prixAchat' : 'prixVente';
       var totalVente = lignes.reduce(function(s,cl){return s+(parseFloat(cl[champMontant])||0)*(parseInt(cl.qte)||1);},0);
       // Le stock est deja paye : il ne compte ni en cash ni en credit
@@ -19259,7 +19284,7 @@ function pageDashDir(){
         html += '<th style="padding:3px 6px">Paiement</th>';
         html += '</tr></thead><tbody>';
         lignes.forEach(function(cl){
-          var tot = (v.typeClient==='forfait'||estDossierAssurance(v)) ? (parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1) : montantChiffrageLigne(cl);
+          var tot = chiffrageSurPrixAchat(v) ? (parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1) : montantChiffrageLigne(cl);
           var srcLabel = cl.source==='local'?'Local':'Import';
           var srcBadge = cl.source==='local'?'b-blue':'b-amber';
           var paieLabel = (!cl.paiement||cl.paiement==='cash')?'Cash':'Crédit';
@@ -21369,7 +21394,7 @@ function renderChiffrageSection(v){
   // isForfait masque les colonnes Prix vente/Total vente (paiement forfaitaire
   // fixe, pas au prix de vente par piece). Les dossiers assurance suivent
   // desormais exactement le meme affichage qu'un devis classique.
-  var isForfait = (v.typeClient==='forfait');
+  var isForfait = chiffrageSurPrixAchat(v);
   // Pour DC indépendant en attente_fin → afficher le chiffrage avec cases à cocher
   if(v.isDevisCompl && v.status==='attente_fin' && currentRole==='direction'){
     // Continuer normalement vers le tableau de chiffrage
@@ -22551,7 +22576,7 @@ function renderDevisComplSection(v){
   // toute la section des qu'un devis complementaire deja chiffre etait
   // affiche pour technicien, chef d'atelier ou chef d'equipe.
   var isRec = currentRole==='reception';
-  var isForfait = (v.typeClient==='forfait');
+  var isForfait = chiffrageSurPrixAchat(v);
   var isEditing = devisComplEditMode && (isTech || isChef);
 
   var s = '<div style="margin-top:14px;border:2px solid #E8A44A;border-radius:8px;padding:12px">';
@@ -23091,8 +23116,7 @@ function joursDepuisDiffere(v){
 // Montant du devis (vente pour un client devis, achat pour forfait/assurance)
 function montantDevisDiffere(v){
   if(!v.chiffrage || !v.chiffrage.lignes) return 0;
-  var estFA = (v.typeClient==='forfait' || estDossierAssurance(v));
-  var champ = estFA ? 'prixAchat' : 'prixVente';
+  var champ = champMontantChiffrage(v);
   return v.chiffrage.lignes.reduce(function(s,cl){
     if(!(cl.piece||'').trim()) return s;
     return s + (parseFloat(cl[champ])||0)*(parseInt(cl.qte,10)||1);
@@ -23243,7 +23267,7 @@ function nbPiecesNonValidees(v){
 }
 
 function htmlRecapValidation(v){
-  var isForfaitV = (v.typeClient==='forfait');
+  var isForfaitV = chiffrageSurPrixAchat(v);
   var lignesVal = v.chiffrage.lignes.filter(function(cl){return cl.valideDir;});
   var mt = function(cl){ return (parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1); };
   // Decaissement A PREVOIR : cash et credit uniquement
@@ -30522,6 +30546,54 @@ function imprimerDocument(vid, type){
   var total = lignes.reduce(function(s,l){
     return s+montantChiffrageLigne(l);
   },0);
+
+  // Un document a zero alors que le chiffrage a bien eu lieu : ne rien
+  // imprimer, et dire ce qui manque. Avant ce garde-fou, la facture sortait
+  // avec des colonnes vides, un tiret en total et « Zero Francs CFA » en
+  // toutes lettres — sans que rien n'explique pourquoi.
+  if(total === 0 && lignes.length){
+    var sansVente = lignes.filter(function(l){
+      return (parseFloat(l.prixAchat)||0) > 0 && !(parseFloat(l.prixVente)||0);
+    });
+    if(sansVente.length){
+      var h = '<div style="padding:4px 0 10px">';
+      h += '<div style="background:#FBE9E7;border-left:4px solid #A32D2D;padding:12px 14px;margin-bottom:14px">';
+      h += '<div style="font-weight:700;color:#A32D2D;font-size:14px;margin-bottom:6px">'
+         + 'Document non imprimé : le prix de vente manque</div>';
+      h += '<div style="font-size:13px;line-height:1.5">Le chiffrage de ce dossier porte un prix d’achat, '
+         + 'mais aucun prix de vente sur ' + sansVente.length + ' ligne(s). Le document sortirait '
+         + 'à zéro, colonnes vides et total nul.<br>'
+         + 'Complétez le prix de vente dans le chiffrage, puis relancez l’impression.</div>';
+      h += '</div>';
+      h += '<div style="font-size:13px;font-weight:700;margin-bottom:6px">Pièces concernées :</div>';
+      h += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+      h += '<thead><tr style="background:#f5f3ef">'
+         + '<th style="text-align:left;padding:6px 10px;border:1px solid #ddd">Pièce</th>'
+         + '<th style="padding:6px 10px;border:1px solid #ddd">Qté</th>'
+         + '<th style="text-align:right;padding:6px 10px;border:1px solid #ddd">Prix d’achat</th>'
+         + '<th style="text-align:right;padding:6px 10px;border:1px solid #ddd">Prix de vente</th>'
+         + '</tr></thead><tbody>';
+      sansVente.forEach(function(l){
+        h += '<tr>'
+          + '<td style="padding:6px 10px;border:1px solid #ddd">' + (l.piece||'') + '</td>'
+          + '<td style="padding:6px 10px;border:1px solid #ddd;text-align:center">' + (parseInt(l.qte,10)||1) + '</td>'
+          + '<td style="padding:6px 10px;border:1px solid #ddd;text-align:right;font-family:monospace">'
+          + (parseFloat(l.prixAchat)||0).toLocaleString('fr-FR', GOS_FMT0) + '</td>'
+          + '<td style="padding:6px 10px;border:1px solid #ddd;text-align:right;color:#A32D2D;font-weight:700">'
+          + 'manquant</td></tr>';
+      });
+      h += '</tbody></table>';
+      if(estDossierAssurance(v)){
+        h += '<div style="margin-top:14px;background:#EAF1FA;border:1px solid #BDD5F0;padding:10px 12px;font-size:12px;color:#185FA5">'
+          + '&#x2139; Ce dossier est un dossier assurance : il se facture à l’assureur au prix de '
+          + 'vente, marge comprise, comme un dossier devis. Le chiffrage propose désormais la colonne '
+          + '« Prix vente ».</div>';
+      }
+      h += '</div>';
+      ouvrirModaleImpression('Impression impossible — ' + v.immat, h);
+      return;
+    }
+  }
 
   var numDoc = genNumeroDoc(v, isFacture?'FACTURE':'DEVIS');
   var dateEdit = new Date().toLocaleDateString('fr-FR');
