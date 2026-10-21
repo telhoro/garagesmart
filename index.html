@@ -1242,6 +1242,23 @@ tr:hover td{background:#faf9f7}
 </div>
 </div>
 
+<div class="overlay" id="modalModifEcheance" style="display:none" onclick="if(event.target===this)fermerModalModifEcheance()">
+<div class="modal" style="max-width:480px">
+  <div class="mhead"><h2 id="meModalTitre">Reporter une echeance</h2><button class="btn btn-sm" onclick="fermerModalModifEcheance()">X</button></div>
+  <div class="mbody">
+    <div id="meModalInfo" style="font-weight:700;padding:8px 12px;background:#f5f4f1;border-radius:7px;margin-bottom:12px;font-size:13px"></div>
+    <div id="meModalConsequence" style="padding:10px 12px;border-radius:7px;margin-bottom:12px;font-size:13px;line-height:1.55"></div>
+    <div class="fr"><label class="fl">Motif <span style="color:red">*</span></label>
+      <input class="inp" id="meModalMotif" placeholder="Ex : report negocie avec la banque le 20/10/2026" maxlength="160"></div>
+    <div class="xs muted" style="margin-top:6px">Le motif reste attache a l'echeance : il explique l'ecart entre l'echeancier d'origine et celui d'aujourd'hui.</div>
+  </div>
+  <div class="mfoot">
+    <button class="btn" onclick="fermerModalModifEcheance()">Annuler</button>
+    <button class="btn btn-primary" id="meModalBtnOk" onclick="confirmerModifEcheance()">Reporter l'echeance</button>
+  </div>
+</div>
+</div>
+
 <div class="overlay" id="modalPaiementEcheance" style="display:none" onclick="if(event.target===this)fermerModalPaiementEcheance()">
 <div class="modal" style="max-width:400px">
   <div class="mhead"><h2 id="peModalTitre">Paiement echeance</h2><button class="btn btn-sm" onclick="fermerModalPaiementEcheance()">X</button></div>
@@ -10023,7 +10040,7 @@ function bilanCollecterFactures(){
                         .reduce(function(s, cl){ return s + (parseFloat(cl.prixAchat)||0) * (parseInt(cl.qte)||1); }, 0);
     var paye = parseFloat(v.montantPaye) || 0;
     factures.push({
-      type: 'devis', client: v.client || 'Client non renseigne', vehId: v.id,
+      type: 'devis', client: v.client || 'Client non renseigne',
       libelle: (v.immat || '') + ' ' + (v.marque || '') + ' ' + (v.modele || ''),
       ca: ca, paye: paye, reste: Math.max(0, ca - paye), cout: cout,
       dateRef: dateRef, deposee: !!v.factureDeposeeLe,
@@ -10072,22 +10089,18 @@ function bilanCoutForfaitClient(client, b){
 function bilanParClient(){
   var b = bilanBornes();
   var factures = bilanCollecterFactures();
-  // Exposition : reprise telle quelle de son collecteur, qui rend
-  // {buckets: {client -> {client, totalExpose, ...}}, totalEngageGlobal}.
-  // On ne recalcule rien : deux formules pour une meme notion finiraient par
-  // diverger, et c'est exactement ce qu'on passe la semaine a corriger.
-  var expo = {}, expoDossier = {};
+  var expo = {};
   try{
-    var buckets = (collecterExpositionFinanciere() || {}).buckets || {};
-    Object.keys(buckets).forEach(function(k){
-      var bk = buckets[k];
-      expo[bk.client || k] = bk.totalExpose || 0;
-      // Exposition dossier par dossier, pour la colonne du detail. Elle
-      // n'existe que pour les dossiers devis : en forfait, l'exposition est
-      // un grand livre par client, elle ne se repartit pas par facture.
-      (bk.dossiers || []).forEach(function(d){ if(d && d.id) expoDossier[d.id] = d.montantExpose || 0; });
-    });
-  }catch(e){ console.error('Bilan global : exposition indisponible', e); }
+    var collecte = collecterExpositionFinanciere();
+    (collecte.buckets || collecte || []).forEach ? null : null;
+    var liste = collecte.liste || collecte.buckets || collecte;
+    if(liste && typeof liste === 'object'){
+      Object.keys(liste).forEach(function(k){
+        var e = liste[k];
+        if(e && e.client) expo[e.client] = (expo[e.client] || 0) + (e.totalExpose || 0);
+      });
+    }
+  }catch(e){ /* l'exposition reste a zero si son collecteur evolue */ }
 
   var clients = {};
   factures.forEach(function(f){
@@ -10110,20 +10123,6 @@ function bilanParClient(){
     c.delaiMoyen = (typeof delaiMoyenReglementClient === 'function') ? delaiMoyenReglementClient(c.client) : null;
     c.expose = expo[c.client] || 0;
     c.nature = (c.types.devis && c.types.forfait) ? 'mixte' : (c.types.forfait ? 'forfait' : 'devis');
-    // Chaque facture porte ses propres indicateurs, pour que le detail reponde
-    // aux memes questions que la ligne client.
-    c.factures.forEach(function(f){
-      if(f.type === 'forfait'){
-        // Un abonnement mensuel ne porte ni cout ni exposition propres : ils
-        // vivent sur les dossiers du client. Afficher un chiffre ici
-        // reviendrait a presenter la marge comme egale au CA, ce qui est faux.
-        f.expose = null; f.marge = null; f.taux = null;
-      } else {
-        f.expose = expoDossier[f.vehId] || 0;
-        f.marge = f.ca - f.cout;
-        f.taux = f.ca > 0 ? (f.marge / f.ca * 100) : null;
-      }
-    });
     // Detail : les impayees d'abord, puis de la plus recente a la plus ancienne.
     c.factures.sort(function(x, y){
       var ix = x.reste > 0 ? 0 : 1, iy = y.reste > 0 ? 0 : 1;
@@ -10596,9 +10595,7 @@ function pageBilanGlobal(){
          + '</span>';
       h += '</div>';
       h += '<div class="tw"><table><thead><tr><th>Facture</th><th>Type</th><th>Depot</th><th class="xs">Depuis</th>'
-         + '<th style="text-align:right">Montant</th><th style="text-align:right">Encaisse</th><th style="text-align:right">Reste</th>'
-         + '<th style="text-align:right">Expose</th><th style="text-align:right">Marge</th><th style="text-align:right">Rentabilite</th>'
-         + '<th>Etat</th></tr></thead><tbody>';
+         + '<th style="text-align:right">Montant</th><th style="text-align:right">Encaisse</th><th style="text-align:right">Reste</th><th>Etat</th></tr></thead><tbody>';
       c.factures.forEach(function(f){
         var solde = (f.reste <= 0);
         h += '<tr>';
@@ -10609,14 +10606,6 @@ function pageBilanGlobal(){
         h += '<td style="text-align:right;font-family:monospace">' + Math.round(f.ca).toLocaleString('fr-FR', GOS_FMT0) + '</td>';
         h += '<td style="text-align:right;font-family:monospace;color:#3B6D11">' + (f.paye ? Math.round(f.paye).toLocaleString('fr-FR', GOS_FMT0) : '—') + '</td>';
         h += '<td style="text-align:right;font-family:monospace;color:' + (solde ? '#888' : '#A32D2D') + ';font-weight:700">' + (solde ? '—' : Math.round(f.reste).toLocaleString('fr-FR', GOS_FMT0)) + '</td>';
-        h += '<td style="text-align:right;font-family:monospace;color:' + (f.expose > 0 ? '#A32D2D' : '#888') + '" class="xs">'
-           + (f.expose === null ? '<span class="muted" title="L\'exposition d\'un client forfait est un grand livre : elle ne se repartit pas par facture">—</span>'
-              : (f.expose ? Math.round(f.expose).toLocaleString('fr-FR', GOS_FMT0) : '—')) + '</td>';
-        h += '<td style="text-align:right;font-family:monospace;color:' + (f.marge === null ? '#888' : (f.marge >= 0 ? '#3B6D11' : '#A32D2D')) + '">'
-           + (f.marge === null ? '<span class="muted" title="Le cout d\'un client forfait porte sur ses dossiers, pas sur la facture d\'abonnement : la marge se lit au niveau du client">—</span>'
-              : Math.round(f.marge).toLocaleString('fr-FR', GOS_FMT0)) + '</td>';
-        h += '<td style="text-align:right;color:' + (f.taux === null ? '#888' : (f.taux >= 30 ? '#3B6D11' : (f.taux >= 0 ? '#854F0B' : '#A32D2D'))) + '">'
-           + bilanPct(f.taux === undefined ? null : f.taux) + '</td>';
         h += '<td>' + (solde ? '<span class="badge b-green">Solde</span>'
              : (f.paye > 0 ? '<span class="badge b-amber">Partiel</span>'
              : (f.deposee ? '<span class="badge b-red">Impaye</span>' : '<span class="badge b-gray">Non deposee</span>'))) + '</td>';
@@ -15553,16 +15542,13 @@ function tresoCouleurCompte(compteId){
 
 // ── Stockage local ───────────────────────────────────────────────────────
 function tresoCharger(){
-  // Nom distinct de la fonction lire() du moteur de synchronisation : portees
-  // differentes, mais le controle de doublons sert a reperer les vraies
-  // collisions, autant ne pas y ajouter de bruit.
-  function lireListe(cle){
+  function lire(cle){
     try{ var v = JSON.parse(localStorage.getItem(cle)); return Array.isArray(v) ? v : []; }
     catch(e){ return []; }
   }
-  TRESO_COMPTES    = lireListe('gos_treso_comptes');
-  TRESO_MOUVEMENTS = lireListe('gos_treso_mouvements');
-  TRESO_RELEVES    = lireListe('gos_treso_releves');
+  TRESO_COMPTES    = lire('gos_treso_comptes');
+  TRESO_MOUVEMENTS = lire('gos_treso_mouvements');
+  TRESO_RELEVES    = lire('gos_treso_releves');
 }
 function tresoEnregistrer(){
   try{
@@ -16071,9 +16057,6 @@ function tresoDessinerGraphique(){
     }
   });
 }
-
-tresoCharger();   // chargement initial depuis le stockage local
-
 
 
 function pageBanques(){
@@ -17788,6 +17771,26 @@ function exporterEngagementsBanqueAvecFacturesExcelByEl(btn){
 // inconnu). Cette meme liste sert a la fois a detecter les echeances en
 // retard ET a calculer le restant du — les deux notions decoulent d'une
 // seule source de verite : quelles echeances sont encore impayees.
+// Les echeances qu'une negociation a sorties de l'echeancier.
+// Deux listes distinctes sur l'engagement :
+//   e.echeancesReportees : {dateEcheance, le, par, motif} — repoussees
+//   e.echeancesAnnulees  : {dateEcheance, le, par, motif} — supprimees
+// L'ancien format (simple horodatage) est accepte en lecture, par prudence.
+function entreesEcheancesModifiees(e, type){
+  var brut = (e && (type === 'reportee' ? e.echeancesReportees : e.echeancesAnnulees)) || [];
+  return brut.map(function(x){
+    return (typeof x === 'number') ? {dateEcheance: x} : (x || {});
+  }).filter(function(x){ return x.dateEcheance; });
+}
+
+// LA SEULE question « cette echeance a-t-elle ete sortie de l'echeancier ? ».
+// Le generateur, l'affichage et la simulation passent tous par elle.
+function estEcheanceModifiee(e, dateEcheance, type){
+  return entreesEcheancesModifiees(e, type).some(function(x){
+    return x.dateEcheance === dateEcheance;
+  });
+}
+
 function genererEcheancesEngagement(e){
   if(e.periodicite==='unique') return e.dateEcheance ? [e.dateEcheance] : [];
   var maintenant = Date.now();
@@ -17818,7 +17821,61 @@ function genererEcheancesEngagement(e){
     if(candidat>=borneDeb) echeances.push(candidat);
     moisAbsolu += pas;
   }
+  // A la sortie de la boucle, moisAbsolu designe le PREMIER mois hors de
+  // l'echeancier theorique : c'est de la que repartent les reports.
+
+  // Les echeances sorties de l'echeancier par negociation.
+  var nbReports = 0;
+  echeances = echeances.filter(function(d){
+    if(estEcheanceModifiee(e, d, 'annulee')) return false;   // la banque l'a remise
+    if(estEcheanceModifiee(e, d, 'reportee')){ nbReports++; return false; }
+    return true;
+  });
+
+  // Chaque echeance REPORTEE revient a la fin : l'echeancier s'allonge
+  // d'autant, le capital du ne change pas. Une echeance ANNULEE ne revient
+  // pas : c'est la difference entre les deux operations.
+  //
+  // Un engagement SANS date de fin n'a pas de fin a repousser (borneFin vaut
+  // aujourd'hui, l'echeancier se recharge de lui-meme chaque mois) : le
+  // report s'y borne a sauter le mois.
+  if(nbReports > 0 && e.dateFin){
+    for(var k = 0; k < nbReports && k < 600; k++){
+      echeances.push(dateAuJour(Math.floor(moisAbsolu/12), ((moisAbsolu%12)+12)%12));
+      moisAbsolu += pas;
+    }
+  }
   return echeances;
+}
+
+// Date de fin REELLE de l'echeancier, reports compris. La date de fin du
+// contrat (e.dateFin) n'est jamais modifiee : on garde ainsi la trace de
+// l'echeancier d'origine, et la date effective en decoule.
+// Rend null pour une echeance unique ou un engagement a duree indefinie.
+function dateFinEffective(e){
+  if(!e || e.periodicite === 'unique' || !e.dateFin) return null;
+  var toutes = genererEcheancesEngagement(e);
+  if(!toutes.length) return e.dateFin;
+  var derniere = toutes[toutes.length - 1];
+  return derniere > e.dateFin ? derniere : e.dateFin;
+}
+
+// Simule un report ou une annulation SANS rien ecrire, pour pouvoir annoncer
+// la consequence exacte avant de demander confirmation. La simulation passe
+// par les memes fonctions que l'operation reelle : l'annonce ne peut donc
+// pas differer de ce qui se produira.
+function simulerModifEcheance(e, dateEcheance, type){
+  var copie = JSON.parse(JSON.stringify(e));
+  var cle = (type === 'reportee') ? 'echeancesReportees' : 'echeancesAnnulees';
+  copie[cle] = (copie[cle] || []).concat([{dateEcheance: dateEcheance}]);
+  return {
+    finAvant: dateFinEffective(e),
+    finApres: dateFinEffective(copie),
+    restantAvant: montantRestantDu(e),
+    restantApres: montantRestantDu(copie),
+    nbEcheancesAvant: genererEcheancesEngagement(e).length,
+    nbEcheancesApres: genererEcheancesEngagement(copie).length
+  };
 }
 
 // Chaque entree de echeancesPayees peut etre soit un ANCIEN format
@@ -17997,6 +18054,56 @@ function enregistrerPaiementEcheance(e, dateEcheance, montantVerse){
 
 // Marque l'echeance impayee la PLUS ANCIENNE comme payee (comme le reste
 // de l'app : on solde toujours les plus anciennes dettes en premier).
+// Les actions proposees sur une ligne d'ECHEANCE, dans les panneaux
+// « Echeances en retard » et « Engagements mois en cours ».
+//
+// Ecrites ICI et nulle part ailleurs : les deux panneaux ont exactement la
+// meme forme, et leur cellule d'action etait jusqu'ici le meme texte copie
+// deux fois. Une action ajoutee d'un seul cote aurait fini par manquer de
+// l'autre — c'est le defaut qui revient le plus souvent dans cette
+// application.
+//
+// « Modifier » et « Supprimer » portent sur l'ENGAGEMENT ENTIER, pas sur la
+// seule echeance de la ligne : les echeances ne sont pas enregistrees une a
+// une, elles sont calculees a partir de la periodicite. Les infobulles le
+// disent explicitement, pour que personne ne croie ne retirer qu'une ligne.
+function htmlActionsEcheance(e, dateEcheance){
+  var nom = gosExpEchapper(e.nom || '');
+  var h = '<div class="flex gap6">';
+  h += '<button class="btn btn-success btn-sm" data-egid="' + e.id + '" '
+     + 'onclick="marquerEcheancePayeeByEl(this)" '
+     + 'title="Enregistrer le paiement de cette échéance">&#x2714; Marquer payee</button>';
+  if(currentRole === 'direction' && e.periodicite !== 'unique' && dateEcheance){
+    h += '<button class="btn btn-sm" data-egid="' + e.id + '" data-ech="' + dateEcheance + '" '
+       + 'data-type="reportee" onclick="ouvrirModifEcheanceByEl(this)" '
+       + 'style="color:#185FA5;border-color:#BDD5F0" '
+       + 'title="Reporter cette échéance à la fin de l’échéancier. Le capital dû '
+       + 'ne change pas, la fin de remboursement recule.">&#x23F3; Reporter</button>';
+    h += '<button class="btn btn-sm" data-egid="' + e.id + '" data-ech="' + dateEcheance + '" '
+       + 'data-type="annulee" onclick="ouvrirModifEcheanceByEl(this)" '
+       + 'style="color:#854F0B;border-color:#E8C98A" '
+       + 'title="Annuler cette échéance : la banque la remet. Le capital dû baisse '
+       + 'd’autant, la fin de remboursement ne bouge pas.">&#x2298; Annuler</button>';
+  }
+  // Separateur : a gauche les actions sur CETTE ECHEANCE, a droite les
+  // actions sur l'ENGAGEMENT ENTIER. La confusion entre les deux serait
+  // couteuse.
+  h += '<span style="width:1px;align-self:stretch;background:#ddd9d2;margin:0 2px"></span>';
+  h += '<button class="btn btn-sm" data-egid="' + e.id + '" '
+     + 'onclick="openEngagementFormById(this)" '
+     + 'title="Modifier l’engagement « ' + nom + ' » en entier : montant, '
+     + 'périodicité, période…">&#x270F;</button>';
+  if(currentRole === 'direction'){
+    h += '<button class="btn btn-sm" data-egid="' + e.id + '" '
+       + 'onclick="supprimerEngagementById(this)" '
+       + 'style="color:#A32D2D;border-color:#E0A0A0" '
+       + 'title="Supprimer l’engagement « ' + nom + ' » en entier, avec toutes ses '
+       + 'échéances et son historique de paiements">&#x2715;</button>';
+  }
+  h += '</div>';
+  return h;
+}
+
 function marquerEcheancePayeeByEl(btn){
   var id = btn.getAttribute('data-egid');
   var e = ENGAGEMENTS_BANCAIRES.find(function(x){return x.id===id;});
@@ -18014,6 +18121,127 @@ var paiementEcheanceDate = null;
 // reste du (pas forcement le montant nominal complet, si un paiement
 // partiel a deja ete fait auparavant), mais reste modifiable pour
 // permettre un reglement partiel ou differencie.
+// ── Reporter ou annuler une echeance ─────────────────────────────────────
+var modifEcheanceEgId = null, modifEcheanceDate = null, modifEcheanceType = null;
+
+function ouvrirModifEcheanceByEl(btn){
+  ouvrirModifEcheance(btn.getAttribute('data-egid'),
+                      parseInt(btn.getAttribute('data-ech'), 10),
+                      btn.getAttribute('data-type'));
+}
+
+function ouvrirModifEcheance(egId, dateEcheance, type){
+  var e = ENGAGEMENTS_BANCAIRES.find(function(x){ return x.id === egId; });
+  if(!e) return;
+  if(currentRole !== 'direction'){
+    alert('Reporter ou annuler une echeance est reserve au role Direction.');
+    return;
+  }
+  // GARDE-FOU : l'historique des paiements ne doit jamais etre efface par
+  // une sortie d'echeancier. Une echeance deja payee, meme partiellement,
+  // doit d'abord voir son paiement corrige.
+  var dejaPaye = montantPayePourEcheance(e, dateEcheance);
+  if(dejaPaye > 0){
+    alert('Cette echeance porte deja un paiement de ' + Math.round(dejaPaye).toLocaleString('fr-FR', GOS_FMT0)
+      + ' FCFA.\n\nUne echeance payee, meme partiellement, ne peut pas etre reportee ni annulee : '
+      + 'son paiement serait orphelin. Corrigez d\'abord le paiement.');
+    return;
+  }
+
+  modifEcheanceEgId = egId; modifEcheanceDate = dateEcheance; modifEcheanceType = type;
+  var estReport = (type === 'reportee');
+  var sim = simulerModifEcheance(e, dateEcheance, type);
+
+  document.getElementById('meModalTitre').textContent =
+    estReport ? 'Reporter une echeance' : 'Annuler une echeance';
+  document.getElementById('meModalInfo').textContent =
+    e.nom + ' — echeance du ' + new Date(dateEcheance).toLocaleDateString('fr-FR')
+    + ' (' + (parseFloat(e.montant) || 0).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA)';
+
+  var c = document.getElementById('meModalConsequence');
+  var h = '';
+  if(estReport){
+    c.style.background = '#EAF1FA'; c.style.border = '1px solid #BDD5F0'; c.style.color = '#185FA5';
+    h += '<strong>Le capital restant dû ne change pas</strong> : '
+      + Math.round(sim.restantApres).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA. '
+      + 'Cette échéance est simplement repoussée à la fin de l’échéancier.<br>';
+    if(sim.finAvant && sim.finApres && sim.finApres !== sim.finAvant){
+      h += 'La fin de remboursement passe du <strong>' + new Date(sim.finAvant).toLocaleDateString('fr-FR')
+         + '</strong> au <strong>' + new Date(sim.finApres).toLocaleDateString('fr-FR') + '</strong>.';
+    } else if(!e.dateFin){
+      h += '<span style="color:#854F0B">Cet engagement est à durée indéfinie : il n’a pas de fin '
+         + 'à repousser. Le report se borne à sauter ce mois.</span>';
+    }
+  } else {
+    c.style.background = '#FBE9E7'; c.style.border = '1px solid #E0A0A0'; c.style.color = '#A32D2D';
+    var baisse = sim.restantAvant - sim.restantApres;
+    h += '<strong>Le capital restant dû baisse de '
+      + Math.round(baisse).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA</strong>, de '
+      + Math.round(sim.restantAvant).toLocaleString('fr-FR', GOS_FMT0) + ' à '
+      + Math.round(sim.restantApres).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA.<br>';
+    h += 'La date de fin de remboursement ne change pas. '
+      + 'À n’utiliser que si la banque a bien <strong>remis</strong> cette échéance. '
+      + 'Pour un simple décalage, utilisez <strong>Reporter</strong>.';
+  }
+  c.innerHTML = h;
+
+  document.getElementById('meModalBtnOk').textContent =
+    estReport ? 'Reporter l\'echeance' : 'Annuler l\'echeance';
+  document.getElementById('meModalMotif').value = '';
+  document.getElementById('modalModifEcheance').style.display = 'flex';
+}
+
+function fermerModalModifEcheance(){
+  document.getElementById('modalModifEcheance').style.display = 'none';
+  modifEcheanceEgId = null; modifEcheanceDate = null; modifEcheanceType = null;
+}
+
+function confirmerModifEcheance(){
+  var e = ENGAGEMENTS_BANCAIRES.find(function(x){ return x.id === modifEcheanceEgId; });
+  if(!e) return;
+  var motif = (document.getElementById('meModalMotif').value || '').trim();
+  if(!motif){ alert('Indiquez le motif : c\'est lui qui expliquera plus tard l\'ecart avec l\'echeancier d\'origine.'); return; }
+  var cle = (modifEcheanceType === 'reportee') ? 'echeancesReportees' : 'echeancesAnnulees';
+  e[cle] = e[cle] || [];
+  e[cle].push({dateEcheance: modifEcheanceDate, le: Date.now(),
+               par: (typeof auteurAction === 'function' ? auteurAction() : ''), motif: motif});
+  var libelle = (modifEcheanceType === 'reportee') ? 'reportée' : 'annulée';
+  var dateTxt = new Date(modifEcheanceDate).toLocaleDateString('fr-FR');
+  fermerModalModifEcheance();
+  saveEngagementsBancaires();
+  renderPage();
+  if(typeof afficherToastNotif === 'function'){
+    afficherToastNotif('Echeance ' + libelle,
+      e.nom + ' — echeance du ' + dateTxt + ' ' + libelle + '.', 'ok');
+  }
+}
+
+// Remettre une echeance dans l'echeancier : toute sortie est reversible.
+function retablirEcheanceByEl(btn){
+  var egId = btn.getAttribute('data-egid');
+  var d = parseInt(btn.getAttribute('data-ech'), 10);
+  var type = btn.getAttribute('data-type');
+  var e = ENGAGEMENTS_BANCAIRES.find(function(x){ return x.id === egId; });
+  if(!e || currentRole !== 'direction') return;
+  var cle = (type === 'reportee') ? 'echeancesReportees' : 'echeancesAnnulees';
+  demanderConfirmation(
+    'Remettre cette echeance dans l’echeancier ?',
+    e.nom + ' — echeance du ' + new Date(d).toLocaleDateString('fr-FR') + '.\n'
+      + (type === 'reportee'
+         ? 'L’echeancier sera raccourci d’une periode et retrouvera sa fin precedente.'
+         : 'Le capital restant du augmentera de ' + (parseFloat(e.montant) || 0).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA.'),
+    function(){
+      e[cle] = entreesEcheancesModifiees(e, type).filter(function(x){ return x.dateEcheance !== d; });
+      saveEngagementsBancaires(); renderPage();
+      if(typeof afficherToastNotif === 'function'){
+        afficherToastNotif('Echeance retablie', e.nom + ' — echeance du '
+          + new Date(d).toLocaleDateString('fr-FR') + ' remise dans l\'echeancier.', 'ok');
+      }
+    },
+    {icone: '&#x21BA;', libelleOk: 'Remettre dans l\'echeancier'}
+  );
+}
+
 function ouvrirPaiementEcheance(egId, dateEcheance){
   var e = ENGAGEMENTS_BANCAIRES.find(function(x){return x.id===egId;});
   if(!e) return;
@@ -18110,6 +18338,16 @@ function htmlLigneEngagement(e, maintenant){
   var periodeTxt = (e.dateDebut||e.dateFin)
     ? (e.dateDebut?new Date(e.dateDebut).toLocaleDateString('fr-FR'):'—')+' &rarr; '+(e.dateFin?new Date(e.dateFin).toLocaleDateString('fr-FR'):'—')
     : '<span class="xs muted">Indefinie</span>';
+  // Quand des echeances ont ete reportees, la fin REELLE n'est plus celle du
+  // contrat. On montre les deux : la date du contrat reste la reference, la
+  // date effective dit quand le remboursement s'achevera vraiment.
+  var finReelle = dateFinEffective(e);
+  if(finReelle && e.dateFin && finReelle !== e.dateFin){
+    var nbRep = entreesEcheancesModifiees(e, 'reportee').length;
+    periodeTxt += '<div class="xs" style="color:#185FA5;margin-top:2px" title="'
+      + nbRep + ' échéance(s) reportée(s) : la fin de remboursement a reculé d’autant">'
+      + '&#x23F3; fin réelle : <strong>' + new Date(finReelle).toLocaleDateString('fr-FR') + '</strong></div>';
+  }
   var html = '<tr style="'+(e.actif?'':'opacity:0.5;background:#fafafa')+'">';
   html += '<td><span class="badge b-blue">'+e.nom+'</span>'+(e.descriptif?'<div class="xs muted" style="margin-top:2px;max-width:220px;white-space:normal">'+e.descriptif+'</div>':'')+'</td>';
   html += '<td class="xs muted">'+(e.organisme||'—')+'</td>';
@@ -18228,8 +18466,62 @@ function pageEngagementsBancaires(){
       html += '<td class="xs" style="color:#A32D2D">'+new Date(item.dateEcheance).toLocaleDateString('fr-FR')+' <span class="xs muted">('+jours+' j)</span></td>';
       html += '<td class="xs">'+htmlResumeFacturesLiees(item.engagement)+'</td>';
       html += '<td style="text-align:right;font-family:monospace;font-weight:700">'+resteDuEcheance(item.engagement, item.dateEcheance).toLocaleString('fr-FR', GOS_FMT0)+' FCFA</td>';
-      html += '<td><button class="btn btn-success btn-sm" data-egid="'+item.engagement.id+'" onclick="marquerEcheancePayeeByEl(this)">&#x2714; Marquer payee</button></td>';
+      html += '<td>'+htmlActionsEcheance(item.engagement, item.dateEcheance)+'</td>';
       html += '</tr>';
+    });
+    html += '</tbody></table></div></div>';
+  }
+
+  // ── Echeances reportees ou annulees : visibles et reversibles ──
+  // Une sortie d'echeancier qu'on ne peut plus retrouver serait une
+  // modification silencieuse de la dette. Elles sont donc toutes listees,
+  // avec leur motif, leur auteur et leur date, et chacune peut etre defaite.
+  var sorties = [];
+  ENGAGEMENTS_BANCAIRES.forEach(function(e){
+    ['reportee', 'annulee'].forEach(function(type){
+      entreesEcheancesModifiees(e, type).forEach(function(x){
+        sorties.push({engagement: e, type: type, entree: x});
+      });
+    });
+  });
+  sorties.sort(function(a, b){ return a.entree.dateEcheance - b.entree.dateEcheance; });
+  if(sorties.length){
+    html += '<div class="card" style="margin-bottom:16px;border:1px solid #BDD5F0">';
+    html += '<div class="card-head" style="color:#185FA5">&#x23F3; Echeances reportees ou annulees ('
+         + sorties.length + ')</div>';
+    html += '<div class="tw"><table><thead><tr><th>Engagement</th><th>Echeance d\'origine</th>'
+         + '<th>Operation</th><th>Motif</th><th>Par / le</th><th></th></tr></thead><tbody>';
+    sorties.forEach(function(s){
+      var e = s.engagement, x = s.entree;
+      var estReport = (s.type === 'reportee');
+      // Une echeance sortie qui ne correspond plus a aucune date de
+      // l'echeancier (le jour ou la periode ont ete changes depuis) est
+      // signalee : sinon elle resterait sans effet, sans que personne ne
+      // comprenne pourquoi.
+      var theoriques = (function(){
+        var copie = JSON.parse(JSON.stringify(e));
+        copie.echeancesReportees = []; copie.echeancesAnnulees = [];
+        return genererEcheancesEngagement(copie);
+      })();
+      var orpheline = theoriques.indexOf(x.dateEcheance) < 0;
+      html += '<tr>';
+      html += '<td><strong>' + e.nom + '</strong><div class="xs muted">' + (e.organisme || '—') + '</div></td>';
+      html += '<td class="xs">' + new Date(x.dateEcheance).toLocaleDateString('fr-FR')
+           + (orpheline ? '<div class="xs" style="color:#854F0B">&#x26A0; ne correspond plus à '
+              + 'l’échéancier actuel : sans effet</div>' : '') + '</td>';
+      html += '<td><span class="badge ' + (estReport ? 'b-blue' : 'b-amber') + '">'
+           + (estReport ? 'Reportée' : 'Annulée') + '</span>'
+           + '<div class="xs muted">' + (estReport ? 'rendue à la fin' : 'capital réduit') + '</div></td>';
+      html += '<td class="xs" style="white-space:normal;max-width:260px">' + gosExpEchapper(x.motif || '—') + '</td>';
+      html += '<td class="xs muted">' + gosExpEchapper(x.par || '—')
+           + (x.le ? '<br>' + new Date(x.le).toLocaleDateString('fr-FR') : '') + '</td>';
+      html += '<td>';
+      if(currentRole === 'direction'){
+        html += '<button class="btn btn-sm" data-egid="' + e.id + '" data-ech="' + x.dateEcheance + '" '
+             + 'data-type="' + s.type + '" onclick="retablirEcheanceByEl(this)" '
+             + 'title="Remettre cette échéance dans l’échéancier">&#x21BA; Rétablir</button>';
+      }
+      html += '</td></tr>';
     });
     html += '</tbody></table></div></div>';
   }
@@ -18257,7 +18549,7 @@ function pageEngagementsBancaires(){
       html += '<td class="xs">'+new Date(item.dateEcheance).toLocaleDateString('fr-FR')+' <span class="xs muted">(dans '+joursRestants+' j)</span></td>';
       html += '<td class="xs">'+htmlResumeFacturesLiees(item.engagement)+'</td>';
       html += '<td style="text-align:right;font-family:monospace;font-weight:700">'+resteDuEcheance(item.engagement, item.dateEcheance).toLocaleString('fr-FR', GOS_FMT0)+' FCFA</td>';
-      html += '<td><button class="btn btn-success btn-sm" data-egid="'+item.engagement.id+'" onclick="marquerEcheancePayeeByEl(this)">&#x2714; Marquer payee</button></td>';
+      html += '<td>'+htmlActionsEcheance(item.engagement, item.dateEcheance)+'</td>';
       html += '</tr>';
     });
     html += '</tbody></table></div></div>';
@@ -18491,8 +18783,51 @@ function toggleEngagementById(btn){
 function supprimerEngagementById(btn){
   if(currentRole!=='direction') return;
   var id = btn.getAttribute('data-egid');
-  ENGAGEMENTS_BANCAIRES = ENGAGEMENTS_BANCAIRES.filter(function(x){return x.id!==id;});
-  saveEngagementsBancaires(); renderPage();
+  var e = ENGAGEMENTS_BANCAIRES.find(function(x){ return x.id === id; });
+  if(!e) return;
+
+  // CE QUI DISPARAIT AVEC L'ENGAGEMENT. L'historique des paiements est porte
+  // par l'engagement lui-meme (e.echeancesPayees) : il n'existe nulle part
+  // ailleurs, et rien ne le restaure. On le chiffre AVANT de demander, pour
+  // que la Direction decide en connaissance de cause.
+  var payes = e.echeancesPayees || [];
+  var totalPaye = payes.reduce(function(s, p){
+    // Ancien format : un simple horodatage = echeance soldee en entier.
+    // Nouveau format : {dateEcheance, montant} pour les paiements partiels.
+    return s + (typeof p === 'number' ? (parseFloat(e.montant) || 0)
+                                      : (parseFloat(p && p.montant) || 0));
+  }, 0);
+  var impayees = e.actif ? echeancesImpayees(e) : [];
+  var nbRetard = impayees.filter(function(d){ return d < Date.now(); }).length;
+
+  var lignes = [];
+  lignes.push((e.organisme || 'Organisme non précisé')
+    + ' — ' + (parseFloat(e.montant) || 0).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA par échéance');
+  if(payes.length){
+    lignes.push('⚠ ' + payes.length + ' paiement(s) déjà enregistré(s), '
+      + Math.round(totalPaye).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA au total, seront EFFACÉS.');
+  }
+  if(nbRetard){
+    lignes.push(nbRetard + ' échéance(s) en retard disparaîtront de la liste.');
+  }
+  lignes.push('Cette suppression est définitive : l’engagement et son historique '
+    + 'ne peuvent pas être rétablis.');
+  lignes.push('Pour le retirer des totaux SANS perdre son historique, utilisez '
+    + '« Désactiver » dans le tableau des engagements.');
+
+  demanderConfirmation(
+    'Supprimer l’engagement « ' + e.nom + ' » ?',
+    lignes.join('\n'),
+    function(){
+      ENGAGEMENTS_BANCAIRES = ENGAGEMENTS_BANCAIRES.filter(function(x){ return x.id !== id; });
+      saveEngagementsBancaires(); renderPage();
+      if(typeof afficherToastNotif === 'function'){
+        afficherToastNotif('Engagement supprime',
+          e.nom + ' a ete retire des engagements bancaires.', 'ok');
+      }
+    },
+    {icone: '&#x2715;', libelleOk: 'Supprimer definitivement', danger: true}
+  );
 }
 
 // ============================================================
@@ -31991,10 +32326,98 @@ function resetData(){
 // SYSTEME DE LOGIN
 // ============================================================
 // Gestionnaire d'erreur global pour debug
+// Rapport d'erreur PERSISTANT. L'ancien bandeau disparaissait au bout de 15
+// secondes et n'etait pas selectionnable : impossible d'en transmettre le
+// contenu. Celui-ci reste affiche jusqu'a ce qu'on le ferme, se selectionne,
+// et porte un bouton de copie.
+//
+// « masque » signale le cas ou le navigateur a refuse de donner le detail
+// (erreur venue d'un script d'un autre domaine) : l'operateur sait alors que
+// l'information manquante n'est pas de sa faute, et ou chercher.
+function gosRapporterErreur(etape, e, masque){
+  try{
+    var zone = document.getElementById('gosRapportErreurs');
+    if(!zone){
+      zone = document.createElement('div');
+      zone.id = 'gosRapportErreurs';
+      zone.style.cssText = 'position:fixed;top:0;left:0;right:0;max-height:55vh;overflow:auto;'
+        + 'z-index:999999;background:#2B0D0D;color:#FFE9E9;padding:12px 14px;'
+        + 'font:12px/1.5 Consolas,Monaco,monospace;box-shadow:0 2px 14px rgba(0,0,0,.45);'
+        + '-webkit-user-select:text;user-select:text';
+      var barre = document.createElement('div');
+      barre.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:8px;'
+        + 'font:700 13px Arial,Helvetica,sans-serif';
+      barre.innerHTML = '<span style="flex:1">⚠ GarageOS — rapport d’erreur</span>';
+      var bCopier = document.createElement('button');
+      bCopier.textContent = 'Copier';
+      bCopier.style.cssText = 'padding:4px 10px;font:12px Arial;cursor:pointer';
+      bCopier.onclick = function(){
+        var txt = document.getElementById('gosRapportTexte');
+        try{
+          if(navigator.clipboard && navigator.clipboard.writeText){
+            navigator.clipboard.writeText(txt.innerText);
+            bCopier.textContent = 'Copié ✔';
+            return;
+          }
+        }catch(err){}
+        // Sans acces au presse-papiers : on selectionne, l'operateur fait Ctrl+C.
+        try{
+          var r = document.createRange(); r.selectNodeContents(txt);
+          var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+          bCopier.textContent = 'Sélectionné — Ctrl+C';
+        }catch(err){}
+      };
+      var bFermer = document.createElement('button');
+      bFermer.textContent = 'Fermer';
+      bFermer.style.cssText = 'padding:4px 10px;font:12px Arial;cursor:pointer';
+      bFermer.onclick = function(){ zone.style.display = 'none'; };
+      barre.appendChild(bCopier); barre.appendChild(bFermer);
+      zone.appendChild(barre);
+      var txt = document.createElement('div');
+      txt.id = 'gosRapportTexte';
+      txt.style.cssText = 'white-space:pre-wrap;word-break:break-word';
+      zone.appendChild(txt);
+      document.body.appendChild(zone);
+    }
+    zone.style.display = 'block';
+    var cible = document.getElementById('gosRapportTexte');
+    var lignes = [];
+    lignes.push('━━━ ' + new Date().toLocaleTimeString('fr-FR') + ' ━━━');
+    lignes.push('etape    : ' + etape);
+    lignes.push('role     : ' + (typeof currentRole !== 'undefined' ? currentRole : '?')
+              + '   |   page : ' + (typeof currentPage !== 'undefined' ? currentPage : '?'));
+    if(masque){
+      lignes.push('detail   : MASQUE PAR LE NAVIGATEUR');
+      lignes.push('           L’erreur vient d’un script externe (Firebase, xlsx, chart,');
+      lignes.push('           html2pdf ou face-api). Le navigateur en cache le contenu.');
+    }
+    if(e){
+      lignes.push('type     : ' + (e.name || typeof e));
+      lignes.push('message  : ' + (e.message !== undefined ? e.message : String(e)));
+      if(e.code) lignes.push('code     : ' + e.code);
+      if(e.stack) lignes.push('pile     : ' + String(e.stack).split('\n').slice(0, 6).join('\n           '));
+    }
+    cible.textContent = lignes.join('\n') + '\n\n' + cible.textContent;
+  }catch(err){
+    // Le rapport est un confort : il ne doit jamais aggraver la situation.
+    try{ console.error('GarageOS : rapport d\'erreur indisponible', err, etape, e); }catch(e2){}
+  }
+}
+
+window.addEventListener('unhandledrejection', function(ev){
+  gosRapporterErreur('promesse rejetee sans rattrapage', ev && ev.reason, false);
+});
+
 window.addEventListener('error', function(e){
   var msg = document.createElement('div');
   msg.style.cssText = 'position:fixed;top:60px;left:10px;right:10px;background:#A32D2D;color:#fff;padding:10px;border-radius:8px;font-size:11px;z-index:999999;word-break:break-all';
   msg.textContent = 'ERREUR L.' + e.lineno + ': ' + e.message + ' | ' + (e.filename||'').split('/').pop();
+  // « Script error. » a la ligne 0 = erreur venue d'un script d'un autre
+  // domaine, dont le navigateur masque le detail. On le dit explicitement,
+  // plutot que de laisser l'operateur devant un message qui n'apprend rien.
+  var _masque = (!e.lineno && (e.message === 'Script error.' || e.message === 'Script error'));
+  gosRapporterErreur('erreur de script — ' + ((e.filename || '').split('/').pop() || 'origine inconnue')
+                     + ' ligne ' + e.lineno, e.error || {name: 'Error', message: e.message}, _masque);
   document.body.appendChild(msg);
   setTimeout(function(){ if(msg.parentNode) msg.parentNode.removeChild(msg); }, 15000);
 });
@@ -36125,6 +36548,11 @@ var GOS_SYNC = (function(){
   }
 
   // ---------------------------------------------------------------- envoi (transactions)
+  // Echecs d'envoi CONSECUTIFS par collection, pour arreter une boucle qui ne
+  // peut pas aboutir. Au-dela de cette limite on cesse de reessayer et on
+  // nomme la collection fautive — sans jamais jeter les operations.
+  var echecsEnvoi = {};
+  var GOS_SYNC_MAX_ECHECS = 5;
   function demanderFlux(){ fluxDemande = true; setTimeout(flux, 0); }
   function pret(cle){ return !arrete && enLigne && db && fileChargee && recu[cle] === epoque && autorisee(cle) && !refus[cle]; }
   // C-09 v4 : vrai tant qu'une collection LISIBLE PAR CE ROLE n'a pas encore
@@ -36196,6 +36624,7 @@ var GOS_SYNC = (function(){
         retirerOps(ids);
         resultats.forEach(function(r){ traiterResultat(cle, r); });
         trace({e: 'transaction_validee', c: cle, ops: ids.length});
+        echecsEnvoi[cle] = 0;   // un envoi reussi remet le compteur a zero
         // l'etat valide devient l'etat serveur connu
         var brut = res.snapshot ? res.snapshot.val() : null;
         var lu = lireServeurBrut(d, brut);
@@ -36215,6 +36644,21 @@ var GOS_SYNC = (function(){
       console.error('GOS_SYNC : envoi ' + cle + ' reporte', e);
       trace({e: 'erreur_envoi', c: cle, msg: String(e && e.message || e)});
       if(typeof showSyncStatus === 'function') showSyncStatus('error');
+      // Compteur d'echecs CONSECUTIFS par collection. Un envoi reussi le
+      // remet a zero (voir 'transaction_validee' plus haut).
+      echecsEnvoi[cle] = (echecsEnvoi[cle] || 0) + 1;
+      if(echecsEnvoi[cle] >= GOS_SYNC_MAX_ECHECS){
+        // On ARRETE de reessayer. Les operations restent en attente : rien
+        // n'est perdu, et elles repartiront au prochain chargement ou des que
+        // la cause sera levee. Mais l'operateur cesse de tourner en rond sans
+        // savoir pourquoi, et la cause est nommee.
+        trace({e: 'envoi_abandonne', c: cle, n: echecsEnvoi[cle]});
+        gosRapporterErreur('synchronisation : envoi de la collection « ' + cle + ' » '
+          + 'abandonne apres ' + echecsEnvoi[cle] + ' echecs consecutifs. '
+          + file.filter(function(o){ return o.collection === cle; }).length
+          + ' operation(s) restent en attente (rien n’est perdu).', e, false);
+        suite(); return;
+      }
       setTimeout(function(){ demanderFlux(); }, 3000);
       suite();
     });
@@ -36760,18 +37204,31 @@ var GOS_AUTH = (function(){
     if(!user){ return; }                             // pas de session Firebase : ecran de connexion
     if(etat.uid === user.uid && etat.mode === 'firebase') return;
     lireProfil(user.uid, function(p, source){
+      try{
       if(!p){ refuser('Ce compte n\'est associe a aucun profil du personnel. Contactez la Direction.'); return; }
       if(p.actif !== true){ bloquer('Ce compte est desactive. Contactez la Direction.'); return; }
       ecrireCache({uid: user.uid, profil: p});
       if(p.doitChangerMdp === true){ changementObligatoire(user, p); return; }
       ouvrirSession(user.uid, p, source);
+      }catch(err){
+        // Sans ce rattrapage, l'erreur remontait par le script Firebase et le
+        // navigateur n'en laissait que « Script error. » a la ligne 0.
+        gosRapporterErreur('connexion : apres lecture du profil (role '
+          + ((p && p.role) || '?') + ', source ' + source + ')', err, false);
+        try{ bandeauTransition(false); }catch(e2){}
+        afficherEcranConnexion('La connexion a echoue apres la lecture de votre profil. '
+          + 'Le detail est affiche en haut de l\'ecran : transmettez-le a la Direction.');
+      }
     });
   }
   function ouvrirSession(uid, p, source){
     etat.mode = 'firebase'; etat.uid = uid; etat.profil = p; etat.bloque = false;
     attendreChargementLocal(function(){
-      GOS_SYNC.definirRole(p.role, true);
-      _doLoginWithCompte(compteDepuisProfil(uid, p));
+      // Chaque etape est nommee : en cas d'echec, le rapport dit laquelle.
+      try{ GOS_SYNC.definirRole(p.role, true); }
+      catch(e1){ gosRapporterErreur('connexion : definition des droits du role ' + p.role, e1, false); throw e1; }
+      try{ _doLoginWithCompte(compteDepuisProfil(uid, p)); }
+      catch(e2){ gosRapporterErreur('connexion : ouverture de la session (role ' + p.role + ')', e2, false); throw e2; }
       bandeauTransition(false);
       if(source === 'serveur'){ fbDb.ref('gos_staff/' + uid + '/derniereConnexion').set(firebase.database.ServerValue.TIMESTAMP).catch(function(){}); }
       surveiller(uid);
@@ -36997,8 +37454,7 @@ var GOS_PERSONNEL = (function(){
         + '<td>' + (p.actif ? (p.doitChangerMdp ? 'actif (mot de passe a changer)' : 'actif') : '<span style="color:#A32D2D">desactive</span>') + '</td>'
         + '<td>' + (p.derniereConnexion ? new Date(p.derniereConnexion).toLocaleString('fr-FR', GOS_FMT0) : 'jamais') + '</td><td>'
         + (uid === GOS_AUTH.uid ? '<span class="xs muted">vous</span>' : (p.actif ? '<button class="btn btn-sm" onclick="GOS_PERSONNEL.changerEtat(\'' + uid + '\', false)">Desactiver</button>'
-                                                                            : '<button class="btn btn-sm" onclick="GOS_PERSONNEL.changerEtat(\'' + uid + '\', true)">Reactiver</button>'
-                                                                              + ' <button class="btn btn-sm" style="color:#A32D2D" onclick="GOS_PERSONNEL.supprimer(\'' + uid + '\')">Supprimer</button>'))
+                                                                            : '<button class="btn btn-sm" onclick="GOS_PERSONNEL.changerEtat(\'' + uid + '\', true)">Reactiver</button>'))
         + '</td></tr>';
     });
     h += '</tbody></table>';
@@ -37012,13 +37468,6 @@ var GOS_PERSONNEL = (function(){
       + '<div><label class="fl">Mot de passe provisoire (identifiant uniquement, 10 caracteres min.)</label><input class="fi" id="pProvisoire" type="password" autocomplete="new-password"></div>'
       + '</div><div id="pMsg" class="xs" style="margin:8px 0;color:#A32D2D"></div><button class="btn btn-primary btn-sm" id="pCreer" onclick="GOS_PERSONNEL.creer()">Creer le compte</button>'
       + '<div class="xs muted" style="margin-top:6px">Adresse e-mail : l\'employe recoit un lien pour choisir son mot de passe. Identifiant : remettez le mot de passe provisoire en main propre ; il devra le changer a la premiere connexion. Aucun mot de passe n\'est conserve par GarageOS.</div></div>';
-    h += '<div style="margin-top:14px;border-top:1px solid #eee;padding-top:10px">'
-      + '<strong style="font-size:13px">Un employe a oublie son mot de passe ?</strong>'
-      + '<div class="xs" style="margin-top:6px;line-height:1.6">'
-      + '<b>Compte avec adresse e-mail :</b> il clique sur « Mot de passe oublie » sur l\'ecran de connexion et suit le lien recu.<br>'
-      + '<b>Compte avec identifiant simple :</b> sur le PC Direction, double-cliquez sur le raccourci <b>« Reinitialiser un mot de passe »</b>, saisissez son identifiant, et remettez-lui en main propre le mot de passe provisoire affiche. Il en choisira un nouveau a sa prochaine connexion.<br>'
-      + '<b>Sans le PC Direction :</b> desactivez son compte ci-dessus, supprimez-le, puis recreez-le avec le meme identifiant et un nouveau mot de passe provisoire. Son historique de travail n\'est pas affecte.'
-      + '</div></div>';
     return h + '</div></div>';
   }
   function msg(t, ok){ var el = document.getElementById('pMsg'); if(el){ el.style.color = ok ? '#3B6D11' : '#A32D2D'; el.textContent = t; } }
@@ -37066,25 +37515,7 @@ var GOS_PERSONNEL = (function(){
     if(!actif){ maj.desactiveLe = firebase.database.ServerValue.TIMESTAMP; maj.desactivePar = GOS_AUTH.uid; }
     fbDb.ref('gos_staff/' + uid).update(maj).catch(function(e){ alert('Echec : ' + (e && e.code ? e.code : e)); });
   }
-  // Suppression definitive d'un acces : seulement sur un compte deja desactive,
-  // pour qu'aucun acces ne soit retire par inadvertance. L'identifiant est libere
-  // et redevient reutilisable. Le compte Firebase subsiste mais, sans profil, il
-  // n'a plus aucun droit (verifie par les tests SEC-03).
-  function supprimer(uid){
-    var p = liste[uid] || {};
-    if(uid === GOS_AUTH.uid) return;
-    if(p.actif){ alert('Desactivez d\'abord ce compte, puis supprimez-le.'); return; }
-    if(!confirm('Supprimer definitivement l\'acces de ' + (p.nom || uid) + ' ?\n\nSon historique de travail et sa fiche du personnel ne sont pas touches.\nL\'identifiant redeviendra disponible.')) return;
-    if(prompt('Pour confirmer, tapez SUPPRIMER') !== 'SUPPRIMER') return;
-    var suite = function(){
-      fbDb.ref('gos_staff/' + uid).remove().then(function(){
-        alert('Acces supprime.\n\nLe compte Firebase existe encore mais n\'a plus aucun droit. Pour l\'effacer completement :\nnode gos-admin-b3.js supprimer-sans-profil ' + uid);
-      }).catch(function(e){ alert('Echec : ' + (e && e.code ? e.code : e)); });
-    };
-    if(p.typeCompte === 'identifiant' && p.login) fbDb.ref('gos_staff_logins/' + cleLogin(p.login)).remove().then(suite, suite);
-    else suite();
-  }
-  return {html: html, creer: creer, changerEtat: changerEtat, supprimer: supprimer};
+  return {html: html, creer: creer, changerEtat: changerEtat};
 })();
 var GOS_M1_OUTIL = {
   html: function(){
