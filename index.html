@@ -15555,6 +15555,17 @@ function tresoEnregistrer(){
     localStorage.setItem('gos_treso_comptes', JSON.stringify(TRESO_COMPTES));
     localStorage.setItem('gos_treso_mouvements', JSON.stringify(TRESO_MOUVEMENTS));
     localStorage.setItem('gos_treso_releves', JSON.stringify(TRESO_RELEVES));
+    // Prevenir le moteur : il compare avec l'etat precedent et n'emet une
+    // operation que pour ce qui a REELLEMENT change. Les trois structures
+    // sont annoncees meme si une seule a bouge — le moteur fait le tri, et
+    // c'est moins fragile que de deviner ici laquelle a ete touchee.
+    try{
+      if(typeof GOS_SYNC !== 'undefined' && GOS_SYNC.enregistrer){
+        GOS_SYNC.enregistrer('gos_treso_comptes');
+        GOS_SYNC.enregistrer('gos_treso_mouvements');
+        GOS_SYNC.enregistrer('gos_treso_releves');
+      }
+    }catch(eSync){ console.error('Tresorerie : synchronisation differee', eSync); }
     return true;
   }catch(e){
     console.error('Tresorerie : stockage local sature', e);
@@ -15652,7 +15663,7 @@ function renderGestionLiquidite(){
   h += '<button class="btn btn-sm" onclick="tresoOuvrirHistorique()">&#x1F4C8; Historique</button>';
   h += '<button class="btn btn-primary btn-sm" onclick="tresoOuvrirCompte(null)">+ Ajouter un compte</button>';
   h += '</div></div>';
-  h += '<div class="xs muted" style="margin-bottom:12px;line-height:1.5">Suivi autonome, enregistre sur ce poste uniquement. Le solde est calcule a partir des entrees et sorties ; un releve enregistre le solde reellement constate et fait apparaitre l\'ecart.</div>';
+  h += '<div class="xs muted" style="margin-bottom:12px;line-height:1.5">Partage entre les postes de la Direction : une saisie faite ici apparait sur les autres des la synchronisation. Le solde est calcule a partir des entrees et sorties ; un releve enregistre le solde reellement constate et fait apparaitre l\'ecart.</div>';
 
   // Indicateurs : la tresorerie totale, puis sa repartition par nature.
   h += '<div class="kgrid k4" style="margin-bottom:16px">';
@@ -32186,6 +32197,12 @@ var GETTERS_EXPORT_COMPLET = {
   'gos_forfaits_clients': function(){ return FORFAITS_CLIENTS; },
   'gos_charges_fixes': function(){ return CHARGES_FIXES; },
   'gos_engagements_bancaires': function(){ return ENGAGEMENTS_BANCAIRES; },
+  // Les trois structures de la liquidite manquaient a l'export : une
+  // sauvegarde qui laisse dehors toute la tresorerie n'est pas une
+  // sauvegarde.
+  'gos_treso_comptes': function(){ return TRESO_COMPTES; },
+  'gos_treso_mouvements': function(){ return TRESO_MOUVEMENTS; },
+  'gos_treso_releves': function(){ return TRESO_RELEVES; },
   'gos_caisse_journees': function(){ return CAISSE_JOURNEES; },
   'gos_caisse_mouvements': function(){ return CAISSE_MOUVEMENTS; },
   'gos_dettes_manuelles': function(){ return DETTES_MANUELLES; },
@@ -32273,6 +32290,7 @@ function importData(input){
     var CLES_SYNC_FIREBASE = [
       'gos_personnel', 'gos_fournisseurs', 'gos_banques', 'gos_forfait_factures', 'gos_forfaits_clients',
       'gos_charges_fixes', 'gos_engagements_bancaires', 'gos_caisse_journees',
+      'gos_treso_comptes', 'gos_treso_mouvements', 'gos_treso_releves',
       'gos_caisse_mouvements', 'gos_dettes_manuelles', 'gos_employes_presence',
       'gos_presences', 'gos_descripteurs_faciaux', 'gos_client_delais_paiement',
       'gos_clients_sans_vehicule', 'gos_stock', 'gos_exposition_snapshots'
@@ -37075,6 +37093,17 @@ var GOS_SYNC = (function(){
   simple('gos_charges_fixes', 'CHARGES_FIXES', null, {});
   simple('gos_engagements_bancaires', 'ENGAGEMENTS_BANCAIRES', null, {});
   simple('gos_banques', 'BANQUES', null, {});
+  // Gestion liquidite : comptes, mouvements et releves. Jusqu'ici purement
+  // locaux — donc invisibles d'un autre poste, et absents de l'export.
+  // Les libelles servent au journal du moteur et a l'ecran des conflits :
+  // « Mouvement 150 000 — Virement loyer » est lisible, « tm_17293... » ne
+  // l'est pas.
+  simple('gos_treso_comptes', 'TRESO_COMPTES', null,
+         {libelle: function(r){ return 'Compte ' + (r.nom || r.id); }});
+  simple('gos_treso_mouvements', 'TRESO_MOUVEMENTS', null,
+         {libelle: function(r){ return 'Mouvement ' + (r.montant || '') + ' — ' + (r.motif || ''); }});
+  simple('gos_treso_releves', 'TRESO_RELEVES', null,
+         {libelle: function(r){ return 'Releve du ' + (r.date ? new Date(r.date).toLocaleDateString('fr-FR') : '?'); }});
   simple('gos_clients_sans_vehicule', 'CLIENTS_SANS_VEHICULE', null, {});
   simple('gos_presences', 'PRESENCES', null, {});
   simple('gos_employes_presence', 'EMPLOYES_PRESENCE', null, {});
@@ -37158,6 +37187,10 @@ var GOS_AUTH_MATRICE = {
   'gos_caisse_mouvements': ['direction','reception'],
   'gos_dettes_manuelles': ['direction','achats'],
   'gos_banques': ['direction'], 'gos_charges_fixes': ['direction'], 'gos_engagements_bancaires': ['direction'],
+  // Gestion liquidite : Direction seule. Un autre profil n'ecoute pas ces
+  // noeuds et n'en conserve aucune copie sur son appareil.
+  'gos_treso_comptes': ['direction'], 'gos_treso_mouvements': ['direction'],
+  'gos_treso_releves': ['direction'],
   'gos_exposition_snapshots': ['direction'],
   'gos_personnel': 'tous',
   'gos_presences': ['direction','reception'], 'gos_employes_presence': ['direction','reception'],
