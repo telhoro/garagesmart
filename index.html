@@ -36465,11 +36465,85 @@ var GOS_SYNC = (function(){
     });
     retirerOps(ops.map(function(o){ return o.opId; }));
     ops.forEach(function(op){ notifierOp(op.opId, 'refus'); });   // SYNC EN LIGNE
+    setTimeout(transmettreQuarantaine, 1500);   // SYNC ARBITRAGE : remontee a la Direction
   }
   function listeQuarantaine(cb){
     if(idb){ try{ var r = idb.transaction('quarantaine', 'readonly').objectStore('quarantaine').getAll(); r.onsuccess = function(){ cb(r.result || []); }; r.onerror = function(){ cb([]); }; return; }catch(e){} }
     try{ cb(JSON.parse(localStorage.getItem('gos_sync_quarantaine') || '[]')); }catch(e){ cb([]); }
   }
+  // ---------------------------------------------------------------- SYNC ARBITRAGE : quarantaine -> Direction
+  var RAISONS_QUARANTAINE = {refus_permission: 'refusee par le serveur (droits du profil)', lecture_refusee: 'collection non autorisee pour ce profil',
+                             non_confirmee_avant_rechargement: 'jamais recue par le serveur (avant rechargement)'};
+  function retirerQuarantaine(opId){
+    if(idb){ try{ idb.transaction('quarantaine', 'readwrite').objectStore('quarantaine').delete(opId); }catch(e){ console.error('quarantaine delete', e); } return; }
+    try{ var q = JSON.parse(localStorage.getItem('gos_sync_quarantaine') || '[]').filter(function(o){ return o.opId !== opId; });
+         localStorage.setItem('gos_sync_quarantaine', JSON.stringify(q)); }catch(e){}
+  }
+  function descriptionOp(op){
+    if(op.type === 'delta') return 'Mouvement de stock' + (op.libelle ? ' (' + op.libelle + ')' : '') + ' : quantite ' + (op.dQte || 0) + ', reserve ' + (op.dRes || 0);
+    if(op.type === 'create') return 'Creation d\'un element';
+    if(op.type === 'delete') return 'Suppression de l\'element';
+    return (op.patch || []).map(function(e){ return nomChampSync(e.p.join('.')) + ' : ' + valeurLisibleSync(e.n, e.p.join('.')); }).join(' ; ');
+  }
+  var transmissionEnCours = false;
+  function transmettreQuarantaine(){
+    if(transmissionEnCours || !db || !enLigne || arrete || !ecritureAutorisee()) return;
+    transmissionEnCours = true;
+    listeQuarantaine(function(ops){
+      if(!ops || !ops.length){ transmissionEnCours = false; return; }
+      var envois = ops.map(function(op){
+        var patchJson = op.type === 'update' ? JSON.stringify((op.patch || []).map(function(e){ return {p: e.p, n: e.n === undefined ? null : e.n}; })) : null;
+        if(patchJson && patchJson.length > 150000) patchJson = null;   // trop volumineux : decision manuelle
+        var entree = {
+          collection: op.collection, recordId: String(op.recordId), type: 'operation_non_appliquee',
+          raison: (op.quarantaine && op.quarantaine.raison) || '?', chemin: (op.patch || []).map(function(e){ return e.p.join('.'); }).join(', '),
+          patchOpJson: patchJson, description: descriptionOp(op).slice(0, 2000),
+          libelle: COLL[op.collection] && COLL[op.collection].libelle ? String(COLL[op.collection].libelle(op.record || op.baseComplete || op.base || {})) : String(op.recordId),
+          opId: op.opId, deviceId: String(op.deviceId || '?'), auteur: String(op.auteur || '?'), operationCreeeLe: op.createdAt || null,
+          detecteLe: firebase.database.ServerValue.TIMESTAMP, statut: 'ouvert'
+        };
+        return db.ref('gos_conflits/q_' + cleFirebase(op.opId)).set(entree).then(function(){ return op.opId; }, function(e){
+          trace({e: 'transmission_quarantaine_refusee', opId: op.opId, code: e && e.code}); return null; });
+      });
+      Promise.all(envois).then(function(ids){
+        var ok = ids.filter(Boolean);
+        ok.forEach(retirerQuarantaine);
+        nbQuarantaine = Math.max(0, nbQuarantaine - ok.length);
+        trace({e: 'quarantaine_transmise', n: ok.length, restantes: ops.length - ok.length});
+        transmissionEnCours = false; majIndicateur();
+      });
+    });
+  }
+  // Carte d'arbitrage d'une operation non appliquee (ecran Direction)
+  function carteOperation(k, c){
+    var d = COLL[c.collection], actuel;
+    try{ if(d) actuel = enCarte(d, d.lire())[c.recordId]; }catch(e){}
+    var patchOp = null; try{ patchOp = c.patchOpJson ? JSON.parse(c.patchOpJson) : null; }catch(e){}
+    var h = '<div id="gosConflitLigne_' + k + '" data-conflit="1" style="border:1px solid #E8A44A;border-radius:6px;padding:11px;margin-bottom:10px;font-size:12px">';
+    h += '<div style="font-weight:700;font-size:13px">' + echapper(dossierConcerneSync(c)) + '</div>';
+    h += '<div class="xs muted" style="margin-bottom:8px">' + echapper(nomCollectionSync(c.collection)) + ' · operation non appliquee — '
+       + echapper(RAISONS_QUARANTAINE[c.raison] || c.raison || '?') + '</div>';
+    if(patchOp && patchOp.length){
+      h += '<table style="width:100%;border-collapse:collapse;margin-bottom:8px"><tr style="color:#666"><td style="padding:3px 6px">Information</td>'
+         + '<td style="padding:3px 6px;text-align:right">Enregistre aujourd\'hui</td><td style="padding:3px 6px;text-align:right">Demande par ' + echapper(c.auteur || '?') + '</td></tr>';
+      patchOp.forEach(function(e){
+        var ch = e.p.join('.'), va = actuel ? lire(actuel, e.p) : undefined;
+        h += '<tr style="border-top:1px solid #f0f0f0"><td style="padding:4px 6px">' + echapper(nomChampSync(ch)) + '</td>'
+           + '<td style="padding:4px 6px;text-align:right;font-family:monospace">' + echapper(valeurLisibleSync(va, ch)) + '</td>'
+           + '<td style="padding:4px 6px;text-align:right;font-family:monospace;color:#185FA5;font-weight:700">' + echapper(valeurLisibleSync(e.n, ch)) + '</td></tr>';
+      });
+      h += '</table>';
+    } else {
+      h += '<div style="background:#F7F9FB;border-radius:4px;padding:8px;margin-bottom:8px">' + echapper(c.description || '') + '<br><span class="xs muted">Cette operation ne peut pas etre appliquee automatiquement : refaites-la si necessaire, puis ecartez-la.</span></div>';
+    }
+    h += '<div class="xs muted" style="margin-bottom:8px">Saisie le ' + (c.operationCreeeLe ? new Date(c.operationCreeeLe).toLocaleString('fr-FR') : '?')
+       + ' par ' + echapper(c.auteur || '?') + ' · poste ' + echapper(c.deviceId || '?') + '</div>';
+    h += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+    h += '<button class="btn btn-sm" onclick="GOS_SYNC.resoudreConflit(\'' + k + '\',\'garder\')">Ecarter (garder la valeur enregistree)</button>';
+    if(patchOp && patchOp.length) h += '<button class="btn btn-sm btn-primary" onclick="GOS_SYNC.resoudreConflit(\'' + k + '\',\'appliquer\')">Appliquer la demande</button>';
+    return h + '</div></div>';
+  }
+
   function definirRole(role, authentifie){
     autorisees = {};
     ORDRE.forEach(function(cle){ autorisees[cle] = !authentifie || gosAutorisePour(role, cle); });
@@ -36736,7 +36810,7 @@ var GOS_SYNC = (function(){
     if(!connecte){ setTimeout(avisHeritees, 2000); return; }
     bilanHeritees.avise = true;
     var f = window.gosToastBrut || window.afficherToastNotif;
-    if(typeof f === 'function') f('Modifications non confirmees', bilanHeritees.quarantaine + ' modification(s) faite(s) avant le dernier rechargement n\'ont jamais ete recues par le serveur. Elles n\'ont pas ete appliquees et ne seront pas envoyees a retardement : verifiez et ressaisissez si necessaire. Detail : cliquez sur l\'indicateur en bas a gauche.', 'alerte');
+    if(typeof f === 'function') f('Modifications non confirmees', bilanHeritees.quarantaine + ' modification(s) faite(s) avant le dernier rechargement n\'ont jamais ete recues par le serveur. Elles n\'ont pas ete appliquees et ne seront pas envoyees a retardement : verifiez et ressaisissez si necessaire. Elles sont transmises a la Direction, qui decidera de les appliquer ou non.', 'alerte');
   }
   // Conflit reel : l'auteur est prevenu discretement ; la Direction garde le journal et la decision.
   function avisConflitAuteur(cle, op, conflits){
@@ -37030,6 +37104,7 @@ var GOS_SYNC = (function(){
     if(connecte && !enLigne){
       enLigne = true; epoque++;
       refus = {};   // C-09 : un refus constate hors ligne n'est pas definitif, il est reevalue a la reconnexion
+      setTimeout(transmettreQuarantaine, 5000);   // SYNC ARBITRAGE : operations conservees sur ce poste -> Direction
       // 1) recuperer d'abord l'etat serveur de chaque collection (la reception
       //    marque la collection « prete ») ; 2) seulement ensuite, envoyer la file.
       ORDRE.forEach(function(cle){
@@ -37137,6 +37212,7 @@ var GOS_SYNC = (function(){
     return c.libelle || c.recordId;
   }
   function carteConflit(k, c){
+    if(c.type === 'operation_non_appliquee') return carteOperation(k, c);   // SYNC ARBITRAGE
     var champ = nomChampSync(c.chemin);
     var supprime = (c.type === 'element_supprime_ailleurs');
     var simple = valeurSimpleSync(c.local) && valeurSimpleSync(c.serveur) && !supprime;
@@ -37197,7 +37273,7 @@ var GOS_SYNC = (function(){
       if(!ops || !ops.length) return;
       var corps = o.querySelector('.mbody'); if(!corps) return;
       var q = '<div style="margin-top:14px;border-top:1px solid #e2e2e2;padding-top:10px"><div style="font-weight:700;font-size:13px;margin-bottom:6px">Operations non appliquees conservees sur ce poste (' + ops.length + ')</div>'
-        + '<p class="xs muted" style="margin-bottom:8px;line-height:1.5">Elles n\'ont PAS ete enregistrees sur le serveur et ne seront pas envoyees. A ressaisir si necessaire.</p>';
+        + '<p class="xs muted" style="margin-bottom:8px;line-height:1.5">Elles n\'ont PAS ete enregistrees sur le serveur. Elles sont transmises automatiquement a la Direction (ecran des conflits) des que ce poste est connecte.</p>';
       ops.slice(-50).reverse().forEach(function(op){
         var champs = op.type === 'delta' ? ('quantite ' + (op.dQte || 0) + ', reserve ' + (op.dRes || 0))
           : (op.patch || []).map(function(e){ return nomChampSync(e.p.join('.')) + ' : ' + valeurLisibleSync(e.n, e.p.join('.')); }).join(' ; ') || op.type;
@@ -37211,6 +37287,20 @@ var GOS_SYNC = (function(){
   }
   function resoudreConflit(k, action){
     var c = conflitsOuverts[k]; if(!c || !db) return;
+    // SYNC ARBITRAGE : une decision est une ecriture -> serveur joignable obligatoire
+    if(!ecritureAutorisee()){ dernierRefus = Date.now(); avisRefus(); return; }
+    if(action === 'appliquer' && c.type === 'operation_non_appliquee' && COLL[c.collection]){
+      var pj = null; try{ pj = c.patchOpJson ? JSON.parse(c.patchOpJson) : null; }catch(e){}
+      if(!pj || !pj.length) return;
+      var da = COLL[c.collection], recA = enCarte(da, da.lire())[c.recordId] || {};
+      var patchA = pj.map(function(e){ return {p: e.p, a: clone(lire(recA, e.p)), n: e.n === null ? undefined : clone(e.n)}; })
+                     .filter(function(e){ return !egal(e.a, e.n); });
+      if(patchA.length){
+        ajouterOp({collection: c.collection, recordId: c.recordId, type: 'update', patch: patchA, baseComplete: sansPhotos(recA), arbitrage: k});
+        publierVue(c.collection, 'arbitrage'); demanderFlux();
+      }
+      trace({e: 'arbitrage_applique', k: k, champs: patchA.length});
+    }
     if(action === 'appliquer' && c.cheminListe && COLL[c.collection]){
       var d = COLL[c.collection];
       var vue = enCarte(d, d.lire()), rec = vue[c.recordId];
@@ -37513,7 +37603,7 @@ afficherToastNotif = function(titre, corps, type){
     gosAttendreConfirmation(o.ops, o.directes, {
       fin: function(res){
         if(res === 'ok') gosToastBrut(titre, corps + (signale ? ' (confirme par le serveur)' : ''), 'ok');
-        else if(res === 'refus') gosToastBrut('Non enregistre', titre + ' : le serveur n\'a pas accepte l\'operation (droits insuffisants ou connexion perdue). Rien n\'a ete applique.', 'alerte');
+        else if(res === 'refus') gosToastBrut('Non enregistre', titre + ' : le serveur n\'a pas accepte l\'operation (droits insuffisants ou connexion perdue). Rien n\'a ete applique : la demande est transmise a la Direction pour decision.', 'alerte');
         // 'echec' (ex. stock insuffisant) : le message metier est deja affiche
       },
       lent: function(){ signale = true; gosToastBrut('Enregistrement en cours', titre + ' : le serveur n\'a pas encore confirme. Ne fermez pas la page.', 'info'); },
