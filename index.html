@@ -160,9 +160,8 @@ tr:hover td{background:#faf9f7}
 <!-- C-09 v4 — VOILE DE CHARGEMENT BLOQUANT (point 1 du 25/09/2026)
      Empeche toute saisie tant que les donnees du serveur ne sont pas arrivees.
      Enregistrer avant leur arrivee revient a se comparer a une copie perimee,
-     donc a proposer d'ecraser le travail d'un autre poste. Ne s'affiche jamais
-     hors ligne : la copie locale est alors la seule reference possible et le
-     travail est mis en file d'attente comme avant. -->
+     donc a proposer d'ecraser le travail d'un autre poste. Hors ligne, il ne
+     s'affiche pas : l'application passe en consultation uniquement (SYNC EN LIGNE). -->
 <div id="gosBlocageChargement" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:99997;background:rgba(255,255,255,0.94);align-items:center;justify-content:center;flex-direction:column;gap:12px;text-align:center;padding:24px">
   <div style="font-size:38px;animation:sablierPulse 1.4s ease-in-out infinite">&#x23F3;</div>
   <div style="font-weight:700;font-size:15px">Chargement des donnees a jour...</div>
@@ -173,7 +172,7 @@ tr:hover td{background:#faf9f7}
      (le garage ne pourrait plus travailler), mais on le dit clairement plutot
      que de rendre la main en silence. -->
 <div id="gosAvertissementDonnees" style="display:none;position:fixed;top:0;left:0;right:0;z-index:99996;background:#FDF3E3;border-bottom:1px solid #E8A44A;color:#854F0B;font-size:12px;padding:7px 12px;text-align:center;line-height:1.4">
-  &#x26A0; Les donnees du serveur ne sont pas arrivees. Evitez d'enregistrer : verifiez la connexion, puis rechargez la page.
+  &#x26A0; Les donnees du serveur ne sont pas arrivees : consultation uniquement. Verifiez la connexion, puis rechargez la page.
 </div>
 <style>@keyframes sablierPulse{0%,100%{opacity:0.35;transform:scale(0.92)}50%{opacity:1;transform:scale(1.08)}}</style>
 <!-- ECRAN LOGIN -->
@@ -29143,7 +29142,7 @@ function verifierChangementFicheOuverte(){
   } else {
     texte = 'Un autre poste vient de modifier ce dossier (<strong>'
           + champs.map(function(k){ return LIBELLES_CHAMPS_DOSSIER[k] || k; }).join(', ')
-          + '</strong>). Ce que vous voyez n\'est plus a jour : rechargez avant d\'enregistrer.';
+          + '</strong>). Vos saisies restent valables : ce que vous ne modifiez pas gardera la nouvelle valeur. Rechargez pour afficher la version a jour.';
   }
   b.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
     + '<span style="font-size:15px">&#x26A0;</span>'
@@ -36337,6 +36336,7 @@ var GOS_SYNC = (function(){
     op.createdAt = heureServeur(); op.deviceId = (typeof deviceId !== 'undefined' ? deviceId : '?'); op.auteur = utilisateur();
     op.tentatives = 0;
     file.push(op); persister(op);
+    try{ if(typeof gosSurNouvelleOperation === 'function') gosSurNouvelleOperation(op.opId); }catch(e){}   // SYNC CONCURRENCE
     trace({e: 'operation_creee', opId: op.opId, c: op.collection, id: op.recordId, type: op.type});
   }
   function retirerOps(ids){
@@ -36464,6 +36464,7 @@ var GOS_SYNC = (function(){
       else { try{ var q = JSON.parse(localStorage.getItem('gos_sync_quarantaine') || '[]'); q.push(op); localStorage.setItem('gos_sync_quarantaine', JSON.stringify(q)); }catch(e){} }
     });
     retirerOps(ops.map(function(o){ return o.opId; }));
+    ops.forEach(function(op){ notifierOp(op.opId, 'refus'); });   // SYNC EN LIGNE
   }
   function listeQuarantaine(cb){
     if(idb){ try{ var r = idb.transaction('quarantaine', 'readonly').objectStore('quarantaine').getAll(); r.onsuccess = function(){ cb(r.result || []); }; r.onerror = function(){ cb([]); }; return; }catch(e){} }
@@ -36521,6 +36522,54 @@ var GOS_SYNC = (function(){
     try{ if(d.apres) d.apres(raison); }catch(e){ console.error('GOS_SYNC apres ' + cle, e); }
   }
 
+  // ---------------------------------------------------------------- SYNC CONCURRENCE : base d'edition
+  // Ce que l'utilisateur avait SOUS LES YEUX quand il a commence a saisir.
+  // Les formulaires reecrivent tous leurs champs a l'enregistrement : sans cette base,
+  // un champ non touche remettait l'ancienne valeur par-dessus celle qu'un autre poste
+  // venait d'enregistrer, sans aucune alerte.
+  //  - session (une fenetre est ouverte) : une valeur reecrite telle qu'elle etait
+  //    affichee n'est jamais envoyee ; la valeur recue entre-temps est conservee ;
+  //  - dossier en cours d'edition : en plus, la reference d'un champ modifie est la valeur
+  //    que l'utilisateur avait vue. Serveur inchange depuis -> sa modification fait foi
+  //    (derniere modification confirmee) ; serveur modifie depuis -> jamais d'ecrasement
+  //    silencieux (conflit). Aucune decision ne depend de l'heure des postes.
+  var baseSession = null, baseDossier = {};
+  function sessionEdition(ouverte){
+    if(ouverte){
+      if(baseSession) return;
+      baseSession = {};
+      ORDRE.forEach(function(c){ if(ombre[c]){ var m = {}; Object.keys(ombre[c]).forEach(function(id){ m[id] = ombre[c][id]; }); baseSession[c] = m; } });
+      trace({e: 'session_edition', ouverte: true});
+    } else if(baseSession){
+      baseSession = null; baseDossier = {};
+      trace({e: 'session_edition', ouverte: false});
+    }
+  }
+  function debutEditionDossier(id){
+    if(id === undefined || id === null) return;
+    id = String(id);
+    var o = ombre['vehicles'] && ombre['vehicles'][id];
+    if(o !== undefined) baseDossier[id] = clone(o);
+  }
+  function rebaser(cle, id, rec, patch){
+    var complet = cle === 'vehicles' && baseDossier[id] !== undefined;
+    var base = complet ? baseDossier[id] : (baseSession && baseSession[cle] ? baseSession[cle][id] : undefined);
+    if(base === undefined) return patch;
+    var gardes = [];
+    patch.forEach(function(e){
+      var vb = lire(base, e.p);
+      if(egal(vb, e.n) && !egal(e.a, e.n)){
+        // valeur affichee reecrite sans changement : on garde la valeur recue du serveur
+        ecrire(rec, e.p, e.a);
+        trace({e: 'reecriture_ignoree', c: cle, id: id, champ: e.p.join('.')});
+        return;
+      }
+      if(complet) e.a = clone(vb);
+      gardes.push(e);
+    });
+    return gardes;
+  }
+
   // ---------------------------------------------------------------- detection des modifications locales
   function capturer(cle){
     var d = COLL[cle]; if(!ombre[cle]) return 0;
@@ -36529,8 +36578,11 @@ var GOS_SYNC = (function(){
       var rec = actuel[id], b = avant[id];
       if(b === undefined){ emettre(cle, 'create', id, rec, null, null); n++; }
       else if(JSON.stringify(b) !== JSON.stringify(rec)){
-        var patch = diff(b, rec, [], [], d);
+        var patch = rebaser(cle, id, rec, diff(b, rec, [], [], d));   // SYNC CONCURRENCE
         if(patch.length){ emettre(cle, 'update', id, rec, b, patch); n++; }
+        // ce que l'utilisateur voit apres son enregistrement devient sa nouvelle reference
+        if(cle === 'vehicles' && baseDossier[id] !== undefined) baseDossier[id] = clone(rec);
+        else if(baseSession && baseSession[cle]) baseSession[cle][id] = clone(rec);
       }
       avant[id] = clone(rec);
     });
@@ -36544,6 +36596,8 @@ var GOS_SYNC = (function(){
   function enregistrer(cle){
     if(!COLL[cle]) return;
     if(!localEstPret) return;          // avant la fin du chargement local : rien a comparer
+    // SYNC EN LIGNE : serveur injoignable -> aucune operation, retour au dernier etat connu
+    if(!ecritureAutorisee()){ refuserHorsLigne(cle); return; }
     // C-09 v4 : l'interface empeche la saisie pendant l'attente du serveur. Si
     // une ecriture arrive tout de meme ici, c'est un ecrivain automatique qu'il
     // faut identifier : on le trace au lieu de le deviner apres coup.
@@ -36557,12 +36611,149 @@ var GOS_SYNC = (function(){
   // Stock : operation differentielle (qte / reserve), deja appliquee localement par l'appelant.
   function stockDelta(article, dQte, dRes, options){
     if(!GOS_SYNC_CFG.stockDifferentiel || !article || !localEstPret) return;
+    // SYNC EN LIGNE : un mouvement de stock exige le serveur (controle du disponible)
+    if(!ecritureAutorisee()){ refuserHorsLigne('gos_stock'); return; }
     options = options || {};
     var cle = 'gos_stock', id = idDe(COLL[cle], article);
     if(!ombre[cle]) ombre[cle] = clone(enCarte(COLL[cle], COLL[cle].lire()));
     var o = ombre[cle][id];
     if(o){ o.qte = Math.max(0, (parseInt(o.qte, 10) || 0) + (dQte || 0)); o.reserve = Math.max(0, (parseInt(o.reserve, 10) || 0) + (dRes || 0)); }
     ajouterOp({collection: cle, recordId: id, type: 'delta', dQte: dQte || 0, dRes: dRes || 0, exigeDispo: !!options.exigeDispo, lien: options.lien || null, libelle: article.nom || ''});
+  }
+
+  // ---------------------------------------------------------------- SYNC EN LIGNE (21/10/2026)
+  // Une modification n'est acceptee que si le serveur est REELLEMENT joignable :
+  //  - .info/connected (socket Firebase, pas navigator.onLine) ;
+  //  - evenement « offline » du navigateur (coupure detectee sans attendre Firebase) ;
+  //  - surveillance des envois : une transaction non confirmee au bout de 20 s
+  //    signifie que le serveur ne repond pas, meme si la socket parait ouverte ;
+  //  - apres une (re)connexion, toutes les collections lisibles doivent avoir ete
+  //    rechargees ; au-dela de 20 s sans les recevoir, on reste en consultation.
+  // Refus = aucune operation creee, et les donnees en memoire sont remises a leur
+  // dernier etat connu (ombre), pour que l'ecran ne montre jamais une saisie
+  // qui n'existe pas sur le serveur.
+  var reseauCoupe = (typeof navigator !== 'undefined' && navigator.onLine === false);
+  var envoiDepuis = null, attenteDepuis = null;
+  var DELAI_SERVEUR_MUET_MS = 20000, DELAI_RECEPTION_MS = 20000;
+  var dernierRefus = 0, dernierAvisRefus = 0, rafraichissementPrevu = false;
+  function etatConnexion(){
+    if(arrete) return 'arrete';
+    if(!db || !enLigne || reseauCoupe){ attenteDepuis = null; return 'hors_ligne'; }
+    if(envoiDepuis !== null && (Date.now() - envoiDepuis) > DELAI_SERVEUR_MUET_MS) return 'serveur_muet';
+    if(attendReception()){
+      if(attenteDepuis === null) attenteDepuis = Date.now();
+      return (Date.now() - attenteDepuis) > DELAI_RECEPTION_MS ? 'donnees_non_recues' : 'actualisation';
+    }
+    attenteDepuis = null;
+    return (envoiDepuis !== null || file.length) ? 'envoi' : 'ok';
+  }
+  // 'actualisation' reste autorise : le voile de chargement bloque deja l'interface,
+  // seules les ecritures automatiques passent, et elles ne partent qu'apres reception.
+  function ecritureAutorisee(){ var e = etatConnexion(); return e === 'ok' || e === 'envoi' || e === 'actualisation'; }
+  function planifierRafraichissement(){
+    if(rafraichissementPrevu) return; rafraichissementPrevu = true;
+    setTimeout(function(){
+      rafraichissementPrevu = false;
+      try{ if(document.getElementById('content') && !(typeof uneModaleEstOuverte === 'function' && uneModaleEstOuverte())) renderPage(); }catch(e){ console.error('GOS_SYNC rafraichissement', e); }
+    }, 0);
+  }
+  function avisRefus(){
+    var connecte = false; try{ connecte = typeof currentUser !== 'undefined' && !!currentUser; }catch(e){}
+    if(!connecte || Date.now() - dernierAvisRefus < 4000) return;
+    dernierAvisRefus = Date.now();
+    var e = etatConnexion();
+    var pourquoi = e === 'serveur_muet' ? 'Le serveur ne repond pas.' : (e === 'donnees_non_recues' ? 'Les donnees du serveur ne sont pas arrivees.' : 'Connexion au serveur interrompue.');
+    var f = window.gosToastBrut || window.afficherToastNotif;
+    if(typeof f === 'function') f('Modification non enregistree', pourquoi + ' Consultation uniquement : reessayez quand l\'indicateur repasse au vert.', 'alerte');
+  }
+  function refuserHorsLigne(cle){
+    var d = COLL[cle];
+    dernierRefus = Date.now();
+    try{ if(typeof gosSurRefus === 'function') gosSurRefus(); }catch(e){}   // SYNC CONCURRENCE : refus rattache a l'action
+    trace({e: 'ecriture_refusee_hors_ligne', c: cle, etat: etatConnexion()});
+    if(d && ombre[cle]){
+      var vue = enForme(d, clone(ombre[cle]), ordreDe(d, d.lire()));
+      d.ecrire(vue);
+      try{ if(d.local) d.local(vue); }catch(e){ console.error('GOS_SYNC stockage local ' + cle, e); }
+    }
+    planifierRafraichissement();
+    avisRefus();
+  }
+  // Confirmation par le serveur : un message de succes attend que les operations
+  // concernees soient validees (ok), refusees par les regles (refus) ou par un
+  // controle metier comme le stock (echec).
+  var resolues = {}, nbResolues = 0, attentesConf = [];
+  function notifierOp(id, statut){
+    if(!resolues[id]) nbResolues++;
+    resolues[id] = statut;
+    verifierAttentes();
+    if(nbResolues > 5000 && !attentesConf.length){ resolues = {}; nbResolues = 0; }
+  }
+  function verifierAttentes(){
+    attentesConf = attentesConf.filter(function(a){
+      if(!a.ids.every(function(i){ return resolues[i]; })) return true;
+      var pire = 'ok';
+      a.ids.forEach(function(i){ if(resolues[i] === 'refus') pire = 'refus'; else if(resolues[i] === 'echec' && pire === 'ok') pire = 'echec'; });
+      try{ a.cb(pire); }catch(e){ console.error(e); }
+      return false;
+    });
+  }
+  function apresConfirmation(ids, cb, delaiMs, surDelai, surAVerifier){
+    var a = {ids: ids.slice(), cb: cb, surAVerifier: surAVerifier};
+    attentesConf.push(a);
+    verifierAttentes();
+    if(surDelai) setTimeout(function(){ if(attentesConf.indexOf(a) >= 0) surDelai(); }, delaiMs || 20000);
+  }
+  try{
+    window.addEventListener('offline', function(){ reseauCoupe = true; trace({e: 'reseau_coupe'}); majIndicateur(); });
+    window.addEventListener('online', function(){ reseauCoupe = false; trace({e: 'reseau_retabli'}); majIndicateur(); });
+  }catch(e){}
+
+  // ---------------------------------------------------------------- SYNC CONCURRENCE : operations heritees
+  var bilanHeritees = {confirmees: 0, quarantaine: 0, avise: false};
+  function opDejaAppliquee(carte, tomb, op){
+    var s = carte[op.recordId];
+    if(op.type === 'delete') return !s || !!tomb[op.recordId];
+    if(!s) return false;
+    if(s._syncOps && s._syncOps.indexOf(op.opId) >= 0) return true;   // trace d'application laissee par la transaction
+    if(op.type === 'delta') return false;                              // un mouvement de stock se prouve par sa trace uniquement
+    if(op.type === 'create') return egal(sansTechnique(s), sansTechnique(op.record));
+    return (op.patch || []).every(function(e){ return egal(lire(s, e.p), e.n); });
+  }
+  function verifierHeritees(cle){
+    if(!fileChargee || !enLigne) return;
+    var ops = file.filter(function(o){ return o.collection === cle && o.heritee; });
+    if(!ops.length) return;
+    var carte = enCarte(COLL[cle], serveur[cle]), tomb = tombes[cle] || {}, ok = [], ko = [];
+    ops.forEach(function(op){ (opDejaAppliquee(carte, tomb, op) ? ok : ko).push(op); });
+    if(ok.length){ retirerOps(ok.map(function(o){ return o.opId; })); ok.forEach(function(o){ notifierOp(o.opId, 'ok'); }); bilanHeritees.confirmees += ok.length; }
+    if(ko.length){ mettreEnQuarantaine(ko, 'non_confirmee_avant_rechargement'); bilanHeritees.quarantaine += ko.length; setTimeout(avisHeritees, 1500); }
+    trace({e: 'verification_heritees', c: cle, confirmees: ok.length, quarantaine: ko.length});
+  }
+  function avisHeritees(){
+    if(bilanHeritees.avise || !bilanHeritees.quarantaine) return;
+    var connecte = false; try{ connecte = typeof currentUser !== 'undefined' && !!currentUser; }catch(e){}
+    if(!connecte){ setTimeout(avisHeritees, 2000); return; }
+    bilanHeritees.avise = true;
+    var f = window.gosToastBrut || window.afficherToastNotif;
+    if(typeof f === 'function') f('Modifications non confirmees', bilanHeritees.quarantaine + ' modification(s) faite(s) avant le dernier rechargement n\'ont jamais ete recues par le serveur. Elles n\'ont pas ete appliquees et ne seront pas envoyees a retardement : verifiez et ressaisissez si necessaire. Detail : cliquez sur l\'indicateur en bas a gauche.', 'alerte');
+  }
+  // Conflit reel : l'auteur est prevenu discretement ; la Direction garde le journal et la decision.
+  function avisConflitAuteur(cle, op, conflits){
+    if(op.migrationM1 || op.reintegrationM1 || op.amorcage) return;
+    var f = window.gosToastBrut || window.afficherToastNotif; if(typeof f !== 'function') return;
+    var c = conflits[0], chemin = c.chemin ? c.chemin.join('.') : '';
+    var dossier = dossierConcerneSync({collection: cle, recordId: op.recordId, libelle: COLL[cle] && COLL[cle].libelle ? COLL[cle].libelle(op.record || op.baseComplete || op.base || {}) : op.recordId});
+    var msg;
+    if(c.type === 'element_supprime_ailleurs') msg = 'Cet element a ete supprime sur un autre poste : votre modification n\'a pas ete appliquee.';
+    else if(c.type === 'suppression_version_modifiee_ailleurs') msg = 'Element supprime alors qu\'il venait d\'etre modifie sur un autre poste. La Direction peut verifier.';
+    else msg = 'Votre modification de « ' + nomChampSync(chemin) + ' » n\'a pas ete appliquee : cette information avait ete modifiee sur un autre poste entre-temps (valeur enregistree : ' + valeurLisibleSync(c.serveur, chemin) + '). Verifiez-la et ressaisissez si necessaire.';
+    if(conflits.length > 1) msg += ' (' + conflits.length + ' informations concernees)';
+    f('Modifie entre-temps — ' + dossier, msg, 'alerte');
+  }
+  // Confirmation interrompue par une coupure : etat « a verifier »
+  function signalerAVerifier(){
+    attentesConf.forEach(function(a){ if(!a.aVerifierSignale && a.surAVerifier){ a.aVerifierSignale = true; try{ a.surAVerifier(); }catch(e){} } });
   }
 
   // ---------------------------------------------------------------- envoi (transactions)
@@ -36591,7 +36782,7 @@ var GOS_SYNC = (function(){
     fluxDemande = false;
     // C-09 : operations visant une collection dont la lecture est refusee -> quarantaine (jamais envoyees plus tard sous une autre identite)
     Object.keys(refus).forEach(function(c){ if(!COLL[c]) return; var b = file.filter(function(o){ return o.collection === c; }); if(b.length) mettreEnQuarantaine(b, 'lecture_refusee'); });
-    var cles = ORDRE.filter(function(c){ return pret(c) && file.some(function(o){ return o.collection === c; }); });
+    var cles = ORDRE.filter(function(c){ return pret(c) && file.some(function(o){ return o.collection === c && !o.heritee; }); });
     if(!cles.length){ majIndicateur(); return; }
     fluxEnCours = true;
     var i = 0;
@@ -36602,9 +36793,10 @@ var GOS_SYNC = (function(){
   }
   function envoyerCollection(cle, suite){
     var d = COLL[cle];
-    var lot = file.filter(function(o){ return o.collection === cle; }).slice(0, 60);
+    var lot = file.filter(function(o){ return o.collection === cle && !o.heritee; }).slice(0, 60);
     if(!lot.length || !pret(cle)){ suite(); return; }
     var monEpoque = epoque;
+    envoiDepuis = Date.now();   // SYNC EN LIGNE : surveillance de la reponse du serveur
     // 1) suppressions : l'enregistrement de suppression est ecrit AVANT la transaction
     var ecritures = [];
     if(GOS_SYNC_CFG.tombstones){
@@ -36637,10 +36829,12 @@ var GOS_SYNC = (function(){
         }
         return JSON.stringify(nv);
       }).then(function(res){
+        envoiDepuis = null;
         if(!res || !res.committed){ trace({e: 'transaction_non_validee', c: cle}); suite(); return; }
         var ids = lot.map(function(o){ return o.opId; });
         retirerOps(ids);
         resultats.forEach(function(r){ traiterResultat(cle, r); });
+        resultats.forEach(function(r){ notifierOp(r.op.opId, r.statut === 'echec' ? 'echec' : 'ok'); });   // SYNC EN LIGNE
         trace({e: 'transaction_validee', c: cle, ops: ids.length});
         echecsEnvoi[cle] = 0;   // un envoi reussi remet le compteur a zero
         // l'etat valide devient l'etat serveur connu
@@ -36651,6 +36845,7 @@ var GOS_SYNC = (function(){
         suite();
       });
     }).catch(function(e){
+      envoiDepuis = null;   // SYNC EN LIGNE
       if(e && e.code === 'PERMISSION_DENIED'){
         // C-09 : refus des regles = definitif. Les operations ne sont ni appliquees ni jetees :
         // elles passent en quarantaine locale (examen par la Direction).
@@ -36691,6 +36886,7 @@ var GOS_SYNC = (function(){
       return;
     }
     r.conflits.forEach(function(c){ enregistrerConflit(cle, op, c); });
+    if(r.conflits.length) avisConflitAuteur(cle, op, r.conflits);   // SYNC CONCURRENCE
   }
   function nettoyerValeur(v){
     var s = JSON.stringify(v === undefined ? null : v);
@@ -36741,6 +36937,7 @@ var GOS_SYNC = (function(){
     }
     serveur[cle] = lu === null ? (d.type === 'objet' ? {} : []) : lu;
     recu[cle] = epoque;
+    verifierHeritees(cle);   // SYNC CONCURRENCE
     publierVue(cle, premier ? 'premiere_reception' : 'mise_a_jour');
     demanderFlux();
   }
@@ -36794,6 +36991,10 @@ var GOS_SYNC = (function(){
     chargerFile(function(ops){
       var dejaEnMemoire = file; // operations creees pendant le chargement
       file = (ops || []).sort(function(a, b){ return a.seq - b.seq; });
+      // SYNC CONCURRENCE : operations retrouvees au demarrage (page precedente ou ancienne
+      // version) = confirmation inconnue. Elles ne sont JAMAIS renvoyees : leur resultat est
+      // verifie sur le serveur des reception de la collection (voir verifierHeritees).
+      file.forEach(function(o){ o.heritee = true; });
       var connus = {}; file.forEach(function(o){ connus[o.opId] = 1; compteurSeq = Math.max(compteurSeq, o.seq || 0); });
       dejaEnMemoire.forEach(function(o){ if(!connus[o.opId]){ o.seq = prochainSeq(); file.push(o); persister(o); } });
       fileChargee = true;
@@ -36823,6 +37024,9 @@ var GOS_SYNC = (function(){
   var connexionEnAttente = null;
   function surConnexion(connecte){
     if(!demarrer.fait){ connexionEnAttente = connecte; return; }
+    // SYNC EN LIGNE : une connexion Firebase etablie prouve que le reseau est revenu,
+    // meme si le navigateur n'a pas emis l'evenement « online » (constate sur certains appareils).
+    if(connecte) reseauCoupe = false;
     if(connecte && !enLigne){
       enLigne = true; epoque++;
       refus = {};   // C-09 : un refus constate hors ligne n'est pas definitif, il est reevalue a la reconnexion
@@ -36835,15 +37039,17 @@ var GOS_SYNC = (function(){
       });
     } else if(!connecte && enLigne){
       enLigne = false; epoque++;
+      signalerAVerifier();   // SYNC CONCURRENCE
     }
     majIndicateur();
   }
 
   // ---------------------------------------------------------------- interface : indicateur et conflits
   function majIndicateur(){
+    try{ if(typeof gosMajPastille === 'function') gosMajPastille(); }catch(e){}
     var nbC = Object.keys(conflitsOuverts).length, nbF = file.length;
     var el = document.getElementById('gosSyncIndicateur');
-    if(!nbC && !nbF && !nbQuarantaine){ if(el) el.style.display = 'none'; return; }
+    if(!nbC && !nbQuarantaine){ if(el) el.style.display = 'none'; return; }
     if(!el){
       el = document.createElement('div'); el.id = 'gosSyncIndicateur';
       el.style.cssText = 'position:fixed;left:14px;bottom:14px;z-index:99990;background:#fff;border:1px solid #d0d0d0;border-radius:8px;padding:7px 11px;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.15);cursor:pointer';
@@ -36851,8 +37057,8 @@ var GOS_SYNC = (function(){
       document.body.appendChild(el);
     }
     var t = [];
-    if(nbF) t.push('\u21BB ' + nbF + ' modification(s) en attente d\'envoi' + (enLigne ? '' : ' (hors ligne)'));
-    if(nbQuarantaine) t.push('<span style="color:#854F0B;font-weight:700">\u26D4 ' + nbQuarantaine + ' operation(s) refusee(s) (droits insuffisants), en quarantaine</span>');
+    // SYNC EN LIGNE : les envois en cours sont resumes par la pastille (orange)
+    if(nbQuarantaine) t.push('<span style="color:#854F0B;font-weight:700">\u26D4 ' + nbQuarantaine + ' operation(s) non appliquee(s), conservee(s) pour examen par la Direction</span>');
     if(nbC) t.push('<span style="color:#A32D2D;font-weight:700">\u26A0 ' + nbC + ' conflit(s) a verifier</span>');
     el.innerHTML = t.join(' &middot; ');
     el.style.display = 'block';
@@ -36986,6 +37192,22 @@ var GOS_SYNC = (function(){
     h += '</div></div>';
     var o = document.createElement('div'); o.className = 'overlay'; o.id = 'gosModaleConflits'; o.style.zIndex = '99995'; o.style.display = 'flex';
     o.innerHTML = h; document.body.appendChild(o);
+    // SYNC CONCURRENCE : operations non appliquees conservees sur CE poste (lecture seule)
+    listeQuarantaine(function(ops){
+      if(!ops || !ops.length) return;
+      var corps = o.querySelector('.mbody'); if(!corps) return;
+      var q = '<div style="margin-top:14px;border-top:1px solid #e2e2e2;padding-top:10px"><div style="font-weight:700;font-size:13px;margin-bottom:6px">Operations non appliquees conservees sur ce poste (' + ops.length + ')</div>'
+        + '<p class="xs muted" style="margin-bottom:8px;line-height:1.5">Elles n\'ont PAS ete enregistrees sur le serveur et ne seront pas envoyees. A ressaisir si necessaire.</p>';
+      ops.slice(-50).reverse().forEach(function(op){
+        var champs = op.type === 'delta' ? ('quantite ' + (op.dQte || 0) + ', reserve ' + (op.dRes || 0))
+          : (op.patch || []).map(function(e){ return nomChampSync(e.p.join('.')) + ' : ' + valeurLisibleSync(e.n, e.p.join('.')); }).join(' ; ') || op.type;
+        var raison = {refus_permission: 'refusee par le serveur (droits)', lecture_refusee: 'collection non autorisee', non_confirmee_avant_rechargement: 'jamais recue par le serveur (avant rechargement)'}[op.quarantaine && op.quarantaine.raison] || (op.quarantaine && op.quarantaine.raison) || '?';
+        q += '<div style="border:1px solid #eee;border-radius:5px;padding:7px;margin-bottom:6px;font-size:12px"><strong>' + echapper(dossierConcerneSync({collection: op.collection, recordId: op.recordId, libelle: op.recordId})) + '</strong> · '
+          + echapper(nomCollectionSync(op.collection)) + '<div>' + echapper(champs) + '</div><div class="xs muted">' + echapper(raison) + ' · '
+          + (op.createdAt ? new Date(op.createdAt).toLocaleString('fr-FR') : '?') + ' · ' + echapper(op.auteur || '?') + '</div></div>';
+      });
+      corps.insertAdjacentHTML('beforeend', q + '</div>');
+    });
   }
   function resoudreConflit(k, action){
     var c = conflitsOuverts[k]; if(!c || !db) return;
@@ -37028,7 +37250,11 @@ var GOS_SYNC = (function(){
     quandRecu: function(cle, cb){ (function att(){ if(recu[cle] !== undefined && recu[cle] > 0) cb(); else setTimeout(att, 150); })(); },
     estRecu: function(cle){ return recu[cle] !== undefined && recu[cle] > 0; },   // C-09 : etat de reception, en lecture directe
     attendReception: attendReception,   // C-09 v4 : le serveur n'a pas encore tout envoye
-    ecritureAutorisee: function(){ return !attendReception(); },
+    ecritureAutorisee: ecritureAutorisee, etatConnexion: etatConnexion,   // SYNC EN LIGNE
+    apresConfirmation: apresConfirmation, opsEnAttente: function(){ return file.map(function(o){ return o.opId; }); },
+    sessionEdition: sessionEdition, debutEditionDossier: debutEditionDossier,   // SYNC CONCURRENCE
+    aEteConnecte: function(){ return epoque > 0; }, signalerRefus: function(){ dernierRefus = Date.now(); try{ if(typeof gosSurRefus === 'function') gosSurRefus(); }catch(e){} avisRefus(); },
+    refusRecent: function(ms){ return Date.now() - dernierRefus < (ms || 1500); },
     etat: function(){ return {enLigne: enLigne, epoque: epoque, fileChargee: fileChargee, file: clone(file), recu: clone(recu),
                               conflitsOuverts: Object.keys(conflitsOuverts).length, tombes: Object.keys(tombes).reduce(function(a, c){ a[c] = Object.keys(tombes[c]); return a; }, {}),
                               journal: journal.slice(-60)}; },
@@ -37132,6 +37358,439 @@ var GOS_SYNC = (function(){
 
 // Reservation de stock refusee par le serveur (disponible insuffisant) :
 // la ligne du dossier est remise en coherence et l'utilisateur est prevenu.
+// ══════════════════════════════════════════════════════════════════════════
+// SYNC EN LIGNE (21/10/2026) — interface
+//  - pastille permanente : vert = connecte, orange = enregistrement / actualisation,
+//    rouge = consultation uniquement ;
+//  - lecture seule : les boutons d'ecriture sont grises et leurs clics bloques
+//    (le moteur refuse de toute facon toute ecriture : ceci evite seulement de
+//    laisser l'utilisateur saisir pour rien) ;
+//  - les messages de succes (type 'ok') n'apparaissent qu'apres confirmation
+//    du serveur.
+// ══════════════════════════════════════════════════════════════════════════
+var GOS_ETATS_CONNEXION = {
+  ok:                 {c: '#3B6D11', t: 'Connecte'},
+  envoi:              {c: '#BA7517', t: 'Enregistrement...'},
+  actualisation:      {c: '#BA7517', t: 'Actualisation...'},
+  hors_ligne:         {c: '#A32D2D', t: 'Hors connexion — consultation uniquement (donnees peut-etre anciennes)'},
+  serveur_muet:       {c: '#A32D2D', t: 'Le serveur ne repond pas — consultation uniquement'},
+  donnees_non_recues: {c: '#A32D2D', t: 'Donnees non recues — consultation uniquement'},
+  arrete:             {c: '#A32D2D', t: 'Session arretee'}
+};
+var gosEtatAffiche = null;
+function gosEnLectureSeule(){
+  try{ return typeof GOS_SYNC !== 'undefined' && !GOS_SYNC.ecritureAutorisee(); }catch(e){ return true; }
+}
+function gosMajPastille(){
+  if(typeof GOS_SYNC === 'undefined' || !document.body) return;
+  var etat = 'hors_ligne'; try{ etat = GOS_SYNC.etatConnexion(); }catch(e){}
+  var lectureSeule = gosEnLectureSeule();
+  if(document.body.classList.contains('gos-lecture-seule') !== lectureSeule){
+    document.body.classList.toggle('gos-lecture-seule', lectureSeule);
+    gosMarquerBoutonsEcriture();
+  }
+  if(etat === gosEtatAffiche) return;
+  gosEtatAffiche = etat;
+  var e = GOS_ETATS_CONNEXION[etat] || GOS_ETATS_CONNEXION.hors_ligne;
+  var html = '<span title="' + e.t + '" style="display:inline-flex;align-items:center;gap:5px;color:' + e.c + ';font-weight:600">'
+    + '<span style="width:9px;height:9px;border-radius:50%;background:' + e.c + ';display:inline-block"></span>' + e.t + '</span>';
+  var el = document.getElementById('syncStatus');
+  if(el) el.innerHTML = html;
+  // Repli : si l'en-tete n'est pas visible (ecran de connexion, mobile), petite pastille fixe.
+  var fixe = document.getElementById('gosPastilleConnexion');
+  var enteteVisible = el && el.offsetParent !== null;
+  if(!enteteVisible){
+    if(!fixe){
+      fixe = document.createElement('div'); fixe.id = 'gosPastilleConnexion';
+      fixe.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:8px;z-index:99989;background:#fff;border:1px solid #ddd;border-radius:12px;padding:3px 10px;font-size:11px;box-shadow:0 1px 4px rgba(0,0,0,.12);pointer-events:none';
+      document.body.appendChild(fixe);
+    }
+    fixe.innerHTML = html; fixe.style.display = 'block';
+  } else if(fixe){ fixe.style.display = 'none'; }
+}
+// Remplace l'ancien affichage texte : l'etat vient toujours du moteur.
+function showSyncStatus(status){ gosEtatAffiche = null; gosMajPastille(); }
+
+// Boutons d'ecriture : reconnus par la fonction appelee (onclick) ou, a defaut, par leur libelle.
+var GOS_FONCTIONS_ECRITURE = /^(save|sauvegard|enregistr|valider|tresoValider|supprim|tresoSupprimer|submit|ajout|add[A-Z]|creer|confirmer(?!Fermeture(Det|Rec)?$|Action$)|abandonner|annulerPaiement|appliquerCorrection|appliquerForfait|appliquerRemise|clientAValide|corriger|dcSoumettre|deleteVehicle|delier|demanderReprise|demanderRevalidation|deposer|differer|effacer|toutValider|capturerEnrolement|toggleEngagementById|GOS_M1_OUTIL\.(reintegrer|reprendre)|reserv|encaiss|payer|emettre|cloturer|commander|lancer|livrer|livraisonStep|marquer|advance|enTravaux|detAffecter|affecter|demarrer|terminer|pointer|import|restaur|envoyer|repondre|recAccord|recModifier|recEnvoyer|recDifferer|rejeter|refuser|reactiver|retablir|retirer|remove|resetData|recalcul|basculerDossier|toggleLivraisonFlag|toggleFournActif|toggleChargeFixeById|toggleBanqueById|tresoAligner|tresoBasculerActif|techSuspendre|utiliser|lier|fusion|reapprovision|recommander|archiver|annulerHistorique|annulerDevisCompl|nouvelleEntree|nouveauVehicule|mettreEn|modifier|verrou|cocheTout|caReprise|repriseTap|selectionnerProspectComplet|GOS_SYNC\.resoudre|GOS_PERSONNEL\.changerEtat|GOS_PERSONNEL\.creer)/;
+var GOS_IGNORES_ONCLICK = /^(if|event\.\w+|this\.\w+|document\.\w+|window\.\w+|return|function)$/;
+var GOS_LIBELLES_ECRITURE = /^[\s -⯿\uD800-\uDFFF]*(enregistrer|valider|supprimer|ajouter|cr[eé]er|confirmer|r[eé]server|encaisser|payer|facturer|cl[oô]turer|commander|r[eé]ceptionner|sauvegarder|appliquer|affecter|d[eé]marrer|terminer|livrer|pointer|importer|restaurer|envoyer|archiver)/i;
+function gosEstBoutonEcriture(el){
+  if(!el || el.id === 'gosPastilleConnexion') return false;
+  if(el.closest && (el.closest('#loginScreen') || el.closest('#gosModaleConflits'))) return false;
+  var oc = el.getAttribute && el.getAttribute('onclick');
+  if(oc){
+    var noms = oc.match(/[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?=\s*\()/g) || [];
+    for(var i = 0; i < noms.length; i++){
+      if(GOS_IGNORES_ONCLICK.test(noms[i])) continue;
+      if(GOS_FONCTIONS_ECRITURE.test(noms[i])) return true;
+    }
+    return false;
+  }
+  if(el.tagName === 'BUTTON' || (el.classList && el.classList.contains('btn'))) return GOS_LIBELLES_ECRITURE.test(el.textContent || '');
+  return false;
+}
+var gosMarquagePrevu = false;
+function gosMarquerBoutonsEcriture(){
+  if(gosMarquagePrevu) return; gosMarquagePrevu = true;
+  setTimeout(function(){
+    gosMarquagePrevu = false;
+    var actif = document.body.classList.contains('gos-lecture-seule');
+    var els = document.querySelectorAll(actif ? 'button,[onclick]' : '[data-gos-ecriture]');
+    for(var i = 0; i < els.length; i++){
+      if(actif && gosEstBoutonEcriture(els[i])) els[i].setAttribute('data-gos-ecriture', '1');
+      else els[i].removeAttribute('data-gos-ecriture');
+    }
+  }, 150);
+}
+(function(){
+  var st = document.createElement('style');
+  st.textContent = 'body.gos-lecture-seule [data-gos-ecriture]{opacity:.4!important;cursor:not-allowed!important;filter:grayscale(1)}';
+  (document.head || document.documentElement).appendChild(st);
+  // Clic bloque en lecture seule (phase de capture : avant le gestionnaire du bouton)
+  document.addEventListener('click', function(ev){
+    if(!gosEnLectureSeule()) return;
+    var el = ev.target && ev.target.closest ? ev.target.closest('button,[onclick],.btn') : null;
+    if(!el || !gosEstBoutonEcriture(el)) return;
+    ev.preventDefault(); ev.stopImmediatePropagation();
+    var e = 'hors_ligne'; try{ e = GOS_SYNC.etatConnexion(); }catch(x){}
+    var f = window.gosToastBrut || afficherToastNotif;
+    f('Consultation uniquement', (GOS_ETATS_CONNEXION[e] || GOS_ETATS_CONNEXION.hors_ligne).t + '. Cette action sera possible quand l\'indicateur repassera au vert.', 'alerte');
+  }, true);
+  // Le contenu change sans cesse (renderPage) : on remarque les boutons en lecture seule.
+  try{
+    new MutationObserver(function(){ if(document.body.classList.contains('gos-lecture-seule')) gosMarquerBoutonsEcriture(); })
+      .observe(document.documentElement, {childList: true, subtree: true});
+  }catch(e){}
+  setInterval(gosMajPastille, 500);
+})();
+
+// ══════════════════════════════════════════════════════════════════════════
+// SYNC CONCURRENCE (21/10/2026) — interface
+// ══════════════════════════════════════════════════════════════════════════
+// --- 1. Chaque message de succes est rattache aux operations creees par SA propre action
+//        (meme tache JavaScript), pas a l'etat general de la file.
+var gosSeqGroupe = 0, gosGroupeOuvert = null, gosGroupesFermes = [];
+function gosGroupeCourant(){
+  if(!gosGroupeOuvert){
+    var g = gosGroupeOuvert = {seq: ++gosSeqGroupe, ops: [], directes: []};
+    Promise.resolve().then(function(){ if(gosGroupeOuvert === g) gosGroupeOuvert = null; gosGroupesFermes.push(g); if(gosGroupesFermes.length > 60) gosGroupesFermes.shift(); });
+  }
+  return gosGroupeOuvert;
+}
+function gosSurNouvelleOperation(opId){ gosGroupeCourant().ops.push(opId); }
+function gosSurRefus(){ gosGroupeCourant().refus = true; }
+function gosSuivreEcritureDirecte(p){ try{ gosGroupeCourant().directes.push(p); }catch(e){} return p; }
+function gosOperationsDepuis(seq, groupeInclus){
+  var ops = [], directes = [], groupes = gosGroupesFermes.filter(function(g){ return g === groupeInclus || g.seq > seq; });
+  if(gosGroupeOuvert && groupes.indexOf(gosGroupeOuvert) < 0 && (gosGroupeOuvert === groupeInclus || gosGroupeOuvert.seq > seq)) groupes.push(gosGroupeOuvert);
+  var refus = false;
+  groupes.forEach(function(g){ ops = ops.concat(g.ops); directes = directes.concat(g.directes); if(g.refus) refus = true; });
+  return {ops: ops, directes: directes, refus: refus};
+}
+// Quatre etats : en cours (pastille orange), confirme, a verifier (coupure pendant la confirmation), refuse.
+function gosAttendreConfirmation(ops, directes, surFin){
+  var etatOps = ops.length ? null : 'ok', etatDir = directes.length ? null : 'ok', fini = false;
+  function conclure(){
+    if(fini || etatOps === null || etatDir === null) return; fini = true;
+    surFin.fin(etatOps === 'refus' || etatDir === 'refus' ? 'refus' : (etatOps === 'echec' ? 'echec' : 'ok'));
+  }
+  if(ops.length) GOS_SYNC.apresConfirmation(ops, function(r){ etatOps = r; conclure(); }, 20000,
+    function(){ if(!fini && surFin.lent) surFin.lent(); }, function(){ if(!fini && surFin.aVerifier) surFin.aVerifier(); });
+  if(directes.length) Promise.all(directes.map(function(p){ return Promise.resolve(p).then(function(){ return 'ok'; }, function(){ return 'refus'; }); }))
+    .then(function(rs){ etatDir = rs.indexOf('refus') >= 0 ? 'refus' : 'ok'; conclure(); });
+  conclure();
+}
+var gosToastBrut = afficherToastNotif;
+afficherToastNotif = function(titre, corps, type){
+  if(type !== 'ok' || typeof GOS_SYNC === 'undefined' || !GOS_SYNC.apresConfirmation) return gosToastBrut(titre, corps, type);
+  var groupeAppel = gosGroupeOuvert, seqAppel = gosSeqGroupe;
+  setTimeout(function(){
+    var o = gosOperationsDepuis(seqAppel, groupeAppel);
+    if(o.refus) return;   // l'ecriture de CETTE action a ete refusee (hors ligne) : l'avertissement est deja affiche
+    if(!o.ops.length && !o.directes.length){ gosToastBrut(titre, corps, type); return; }   // aucune ecriture : rien a confirmer
+    var signale = false;
+    gosAttendreConfirmation(o.ops, o.directes, {
+      fin: function(res){
+        if(res === 'ok') gosToastBrut(titre, corps + (signale ? ' (confirme par le serveur)' : ''), 'ok');
+        else if(res === 'refus') gosToastBrut('Non enregistre', titre + ' : le serveur n\'a pas accepte l\'operation (droits insuffisants ou connexion perdue). Rien n\'a ete applique.', 'alerte');
+        // 'echec' (ex. stock insuffisant) : le message metier est deja affiche
+      },
+      lent: function(){ signale = true; gosToastBrut('Enregistrement en cours', titre + ' : le serveur n\'a pas encore confirme. Ne fermez pas la page.', 'info'); },
+      aVerifier: function(){ signale = true; gosToastBrut('Enregistrement a verifier', titre + ' : la connexion a ete coupee avant la confirmation. Le resultat s\'affichera des le retour de la connexion.', 'alerte'); }
+    });
+  }, 0);
+};
+
+// --- 2. Session d'edition : ce que l'utilisateur voit quand il commence a saisir.
+var gosSessionOuverte = false, gosDossierEdite = null;
+function gosFenetreVisible(id){ var m = document.getElementById(id); return !!(m && m.style && m.style.display && m.style.display !== 'none'); }
+function gosContexteDossier(){
+  try{
+    if(gosFenetreVisible('modalRec')) return (typeof editingId !== 'undefined' && editingId) ? String(editingId) : null;
+    if(gosFenetreVisible('modalPaiement') && !window._paiementForfaitPk && typeof paiementVid !== 'undefined' && paiementVid) return String(paiementVid);
+    if(typeof detCurrentVid !== 'undefined' && detCurrentVid) return String(detCurrentVid);
+  }catch(e){}
+  return null;
+}
+function gosMajSessionEdition(){
+  if(typeof GOS_SYNC === 'undefined' || !GOS_SYNC.sessionEdition) return;
+  var ouverte = false; try{ ouverte = typeof uneModaleEstOuverte === 'function' && uneModaleEstOuverte(); }catch(e){}
+  if(ouverte !== gosSessionOuverte){
+    gosSessionOuverte = ouverte; gosDossierEdite = null; GOS_SYNC.sessionEdition(ouverte);
+    if(!ouverte && typeof GOS_VERROUS !== 'undefined') GOS_VERROUS.entretien();
+  }
+  if(ouverte){ var id = gosContexteDossier(); if(id && id !== gosDossierEdite){ gosDossierEdite = id; GOS_SYNC.debutEditionDossier(id); } }
+}
+// Ouverture ou reaffichage d'une fiche : la reference devient ce qui vient d'etre affiche.
+['openDet', 'openEdit'].forEach(function(nom){
+  var f = window[nom]; if(typeof f !== 'function') return;
+  window[nom] = function(id){
+    var r = f.apply(this, arguments);
+    try{ if(typeof GOS_SYNC !== 'undefined' && GOS_SYNC.sessionEdition && id !== undefined && id !== null){
+      GOS_SYNC.sessionEdition(true); gosSessionOuverte = true; GOS_SYNC.debutEditionDossier(id); gosDossierEdite = String(id); } }catch(e){}
+    return r;
+  };
+});
+try{
+  new MutationObserver(function(){ gosMajSessionEdition(); })
+    .observe(document.documentElement, {attributes: true, attributeFilter: ['style'], subtree: true});
+}catch(e){}
+setInterval(gosMajSessionEdition, 250);
+
+// --- 3. Verrous de saisie (gos_verrous) : « Urcel est en train de modifier cette information ».
+//  Un verrou n'est pris qu'a la PREMIERE SAISIE (jamais a la consultation), par transaction
+//  (deux postes ne peuvent pas l'obtenir ensemble). Il porte : dossier, champ, uid, nom,
+//  session, poste, creation, derniere activite. Renouvele pendant la saisie, libere a
+//  l'enregistrement confirme ou a la fermeture de la fenetre, supprime par le serveur si la
+//  connexion tombe (onDisconnect) et considere comme expire 60 s apres la derniere activite
+//  (les regles Firebase autorisent alors un autre utilisateur a le reprendre).
+//  Un verrou n'est PAS une garantie de securite : la fusion du moteur reste la protection.
+var GOS_VERROUS = (function(){
+  var DUREE_MS = 60000, RENOUVELLEMENT_MS = 15000;
+  var SESSION = 's_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+  var actif = false, reessaiApres = 0, verrous = {}, miens = {}, dernierAvis = {};
+  function base(){ return (typeof fbDb !== 'undefined' && fbDb) ? fbDb : null; }
+  function moi(){ try{ return (typeof GOS_AUTH !== 'undefined' && GOS_AUTH.mode === 'firebase' && GOS_AUTH.uid) ? GOS_AUTH.uid : null; }catch(e){ return null; } }
+  function nomAffiche(){ try{ return (currentUser && (currentUser.nom || currentUser.login)) || 'un collegue'; }catch(e){ return 'un collegue'; } }
+  function valide(l){ return !!l && typeof l.activite === 'number' && (heureServeur() - l.activite) < DUREE_MS; }
+  function estMien(l){ return !!l && l.uid === moi() && l.session === SESSION; }
+  function cle(u){ return encodeURIComponent(u.collection + '|' + u.recordId + '|' + u.champ).replace(/\./g, '%2E'); }
+  function demarrer(){
+    if(actif || Date.now() < reessaiApres || !base() || !moi()) return;
+    actif = true;
+    base().ref('gos_verrous').on('value', function(snap){ verrous = snap.val() || {}; decorer(); }, function(e){
+      // regle non deployee, compte inactif ou mot de passe a changer : verrous inactifs,
+      // le reste fonctionne ; nouvel essai dans une minute (ex. apres changement du mot de passe)
+      reessaiApres = Date.now() + 60000; actif = false; verrous = {}; decorer();
+      try{ console.warn('GOS_VERROUS inactif : ' + (e && (e.code || e.message))); }catch(x){}
+    });
+  }
+  function fenetreDe(el){
+    var m = el && el.closest ? el.closest('.overlay') : null;
+    return (m && m.id && m.style && m.style.display && m.style.display !== 'none') ? m : null;
+  }
+  function contexte(m){
+    if(m.id === 'modalRec') return (typeof editingId !== 'undefined' && editingId) ? {collection: 'vehicles', recordId: String(editingId)} : null;
+    if(m.id === 'modalPaiement'){
+      if(window._paiementForfaitPk) return {collection: 'gos_forfait_factures', recordId: String(window._paiementForfaitPk)};
+      return (typeof paiementVid !== 'undefined' && paiementVid) ? {collection: 'vehicles', recordId: String(paiementVid)} : null;
+    }
+    if(typeof detCurrentVid !== 'undefined' && detCurrentVid) return {collection: 'vehicles', recordId: String(detCurrentVid)};
+    return null;   // fenetre sans dossier identifiable : pas de verrou (la fusion du moteur protege)
+  }
+  // Unite de verrouillage : le champ (id), ou la liste indivisible qui le contient
+  // (lignes de chiffrage, paiements...) quand le champ est une ligne numerotee.
+  function unite(el){
+    if(!el || !el.matches || !el.matches('input,select,textarea')) return null;
+    var t = (el.type || '').toLowerCase();
+    if(['button', 'submit', 'reset', 'search', 'file', 'hidden', 'image'].indexOf(t) >= 0) return null;
+    var m = fenetreDe(el); if(!m || m.id === 'gosModaleConflits') return null;
+    var ctx = contexte(m); if(!ctx) return null;
+    var champ;
+    if(el.id && !/[_-]?\d+$/.test(el.id)) champ = el.id;
+    else { var p = el.parentElement; while(p && p !== m && !(p.id && !/[_-]?\d+$/.test(p.id))) p = p.parentElement; champ = 'liste:' + ((p && p.id) || m.id); }
+    return {collection: ctx.collection, recordId: ctx.recordId, champ: champ, fenetre: m.id};
+  }
+  function detenteurAutre(u){ var l = verrous[cle(u)]; return (valide(l) && !estMien(l)) ? l : null; }
+  function texte(l){
+    return 'Cette information est actuellement en cours de modification par ' + ((l && l.nom) || 'un collegue')
+      + (l && l.uid === moi() ? ' (vous, sur un autre poste)' : '') + '. Elle sera disponible des que sa modification sera terminee.';
+  }
+  function bulle(el, t){
+    var b = document.getElementById('gosBulleVerrou');
+    if(!b){ b = document.createElement('div'); b.id = 'gosBulleVerrou';
+      b.style.cssText = 'position:fixed;z-index:100001;max-width:300px;background:#FDF3E3;border:1px solid #E8A44A;color:#854F0B;border-radius:6px;padding:7px 10px;font-size:12px;line-height:1.4;box-shadow:0 2px 8px rgba(0,0,0,.15);pointer-events:none';
+      document.body.appendChild(b); }
+    b.textContent = t;
+    var r = el && el.getBoundingClientRect ? el.getBoundingClientRect() : {left: 20, bottom: 80};
+    b.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 310)) + 'px';
+    b.style.top = Math.max(8, Math.min(r.bottom + 6, window.innerHeight - 80)) + 'px';
+    b.style.display = 'block'; clearTimeout(bulle.t); bulle.t = setTimeout(function(){ b.style.display = 'none'; }, 5000);
+  }
+  function avis(el, l){ var k = (l && l.champ) || '?'; if(Date.now() - (dernierAvis[k] || 0) < 3000) return; dernierAvis[k] = Date.now(); bulle(el, texte(l)); }
+  function poser(el, l){
+    if(!el.hasAttribute('data-gos-verrou')){ el.setAttribute('data-gos-verrou-ro', el.readOnly ? '1' : '0'); el.setAttribute('data-gos-verrou-dis', el.disabled ? '1' : '0'); }
+    el.setAttribute('data-gos-verrou', l.nom || '');
+    if(el.tagName === 'SELECT' || el.type === 'checkbox' || el.type === 'radio') el.disabled = true; else el.readOnly = true;
+    el.title = texte(l);
+  }
+  function lever(el){
+    if(!el.hasAttribute('data-gos-verrou')) return;
+    el.readOnly = el.getAttribute('data-gos-verrou-ro') === '1'; el.disabled = el.getAttribute('data-gos-verrou-dis') === '1';
+    el.removeAttribute('data-gos-verrou'); el.removeAttribute('data-gos-verrou-ro'); el.removeAttribute('data-gos-verrou-dis'); el.title = '';
+  }
+  var decorPrevu = false;
+  function decorer(){
+    if(decorPrevu) return; decorPrevu = true;
+    setTimeout(function(){
+      decorPrevu = false;
+      var poses = document.querySelectorAll('[data-gos-verrou]');
+      for(var i = 0; i < poses.length; i++){ var u0 = unite(poses[i]); if(!u0 || !detenteurAutre(u0)) lever(poses[i]); }
+      if(!actif) return;
+      var existe = Object.keys(verrous).some(function(k){ return valide(verrous[k]) && !estMien(verrous[k]); });
+      if(!existe) return;
+      var champs = document.querySelectorAll('.overlay input, .overlay select, .overlay textarea');
+      for(var j = 0; j < champs.length; j++){ var u = unite(champs[j]); var l = u && detenteurAutre(u); if(l) poser(champs[j], l); }
+    }, 60);
+  }
+  function refuserSaisie(el, l){
+    var avant = el.getAttribute && el.getAttribute('data-gos-valeur-avant');
+    if(avant !== null && avant !== undefined){ if(el.type === 'checkbox' || el.type === 'radio') el.checked = avant === '1'; else el.value = avant; }
+    try{ el.blur(); }catch(e){}
+    avis(el, l); decorer();
+  }
+  function acquerir(u, el){
+    var k = cle(u), m = miens[k];
+    if(m){ m.derniereSaisie = Date.now(); m.el = el; return; }
+    if(!actif) return;
+    m = miens[k] = {u: u, el: el, derniereSaisie: Date.now(), acquis: false, renouveleLe: Date.now()};
+    var uid = moi(), nom = nomAffiche(), ref = base().ref('gos_verrous/' + k);
+    ref.transaction(function(cur){
+      if(cur && !(cur.uid === uid && cur.session === SESSION) && valide(cur)) return;   // deja tenu par un autre : abandon
+      return {uid: uid, nom: nom, session: SESSION, poste: (typeof deviceId !== 'undefined' ? String(deviceId) : ''),
+              collection: u.collection, recordId: u.recordId, champ: u.champ,
+              creeLe: (cur && cur.session === SESSION && cur.creeLe) || Math.round(heureServeur()),
+              activite: Math.round(heureServeur())};
+    }, undefined, false).then(function(r){
+      if(miens[k] !== m) return;
+      if(r && r.committed){ m.acquis = true; try{ ref.onDisconnect().remove(); }catch(e){} }
+      else { delete miens[k]; refuserSaisie(el, r && r.snapshot ? r.snapshot.val() : verrous[k]); }
+    }).catch(function(e){
+      if(miens[k] === m) delete miens[k];
+      var l = verrous[k]; if(valide(l) && !estMien(l)) refuserSaisie(el, l);
+    });
+  }
+  function liberer(k){
+    var m = miens[k]; delete miens[k]; if(!m || !base()) return;
+    var ref = base().ref('gos_verrous/' + k);
+    try{ ref.onDisconnect().cancel(); }catch(e){}
+    if(m.acquis) ref.transaction(function(cur){ if(cur && cur.session === SESSION) return null; return; }, undefined, false).catch(function(){});
+  }
+  function libererFenetre(idFenetre){ Object.keys(miens).forEach(function(k){ if(miens[k].u.fenetre === idFenetre) liberer(k); }); }
+  function libererCle(k){ if(miens[k]) liberer(k); }
+  function entretien(){
+    if(!actif){ demarrer(); return; }
+    var t = Date.now();
+    Object.keys(miens).forEach(function(k){
+      var m = miens[k];
+      var present = m.el && document.documentElement.contains(m.el) && fenetreDe(m.el);
+      if(!present || t - m.derniereSaisie > DUREE_MS){ liberer(k); return; }   // fenetre fermee, ou plus de saisie depuis 60 s
+      if(m.acquis && t - m.renouveleLe >= RENOUVELLEMENT_MS){
+        m.renouveleLe = t;
+        base().ref('gos_verrous/' + k).transaction(function(cur){
+          if(!cur || cur.uid !== moi() || cur.session !== SESSION) return;   // perdu (expire et repris) : abandon
+          cur.activite = Math.round(heureServeur()); return cur;
+        }, undefined, false).then(function(r){ if((!r || !r.committed) && miens[k] === m){ m.acquis = false; delete miens[k]; } }).catch(function(){});
+      }
+    });
+    decorer();
+  }
+  // Saisie : verrou pris a la premiere modification reelle ; refusee si un autre la tient.
+  function surSaisie(ev){
+    var el = ev.target, u = unite(el); if(!u || !actif) return;
+    var l = detenteurAutre(u);
+    if(l){ ev.stopImmediatePropagation(); refuserSaisie(el, l); return; }
+    acquerir(u, el);
+    // champ enregistre immediatement (fiche detail) : verrou libere des la confirmation
+    if(ev.type === 'change'){ var k = cle(u), seq = gosSeqGroupe; setTimeout(function(){ libererApres(seq, null, function(){ libererCle(k); }); }, 0); }
+  }
+  function libererApres(seq, groupe, f){
+    var o = gosOperationsDepuis(seq, groupe);
+    if(!o.ops.length && !o.directes.length) return;   // rien n'a ete enregistre : le verrou reste (saisie en cours)
+    gosAttendreConfirmation(o.ops, o.directes, {fin: function(){ f(); }});
+  }
+  document.addEventListener('focusin', function(ev){
+    var el = ev.target, u = unite(el); if(!u) return;
+    el.setAttribute('data-gos-valeur-avant', (el.type === 'checkbox' || el.type === 'radio') ? (el.checked ? '1' : '0') : (el.value || ''));
+    var l = actif && detenteurAutre(u); if(l){ avis(el, l); try{ el.blur(); }catch(e){} }
+  }, true);
+  document.addEventListener('input', surSaisie, true);
+  document.addEventListener('change', surSaisie, true);
+  // Enregistrement : verifier que les verrous de l'utilisateur sont toujours a lui.
+  document.addEventListener('click', function(ev){
+    if(!actif) return;
+    var b = ev.target && ev.target.closest ? ev.target.closest('button,[onclick],.btn') : null;
+    if(!b || typeof gosEstBoutonEcriture !== 'function' || !gosEstBoutonEcriture(b)) return;
+    var m = fenetreDe(b); if(!m) return;
+    var perdu = null;
+    Object.keys(miens).forEach(function(k){ if(miens[k].u.fenetre !== m.id) return; var l = verrous[k]; if(valide(l) && !estMien(l)) perdu = l; });
+    if(perdu){
+      ev.preventDefault(); ev.stopImmediatePropagation();
+      bulle(b, 'Enregistrement bloque : ' + (perdu.nom || 'un collegue') + ' modifie maintenant une information que vous aviez changee (votre saisie etait inactive depuis plus d\'une minute). Fermez la fenetre et rouvrez le dossier pour repartir de la version a jour.');
+      return;
+    }
+    var seq = gosSeqGroupe, id = m.id;
+    setTimeout(function(){ libererApres(seq, null, function(){ libererFenetre(id); }); }, 0);
+  }, true);
+  (function(){
+    var st = document.createElement('style');
+    st.textContent = '[data-gos-verrou]{background:#FDF3E3!important;outline:1px dashed #E8A44A;cursor:not-allowed!important}';
+    (document.head || document.documentElement).appendChild(st);
+  })();
+  setInterval(entretien, 2000);
+  return {
+    entretien: entretien, demarrer: demarrer, actif: function(){ return actif; },
+    etat: function(){ return {actif: actif, reessaiApres: reessaiApres, session: SESSION, miens: Object.keys(miens), verrous: JSON.parse(JSON.stringify(verrous))}; },
+    _test: {unite: unite, cle: cle, acquerir: acquerir, liberer: liberer, libererFenetre: libererFenetre, detenteurAutre: detenteurAutre,
+            surSaisie: surSaisie, valide: valide, miens: function(){ return miens; }, session: SESSION}
+  };
+})();
+
+// --- 4. Ecritures Firebase directes (hors moteur) : memes regles.
+//  Connexion obligatoire (refus immediat, rien n'est mis en attente par le SDK),
+//  suivi pour la confirmation des messages. Les verrous ont leur propre gestion.
+function gosProtegerEcrituresDirectes(){
+  try{
+    if(gosProtegerEcrituresDirectes.fait || typeof fbDb === 'undefined' || !fbDb) return;
+    var exemple = fbDb.ref(), proto = Object.getPrototypeOf(exemple);
+    if(!proto || proto === Object.prototype || typeof proto.set !== 'function') return;
+    var racine = exemple.toString();
+    gosProtegerEcrituresDirectes.fait = true;
+    ['set', 'update', 'remove', 'setWithPriority', 'setPriority', 'push'].forEach(function(nom){
+      var orig = proto[nom]; if(typeof orig !== 'function') return;
+      proto[nom] = function(){
+        if(nom === 'push' && (arguments.length === 0 || arguments[0] === undefined)) return orig.apply(this, arguments);
+        var chemin = ''; try{ chemin = decodeURIComponent(this.toString().slice(racine.length)).replace(/^\/+/, ''); }catch(e){}
+        if(/^gos_verrous(\/|$)/.test(chemin)) return orig.apply(this, arguments);
+        var etat = 'ok'; try{ etat = GOS_SYNC.etatConnexion(); }catch(e){}
+        var bloque = GOS_SYNC.aEteConnecte && GOS_SYNC.aEteConnecte() && ['hors_ligne', 'serveur_muet', 'donnees_non_recues', 'arrete'].indexOf(etat) >= 0;
+        if(bloque){
+          var err = new Error('Serveur injoignable : ecriture refusee (' + chemin + ')'); err.code = 'GOS_HORS_LIGNE';
+          try{ GOS_SYNC.signalerRefus(); }catch(e){}
+          var dernier = arguments[arguments.length - 1]; if(typeof dernier === 'function'){ try{ dernier(err); }catch(e){} }
+          var p = Promise.reject(err); p.catch(function(){});
+          if(nom === 'push'){ var r = orig.call(this); r.then = p.then.bind(p); r.catch = p.catch.bind(p); return r; }
+          return p;
+        }
+        var res = orig.apply(this, arguments);
+        gosSuivreEcritureDirecte(res);
+        return res;
+      };
+    });
+  }catch(e){ console.error('gosProtegerEcrituresDirectes', e); }
+}
+
 function gosEchecStock(op, r){
   if(op.lien && op.lien.vid){
     var v = vehicles.find(function(x){ return x.id === op.lien.vid; });
@@ -37607,6 +38266,7 @@ function initFirebase(){
       fbApp = firebase.app(); // déjà initialisé
     }
     fbDb = firebase.database();
+    gosProtegerEcrituresDirectes();   // SYNC CONCURRENCE : ecritures directes soumises a la connexion
     console.log('Firebase OK, db:', fbDb.ref().toString());
     
     // Indicateur de connexion
@@ -37983,19 +38643,7 @@ function majBandeauChargementSync(){
   b.style.display = (connecte && !firstSyncReceived) ? 'block' : 'none';
 }
 
-function showSyncStatus(status){
-  var el = document.getElementById('syncStatus');
-  if(!el) return;
-  var icons = {
-    online:  {icon:'&#x2600;', color:'#3B6D11', text:'En ligne'},
-    offline: {icon:'&#x26A0;', color:'#A32D2D', text:'Hors ligne'},
-    sync:    {icon:'&#x21BB;', color:'#185FA5', text:'Synchronisé'},
-    saved:   {icon:'&#x2714;', color:'#3B6D11', text:'Sauvegardé'},
-    error:   {icon:'&#x2716;', color:'#A32D2D', text:'Erreur sync'}
-  };
-  var s = icons[status] || icons.online;
-  el.innerHTML = '<span style="color:'+s.color+'">'+s.icon+' '+s.text+'</span>';
-}
+// SYNC EN LIGNE : showSyncStatus est defini avec la pastille de connexion (voir GOS_ETATS_CONNEXION)
 
 window.onload=function(){
   // Détection mobile en JS (plus fiable que CSS media query seul)
