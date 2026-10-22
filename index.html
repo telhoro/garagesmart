@@ -2109,44 +2109,122 @@ function stockSousSeuil(a){
   return stockDispo(a) <= seuil;
 }
 
+// SUGGESTION STOCK : « UNIVERSEL » / « Toutes marques » ecrit dans Marque (ou Modele seul)
+// designe un article universel ; le reste du texte sert de precision (ex. 10W40).
+function _estMotUniversel(s){ return /^\s*(univ|toutes?\s+(les\s+)?marques?|tous\s+vehicules?)/i.test(_sansAccentStk(s || '')); }
+function _sansAccentStk(s){ return String(s || '').normalize ? String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '') : String(s || ''); }
 function stockEstUniversel(a){
-  return !(a.marque||'').trim() && !(a.modele||'').trim();
+  var m = (a.marque||'').trim(), mo = (a.modele||'').trim();
+  if(!m && !mo) return true;
+  return _estMotUniversel(m) || (!m && _estMotUniversel(mo));
 }
 
 function stockDestination(a){
-  if(stockEstUniversel(a)) return 'Universel';
+  if(stockEstUniversel(a)){
+    var precision = [a.marque, a.modele].filter(function(x){ return x && String(x).trim() && !_estMotUniversel(x); }).join(' ').trim();
+    return 'Universel' + (precision ? ' ' + precision : '');
+  }
+  if(_estMotUniversel(a.modele)) return ((a.marque||'').trim() + ' (tous modeles)').trim();
   return ((a.marque||'')+' '+(a.modele||'')).trim();
 }
 
-function _normStk(s){ return (s||'').toLowerCase().trim().replace(/\s+/g,' '); }
+function _normStk(s){ return _sansAccentStk(s).toLowerCase().trim().replace(/\s+/g,' '); }
+// « TOYOTA/RENAULT », « Toyota, Renault », « Toyota et Renault » -> ['toyota','renault']
+function _listeStk(s){ return _normStk(s).split(/\s*(?:\/|,|;|\+|\bet\b)\s*/).filter(Boolean); }
+// Recherche par mots : chaque mot saisi doit apparaitre dans le nom (ordre libre)
+function _correspondNomStk(a, q){
+  if(!q) return true;
+  // nom, reference, et precisions saisies en marque / modele (ex. « UNIVERSEL / 10W40 »)
+  var an = _normStk(a.nom) + ' ' + _normStk(a.reference) + ' ' + _normStk(a.marque) + ' ' + _normStk(a.modele);
+  if(an.indexOf(q) >= 0 || q.indexOf(_normStk(a.nom)) >= 0) return true;
+  return q.split(' ').every(function(m){ return !m || an.indexOf(m) >= 0; });
+}
+function _stockCompatible(a, v){
+  if(stockEstUniversel(a)) return true;
+  var vm = _normStk(v && v.marque), vmod = _normStk(v && v.modele);
+  var ams = _listeStk(a.marque), amods = _listeStk(a.modele);
+  if(ams.length && vm && ams.indexOf(vm) < 0) return false;
+  // Modele « UNIVERSEL » = tous les modeles de la marque
+  if(amods.length && vmod && !_estMotUniversel(a.modele) && amods.indexOf(vmod) < 0) return false;
+  return true;
+}
+function _scoreStk(a, v){
+  var vm = _normStk(v && v.marque), vmod = _normStk(v && v.modele);
+  if(stockEstUniversel(a)) return 0;
+  if(vmod && !_estMotUniversel(a.modele) && _listeStk(a.modele).indexOf(vmod) >= 0) return 100;
+  if(vm && _listeStk(a.marque).indexOf(vm) >= 0) return 50;
+  return 10;
+}
 
 // Articles compatibles avec un vehicule ET correspondant a un libelle
-// Regle : vehicule ou universel uniquement. Recherche souple sur le nom.
+// Regle : vehicule, marque(s) du vehicule ou universel. Recherche par mots, sans accents.
 function stockArticlesPour(v, libelle){
   var q = _normStk(libelle);
-  var vm = _normStk(v && v.marque);
-  var vmod = _normStk(v && v.modele);
   return STOCK.filter(function(a){
-    if(stockDispo(a) <= 0) return false;
-    if(!stockEstUniversel(a)){
-      var am = _normStk(a.marque), amod = _normStk(a.modele);
-      if(am && vm && am !== vm) return false;
-      if(amod && vmod && amod !== vmod) return false;
-    }
-    if(q){
-      var an = _normStk(a.nom);
-      if(an.indexOf(q) < 0 && q.indexOf(an) < 0) return false;
-    }
-    return true;
-  }).sort(function(a,b){
-    var sa = 0, sb = 0;
-    if(_normStk(a.modele) && _normStk(a.modele)===vmod) sa += 100;
-    else if(_normStk(a.marque) && _normStk(a.marque)===vm) sa += 50;
-    if(_normStk(b.modele) && _normStk(b.modele)===vmod) sb += 100;
-    else if(_normStk(b.marque) && _normStk(b.marque)===vm) sb += 50;
-    if(sa !== sb) return sb - sa;
-    return stockDispo(b) - stockDispo(a);
+    return stockDispo(a) > 0 && _stockCompatible(a, v) && _correspondNomStk(a, q);
+  }).sort(function(a, b){
+    var d = _scoreStk(b, v) - _scoreStk(a, v);
+    return d !== 0 ? d : stockDispo(b) - stockDispo(a);
   });
+}
+// Autres articles en stock correspondant au nom, prevus pour d'autres vehicules
+function stockArticlesAutres(v, libelle){
+  var q = _normStk(libelle);
+  return STOCK.filter(function(a){
+    return stockDispo(a) > 0 && !_stockCompatible(a, v) && _correspondNomStk(a, q);
+  }).sort(function(a, b){ return stockDispo(b) - stockDispo(a); });
+}
+
+// Prix de vente deja factures pour un article (lie au stock, ou meme nom + meme fournisseur)
+function indexHistoriquePrixStock(){
+  var idx = {};
+  function ajouter(k, e){ (idx[k] = idx[k] || []).push(e); }
+  (vehicles || []).forEach(function(x){
+    var ch = x && x.chiffrage; if(!ch || !ch.lignes) return;
+    var d = ch.valideDirLe || ch.soumisLe || x.livraison || x.entree || 0;
+    if(typeof d !== 'number'){ var p = Date.parse(d); d = isNaN(p) ? 0 : p; }
+    ch.lignes.forEach(function(l){
+      var pv = parseFloat(l.prixVente); if(!(pv > 0)) return;
+      var e = {vid: x.id, immat: x.immat || '', marque: x.marque || '', modele: x.modele || '', client: x.client || '', prix: pv, date: d};
+      if(l.stockArticleId) ajouter('id:' + l.stockArticleId, e);
+      else if(l.fournisseurId) ajouter('nom:' + _normStk(l.piece) + '|' + l.fournisseurId, e);
+    });
+  });
+  return idx;
+}
+function historiquePrixArticle(a, v, idx){
+  var vu = {}, liste = (idx['id:' + a.id] || []).concat(idx['nom:' + _normStk(a.nom) + '|' + (a.fournisseurId || '')] || []);
+  var immat = _normStk(v && v.immat).replace(/[\s-]/g, ''), vm = _normStk(v && v.marque), vmod = _normStk(v && v.modele);
+  function rang(e){
+    if(immat && _normStk(e.immat).replace(/[\s-]/g, '') === immat) return 0;
+    if(vm && vmod && _normStk(e.marque) === vm && _normStk(e.modele) === vmod) return 1;
+    if(vm && _normStk(e.marque) === vm) return 2;
+    return 3;
+  }
+  return liste.filter(function(e){ return !(v && e.vid === v.id); })
+    .map(function(e){ e.rang = rang(e); return e; })
+    .sort(function(x, y){ return x.rang - y.rang || y.date - x.date; })
+    .filter(function(e){ var k = _normStk(e.marque + ' ' + e.modele) + '|' + e.prix; if(vu[k]) return false; vu[k] = 1; return true; })
+    .slice(0, 3);
+}
+
+// STOCK FOURNISSEUR : une fiche « Stock » avait ete creee pour signaler qu'un produit est en
+// stock. Ce n'est pas un fournisseur d'achat : le stock doit pointer vers le fournisseur reel.
+function estFournisseurStockGenerique(f){ return !!f && /^\s*(le\s+)?stocks?\b/i.test(f.nom || ''); }
+function fournisseurDArticle(a){ return (a && a.fournisseurId) ? (FOURNISSEURS.find(function(x){ return x.id === a.fournisseurId; }) || null) : null; }
+// {nom, connu} : connu = false si le fournisseur d'achat n'est pas renseigne (ou fiche « Stock »)
+function fournisseurAchatStock(a){
+  var f = fournisseurDArticle(a);
+  if(f && !estFournisseurStockGenerique(f)) return {nom: f.nom, connu: true};
+  if(f) return {nom: 'fournisseur d\'achat non renseigne', connu: false};
+  if(!FOURNISSEURS.length) return {nom: '', connu: true};   // liste non accessible a ce profil
+  return {nom: a && a.fournisseurId ? 'fournisseur inconnu' : 'fournisseur non renseigne', connu: false};
+}
+function htmlFournisseurStock(a){
+  var fa = fournisseurAchatStock(a);
+  if(!fa.nom) return '';
+  return fa.connu ? '<span style="color:#854F0B;font-weight:700">' + fa.nom + '</span>'
+                  : '<span style="color:#999;font-style:italic;font-weight:400">' + fa.nom + '</span>';
 }
 
 function stockArticleById(id){
@@ -19400,11 +19478,16 @@ function rechercherStockFtkmLigne(el){
   var resEl = document.querySelector('[data-res-i="'+i+'"]');
   if(!resEl) return;
   if(q.length<2){ resEl.innerHTML=''; return; }
-  var matches = STOCK.filter(function(a){return (a.nom||'').toLowerCase().indexOf(q)>=0;}).slice(0,5);
+  // STOCK FOURNISSEUR : articles epuises masques, comme dans le chiffrage
+  var matches = STOCK.filter(function(a){return stockDispo(a) > 0 && _correspondNomStk(a, _normStk(q));}).slice(0,8);   // SUGGESTION STOCK
   if(!matches.length){ resEl.innerHTML = '<span class="muted">Aucun article</span>'; return; }
   resEl.innerHTML = '<div style="position:absolute;background:#fff;border:1px solid #e8e5e0;border-radius:6px;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.1);min-width:200px">'
     + matches.map(function(a){
-        return '<div style="padding:5px 8px;cursor:pointer;font-size:11px" data-i="'+i+'" data-aid="'+a.id+'" onclick="lierStockFtkmLigne(this)">'+a.nom+' <span class="muted">('+stockDispo(a)+' dispo)</span></div>';
+        var fh = htmlFournisseurStock(a);
+        return '<div style="padding:5px 8px;cursor:pointer;font-size:11px" data-i="'+i+'" data-aid="'+a.id+'" onclick="lierStockFtkmLigne(this)">'+a.nom
+          + (fh ? ' \u2014 ' + fh : '')
+          + ' <span style="color:#3B6D11;font-weight:700">Reste : '+stockDispo(a)+'</span>'
+          + ' <span class="muted">'+stockDestination(a)+'</span></div>';
       }).join('')
     + '</div>';
 }
@@ -22002,7 +22085,7 @@ function renderChiffrageSection(v){
           var fSel = FOURNISSEURS.find(function(x){ return x.id===artSel.fournisseurId; });
           var dispoSel = stockDispo(artSel) + (parseInt(cl.stockReserve,10)||0);
           var besoinSel = parseInt(cl.qte,10)||1;
-          s += '<div style="font-weight:700;color:#185FA5">'+(fSel?fSel.nom:'Stock')+'</div>';
+          s += '<div style="font-weight:700;color:#185FA5">'+(htmlFournisseurStock(artSel) || 'Stock')+'</div>';   // STOCK FOURNISSEUR
           s += '<div style="color:'+(besoinSel>dispoSel?'#A32D2D':'#3B6D11')+'">'+dispoSel+' dispo'
             + (besoinSel>dispoSel ? ' &#x26A0; il en faut '+besoinSel : '') + '</div>';
         } else {
@@ -23996,6 +24079,9 @@ function ajouterEntreeStock(){
 
   // Controles : toast visible dans l'application (les boites natives peuvent etre bloquees)
   if(!fournId){ afficherToastNotif('Fournisseur manquant', 'Choisissez un fournisseur.', 'alerte'); return; }
+  if(estFournisseurStockGenerique(FOURNISSEURS.find(function(f){ return f.id === fournId; }))){
+    afficherToastNotif('Fournisseur d\'achat', 'Choisissez le fournisseur chez qui la piece a ete achetee (ex. Abbas, Samco). La piece est en stock des qu\'elle est saisie ici.', 'alerte'); return;
+  }
   if(!nom){ afficherToastNotif('Article manquant', 'Saisissez le nom de l article.', 'alerte'); return; }
   if(isNaN(qte) || qte < 1){ afficherToastNotif('Quantite invalide', 'La quantite doit etre au moins 1.', 'alerte'); return; }
   if(isNaN(prix) || prix < 0){ afficherToastNotif('Prix manquant', 'Saisissez le prix d achat unitaire.', 'alerte'); return; }
@@ -24936,13 +25022,26 @@ function pageStock(){
   html += kpi('Reserve', totalReserve, totalReserve?'amber':'');
   html += '</div>';
 
+  // STOCK FOURNISSEUR : articles disponibles sans fournisseur d'achat identifie
+  var sansFournAchat = FOURNISSEURS.length ? STOCK.filter(function(a){ return stockDispo(a) > 0 && !fournisseurAchatStock(a).connu; }) : [];
+  if(sansFournAchat.length){
+    var fichesStock = FOURNISSEURS.filter(estFournisseurStockGenerique).map(function(f){ return f.nom; });
+    html += '<div style="background:#FDF3E3;border:1px solid #E8A44A;color:#854F0B;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px;line-height:1.5">'
+      + '&#x26A0; <strong>' + sansFournAchat.length + ' article(s) en stock</strong> n\'indiquent pas chez quel fournisseur ils ont ete achetes'
+      + (fichesStock.length ? ' (rattaches a « ' + fichesStock.join(' », « ') + ' »)' : '') + '. '
+      + 'Dans la liste ci-dessous, cliquez sur <strong>Modifier</strong> et choisissez le vrai fournisseur : il apparaitra ensuite dans les suggestions du chiffrage.'
+      + (fichesStock.length ? ' <button class="btn btn-sm" style="margin-left:6px" onclick="rechercherStock(\'' + fichesStock[0].replace(/\\/g, '').replace(/'/g, '') + '\')">Afficher ces articles</button>' : '')
+      + '</div>';
+  }
+
   // ── Formulaire d'entree ──
   html += '<div class="card" style="margin-bottom:16px">';
   html += '<div class="card-head"><span>&#x2795; Entree en stock</span></div>';
   html += '<div style="padding:14px 16px">';
   html += '<div class="g3" style="margin-bottom:10px">';
   html += '<div class="fr"><label class="fl">Fournisseur *</label><select class="inp" id="stk_fourn"><option value="">-- Choisir</option>';
-  FOURNISSEURS.filter(function(f){return f.actif;}).forEach(function(f){
+  // STOCK FOURNISSEUR : la fiche « Stock » n'est pas un fournisseur d'achat
+  FOURNISSEURS.filter(function(f){return f.actif && !estFournisseurStockGenerique(f);}).forEach(function(f){
     html += '<option value="'+f.id+'">'+f.nom+'</option>';
   });
   html += '</select></div>';
@@ -29105,7 +29204,7 @@ function snapshotDossier(v){
   if(!v) return null;
   var c = {};
   Object.keys(v).forEach(function(k){
-    if(k === 'photos' || k.charAt(0) === '_') return;
+    if(k === 'photos' || k === 'lastModified' || k.charAt(0) === '_') return;   // champs techniques ignores
     c[k] = JSON.stringify(v[k]);
   });
   return c;
@@ -29649,85 +29748,141 @@ function initAutocompleteDevis(){
 // ── Autocompletion STOCK dans la designation du chiffrage ───
 // Au clic : tous les articles compatibles avec le vehicule.
 // A la frappe : les articles dont le nom correspond, les plus proches en tete.
-function afficherAutocompleteStock(inp, lid, v, cl, q){
+function afficherAutocompleteStock(inp, lid, v, cl, q, opts){
+  opts = opts || {};
   var old = document.getElementById('ac_catPiece_'+lid);
   if(old) old.remove();
+  // Profils sans acces aux prix (ex. chef d'atelier dans un devis prospect) : aucun prix affiche
+  var sansPrix = ['chef_atelier','chef_equipe','technicien'].indexOf(typeof currentRole !== 'undefined' ? currentRole : '') >= 0;
 
-  // Sans saisie : tous les articles compatibles avec le vehicule.
-  // Avec saisie : uniquement ceux qui correspondent (pas de repli trompeur).
-  var articles = stockArticlesPour(v, q || '');
-  var aucunPourSaisie = (articles.length === 0 && !!q);
+  // SUGGESTION STOCK : d'abord les articles compatibles avec le vehicule, puis tous les
+  // autres articles en stock correspondant a la saisie (destination affichee).
+  var compat = stockArticlesPour(v, q || '');
+  var autres = q ? stockArticlesAutres(v, q) : [];
+  var total = compat.length + autres.length;
+  var idxPrix = indexHistoriquePrixStock();
 
   var rect = inp.getBoundingClientRect();
   var ac = document.createElement('div');
   ac.id = 'ac_catPiece_'+lid;
-  ac.style.cssText = 'position:fixed;left:'+rect.left+'px;top:'+(rect.bottom+2)+'px;width:'+Math.max(rect.width,300)+'px;background:#fff;border:2px solid #185FA5;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.15);z-index:99999;max-height:240px;overflow-y:auto';
+  // Position : sous le champ, ou au-dessus s'il manque de place (ligne en bas de l'ecran) ;
+  // la hauteur s'adapte toujours a l'espace visible, pour que chaque article reste atteignable.
+  var hautEcran = window.innerHeight || document.documentElement.clientHeight || 800;
+  var largeur = Math.min(Math.max(rect.width, 380), (window.innerWidth || 1200) - 16);
+  var gauche = Math.max(8, Math.min(rect.left, (window.innerWidth || 1200) - largeur - 8));
+  var espaceBas = hautEcran - rect.bottom - 10, espaceHaut = rect.top - 10;
+  var dessus = espaceBas < 240 && espaceHaut > espaceBas;
+  var hauteurMax = Math.max(140, Math.min(420, dessus ? espaceHaut : espaceBas));
+  ac.style.cssText = 'position:fixed;left:'+gauche+'px;'+(dessus ? 'bottom:'+(hautEcran - rect.top + 2)+'px' : 'top:'+(rect.bottom+2)+'px')
+    + ';width:'+largeur+'px;background:#fff;border:2px solid #185FA5;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.15);z-index:100004;max-height:'+hauteurMax+'px;overflow-y:auto';
 
-  // En-tete : adapte selon le cas
-  var head = document.createElement('div');
-  var headBg = articles.length ? '#EAF1FA' : '#FAEEDA';
-  var headCol = articles.length ? '#185FA5' : '#854F0B';
-  head.style.cssText = 'padding:5px 10px;background:'+headBg+';font-size:10px;font-weight:700;color:'+headCol+';border-bottom:1px solid #BDD5F0;position:sticky;top:0';
-  if(articles.length){
-    head.textContent = '\uD83D\uDCE6 Stock disponible ('+articles.length+')';
-  } else if(aucunPourSaisie){
-    head.innerHTML = '&#x26A0; Pas de "'+q.replace(/</g,'&lt;')+'" en stock';
-  } else {
-    head.innerHTML = '&#x26A0; Aucun article en stock pour ce vehicule';
+  function entete(texte, fond, couleur){
+    var h = document.createElement('div');
+    h.style.cssText = 'padding:5px 10px;background:'+fond+';font-size:10px;font-weight:700;color:'+couleur+';border-bottom:1px solid #BDD5F0;position:sticky;top:0;z-index:1';
+    h.innerHTML = texte; return h;
   }
-  ac.appendChild(head);
-
-  if(!articles.length){
+  var vehTxt = ((v && v.marque) || '') + ' ' + ((v && v.modele) || '');
+  if(!total){
+    ac.appendChild(entete(q ? '&#x26A0; Pas de "'+q.replace(/</g,'&lt;')+'" en stock' : '&#x26A0; Aucun article en stock pour ce vehicule', '#FAEEDA', '#854F0B'));
     var vide = document.createElement('div');
     vide.style.cssText = 'padding:10px;font-size:11px;color:#666;line-height:1.6';
-    if(aucunPourSaisie){
-      // La saisie ne correspond a rien : proposer de voir ce qui existe
-      var tousCompat = stockArticlesPour(v, '');
-      vide.innerHTML = 'Cette piece n est pas en stock.<br>'
-        + 'Changez la source en <strong>Local</strong> ou <strong>Commande</strong>'
-        + (tousCompat.length ? ', ou effacez votre saisie pour voir les '+tousCompat.length+' article(s) disponible(s).' : '.');
-    } else {
-      vide.innerHTML = 'Aucun article compatible avec ce vehicule.<br>'
-        + 'Changez la source en <strong>Local</strong> ou <strong>Commande</strong>.';
-    }
+    vide.innerHTML = (q ? 'Cette piece n est pas en stock.<br>' : 'Tapez le nom de la piece pour chercher dans tout le stock.<br>')
+      + 'Sinon, changez la source en <strong>Local</strong> ou <strong>Commande</strong>.';
     ac.appendChild(vide);
     document.body.appendChild(ac);
     return;
   }
 
-  articles.forEach(function(a){
-    var f = FOURNISSEURS.find(function(x){ return x.id===a.fournisseurId; });
+  function ligneArticle(a, compatible){
+    var fournHtml = htmlFournisseurStock(a);
     var dispo = stockDispo(a);
     var besoin = parseInt(cl.qte,10)||1;
     var insuffisant = besoin > dispo;
-
+    var hist = historiquePrixArticle(a, v, idxPrix);
     var item = document.createElement('div');
     item.style.cssText = 'padding:8px 10px;cursor:pointer;border-bottom:1px solid #f0ede8;font-size:12px'
       + (a.id===cl.stockArticleId ? ';background:#EAF3DE' : '');
-    item.innerHTML = '<div style="font-weight:600">'+a.nom
-        + (a.id===cl.stockArticleId ? ' <span style="color:#3B6D11;font-size:10px">\u2713 choisi</span>' : '')
+    var h = '<div style="font-weight:600">'+a.nom
+        + (fournHtml ? ' <span style="color:#bbb">—</span> ' + fournHtml : '')
+        + (a.id===cl.stockArticleId ? ' <span style="color:#3B6D11;font-size:10px">✓ choisi</span>' : '')
         + '</div>'
       + '<div style="color:#666;font-size:10px;display:flex;gap:10px;margin-top:2px;flex-wrap:wrap">'
-      + '<span style="color:'+(insuffisant?'#A32D2D':'#3B6D11')+';font-weight:700">'+dispo+' dispo'
+      + '<span style="color:'+(insuffisant?'#A32D2D':'#3B6D11')+';font-weight:700">Reste : '+dispo
         + (insuffisant ? ' (il en faut '+besoin+')' : '') + '</span>'
-      + '<span style="color:#185FA5">'+(parseFloat(a.prixAchat)||0).toLocaleString('fr-FR', GOS_FMT0)+' F</span>'
-      + (f ? '<span style="color:#854F0B">'+f.nom+'</span>' : '')
-      + '<span style="color:#999">'+stockDestination(a)+'</span>'
+      + (sansPrix ? '' : '<span style="color:#185FA5">Achat '+(parseFloat(a.prixAchat)||0).toLocaleString('fr-FR', GOS_FMT0)+' F</span>')
+      + '<span style="color:'+(compatible?'#777':'#854F0B')+'">'+(stockEstUniversel(a) ? stockDestination(a) : 'Pour : '+stockDestination(a))+'</span>'
       + '</div>';
-
+    if(hist.length && !sansPrix){
+      h += '<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;align-items:center"><span style="font-size:10px;color:#999">Deja facture :</span>';
+      hist.forEach(function(e){
+        var lib = ((e.marque||'')+' '+(e.modele||'')).trim() || e.immat || '?';
+        var dt = e.date ? new Date(e.date).toLocaleDateString('fr-FR', {day:'2-digit', month:'2-digit'}) : '';
+        h += '<span data-prix="'+e.prix+'" title="Choisir cet article a ce prix ('+(e.client||'').replace(/"/g,'')+' · '+(e.immat||'')+')" '
+          + 'style="font-size:10px;padding:1px 6px;border-radius:9px;border:1px solid '+(e.rang<=1?'#3B6D11':'#BDD5F0')+';color:'+(e.rang<=1?'#3B6D11':'#185FA5')+';background:#fff">'
+          + lib + ' · <strong>' + e.prix.toLocaleString('fr-FR', GOS_FMT0) + ' F</strong>'
+          + (e.client ? ' · ' + String(e.client).split(' ').slice(0,2).join(' ') : '') + (dt ? ' · ' + dt : '') + '</span>';
+      });
+      h += '</div>';
+    }
+    item.innerHTML = h;
     item.addEventListener('mousedown', function(e){
       e.preventDefault();
+      var puce = e.target && e.target.closest ? e.target.closest('[data-prix]') : null;
       var box = document.getElementById('ac_catPiece_'+lid);
       if(box) box.remove();
       inp.value = a.nom;
-      // Selectionner l'article : prix, fournisseur et libelle suivent
+      // Clic sur un prix deja facture : ce prix devient le prix de vente de la ligne
+      if(puce && !sansPrix) updateChiffrageLigne(lid, 'prixVente', parseFloat(puce.getAttribute('data-prix')) || 0);
+      // Selectionner l'article : prix d'achat, fournisseur et libelle suivent
       updateChiffrageLigne(lid, 'stockArticleId', a.id);
     });
     item.addEventListener('mouseover', function(){ if(a.id!==cl.stockArticleId) item.style.background='#f5f4f1'; });
     item.addEventListener('mouseout', function(){ if(a.id!==cl.stockArticleId) item.style.background=''; });
-    ac.appendChild(item);
-  });
+    return item;
+  }
 
+  if(compat.length){
+    ac.appendChild(entete('📦 En stock \u2014 compatible avec ' + (vehTxt.trim() || 'ce vehicule') + ' (' + compat.length + ')'
+      + (opts.depuisAutreSource ? ' <span style="font-weight:400">\u2014 le choix passe la ligne en source Stock</span>' : ''), '#EAF1FA', '#185FA5'));
+    compat.forEach(function(a){ ac.appendChild(ligneArticle(a, true)); });
+  }
+  if(autres.length){
+    ac.appendChild(entete('Autres articles en stock pour « ' + q.replace(/</g,'&lt;') + ' » (' + autres.length + ') — prevus pour d\'autres vehicules', '#FAF3E8', '#854F0B'));
+    autres.forEach(function(a){ ac.appendChild(ligneArticle(a, false)); });
+  }
+  // Hors source Stock : le catalogue habituel suit les articles en stock
+  if(opts.catalogue && opts.catalogue.length){
+    ac.appendChild(entete('Catalogue (pieces deja saisies, hors stock) (' + opts.catalogue.length + ')', '#f5f4f1', '#5a5956'));
+    opts.catalogue.forEach(function(p){
+      var item = document.createElement('div');
+      item.style.cssText = 'padding:8px 12px;cursor:pointer;border-bottom:1px solid #f0ede8;font-size:12px';
+      var fournAC = FOURNISSEURS.find(function(f){return f.id===p.fournisseurId;});
+      item.innerHTML = '<div style="font-weight:600">'+p.piece+'</div>'
+        +'<div style="color:#666;font-size:11px;display:flex;gap:12px;margin-top:2px">'
+        +'<span>'+(p.marque||'')+' '+(p.modele||'')+'</span>'
+        +(p.prixAchat && !sansPrix?'<span style="color:#185FA5">Achat: '+p.prixAchat.toLocaleString('fr-FR', GOS_FMT0)+' F</span>':'')
+        +(p.prixVente && !sansPrix?'<span style="color:#3B6D11">Vente: '+p.prixVente.toLocaleString('fr-FR', GOS_FMT0)+' F</span>':'')
+        +(fournAC?'<span style="color:#854F0B">'+fournAC.nom+'</span>':'')
+        +'</div>';
+      item.addEventListener('mousedown', function(e){
+        e.preventDefault();
+        var box = document.getElementById('ac_catPiece_'+lid); if(box) box.remove();
+        _catCurrentLigneId = lid;
+        var inpAC = document.getElementById('catPiece_'+lid);
+        if(inpAC) inpAC.setAttribute('data-fromcat','1');
+        selectionnerPieceCat(p);
+      });
+      item.addEventListener('mouseover', function(){ item.style.background='#f5f4f1'; });
+      item.addEventListener('mouseout', function(){ item.style.background=''; });
+      ac.appendChild(item);
+    });
+  }
+  if(!q){
+    var astuce = document.createElement('div');
+    astuce.style.cssText = 'padding:6px 10px;font-size:10px;color:#999';
+    astuce.textContent = 'Tapez le nom de la piece pour voir aussi les articles prevus pour d\'autres vehicules.';
+    ac.appendChild(astuce);
+  }
   document.body.appendChild(ac);
 }
 
@@ -29753,6 +29908,13 @@ function afficherAutocompletePiece(inp, lid){
   var matches = cat.filter(function(p){
     return p.piece.toLowerCase().indexOf(q)>=0;
   }).sort(function(a,b){ return (b.count||1)-(a.count||1); }).slice(0,6);
+
+  // SUGGESTION STOCK : quelle que soit la source de la ligne, les articles en stock
+  // correspondant a la saisie sont proposes en premier (le choix passe la ligne en Stock)
+  if(cl && v && (stockArticlesPour(v, q).length || stockArticlesAutres(v, q).length)){
+    afficherAutocompleteStock(inp, lid, v, cl, q, {catalogue: matches, depuisAutreSource: true});
+    return;
+  }
 
   if(!matches.length) return;
 
