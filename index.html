@@ -30312,13 +30312,23 @@ function _convertirFlexEnTable(doc, conteneur){
 // de nombre de lignes (plutot qu'une mesure de hauteur en pixels,
 // dependante du rendu exact et donc plus fragile) — previsible et
 // facile a verifier.
+// PDF PAGES : hauteur d'une page A4 a la largeur du document, telle que la calcule la
+// bibliotheque PDF (rapport hauteur / largeur du format A4 : 841,89 / 595,28 points).
+function _hauteurPagePdf(doc){ return doc.body.scrollWidth * 841.89 / 595.28; }
+// Hauteur a capturer : un nombre ENTIER de pages (une fraction en trop = une page blanche de plus).
+function _hauteurTotalePdf(doc){
+  var H = _hauteurPagePdf(doc);
+  var n = Math.max(1, Math.ceil((doc.body.scrollHeight - 2) / H));
+  return Math.floor(n * H) - 4;
+}
+
 // IMPRESSION LISIBLE : repartit les lignes du tableau en pages A4 d'apres leur hauteur mesuree.
 // Page 1 : de la premiere ligne jusqu'au pied de page ; pages suivantes : marge haute (10 mm) +
 // en-tete du tableau repete. La derniere page garde la place du total, de l'acompte, du montant en
 // lettres et de la signature : sinon, quelques lignes passent avec eux sur une page de plus.
 function _groupesLignesPdf(body, table, thead, lignes, footer){
   if(!lignes.length) return [lignes];
-  var PAGE_H = Math.round(body.scrollWidth * 297 / 210);   // A4 a la largeur du document
+  var PAGE_H = _hauteurPagePdf(body.ownerDocument);         // PDF PAGES : A4 a la largeur du document
   var MARGE = 20;                                           // securite en bas de page
   var hPied = footer ? footer.getBoundingClientRect().height + 12 : 0;
   var hTete = thead ? thead.getBoundingClientRect().height : 0;
@@ -30383,9 +30393,11 @@ function _paginerPourPdf(doc, body){
     // ORIGINAL, deja present en fin de document, sert pour la derniere
     // page ; on ne le duplique qu'entre les pages intermediaires.
     var pointInsertion = tablePieces.nextSibling;
+    var coupures = [];   // PDF PAGES : (pied recopie, debut de page) a caler sur les pages A4
     for(var g=1; g<groupes.length; g++){
+      var piedCopie = null;
       if(footer){
-        var piedCopie = footer.cloneNode(true);
+        piedCopie = footer.cloneNode(true);
         tablePieces.parentNode.insertBefore(piedCopie, pointInsertion);
       }
       // Point de coupure sur un WRAPPER (pas directement sur le tableau) :
@@ -30408,11 +30420,27 @@ function _paginerPourPdf(doc, body){
       tablePieces.parentNode.insertBefore(wrapperPage, pointInsertion);
       derniereTable = nouvelleTable;
       dernierWrapper = wrapperPage;
+      coupures.push({pied: piedCopie, debut: wrapperPage});
     }
 
     // Le total suit desormais la derniere page, juste apres ses dernieres
     // lignes de pieces — exactement comme sur un document a une seule page.
     if(tfoot) derniereTable.appendChild(tfoot);
+    // PDF PAGES : chaque nouvelle page commence exactement en haut d'une page A4 et le pied de page
+    // recopie se place en bas de la page precedente — sans laisser la bibliotheque PDF inserer
+    // elle-meme une marge (qu'elle ne comptait pas dans la hauteur capturee).
+    var H_PAGE = _hauteurPagePdf(doc);
+    coupures.forEach(function(c){
+      var haut = function(el){ return el.getBoundingClientRect().top - body.getBoundingClientRect().top; };
+      var finPage = Math.ceil(haut(c.debut) / H_PAGE - 1e-6) * H_PAGE;
+      if(c.pied){
+        var e1 = finPage - 15 - (c.pied.getBoundingClientRect().bottom - body.getBoundingClientRect().top);
+        if(e1 > 0){ var s1 = doc.createElement('div'); s1.style.height = e1 + 'px'; c.pied.parentNode.insertBefore(s1, c.pied); }
+      }
+      var e2 = finPage - haut(c.debut);
+      if(e2 > 0){ var s2 = doc.createElement('div'); s2.style.height = e2 + 'px'; c.debut.parentNode.insertBefore(s2, c.debut); }
+      c.debut.style.pageBreakBefore = '';
+    });
     // NOTE : le bloc final (mention en lettres, signature, pied de page)
     // reste volontairement en flux normal apres la derniere table — le
     // forcer a rester groupe (page-break-inside:avoid) le poussait en
@@ -30427,14 +30455,51 @@ function _paginerPourPdf(doc, body){
   // DESSOUS de lui au lieu d'au-dessus (d'ou l'impression qu'il "flotte"
   // au milieu de la page, y compris sur un devis tenant sur une seule
   // page, plutot que d'etre plaque en bas).
+  // PDF PAGES : lignes libres (travaux du bon de livraison, signatures) jamais coupees par un saut
+  // de page : la ligne passe en haut de la page suivante et le pied de page est recopie en bas de
+  // la page qu'elle quitte.
+  var H_LIBRE = _hauteurPagePdf(doc), hPiedLibre = footer ? footer.getBoundingClientRect().height : 0;
+  function pousserSurPageSuivante(el){
+    var t = body.getBoundingClientRect().top, y0 = el.getBoundingClientRect().top - t;
+    var fin = (Math.floor(y0 / H_LIBRE) + 1) * H_LIBRE;
+    var limite = fin - 15 - (footer ? hPiedLibre + 12 : 0);
+    var sA = doc.createElement('div'); sA.style.height = Math.max(0, limite + 12 - y0) + 'px';
+    el.parentNode.insertBefore(sA, el);
+    if(footer){ var pc = footer.cloneNode(true); el.parentNode.insertBefore(pc, el); }
+    var y2 = el.getBoundingClientRect().top - body.getBoundingClientRect().top;
+    var sB = doc.createElement('div'); sB.style.height = Math.max(0, fin + 38 - y2) + 'px';   // 38 px = 10 mm en haut de page
+    el.parentNode.insertBefore(sB, el);
+  }
+  var lignesLibres = Array.prototype.slice.call(body.querySelectorAll('[data-pdf-ligne]'));
+  lignesLibres.forEach(function(el){
+    var t = body.getBoundingClientRect().top, r = el.getBoundingClientRect();
+    var fin = (Math.floor((r.top - t) / H_LIBRE) + 1) * H_LIBRE;
+    if(r.bottom - t > fin - 15 - (footer ? hPiedLibre + 12 : 0)) pousserSurPageSuivante(el);
+  });
+
   if(footer){
-    var PAGE_HAUTEUR_PX = 1122; // A4 ~297mm a 96dpi, mesure en px CSS
+    var PAGE_HAUTEUR_PX = _hauteurPagePdf(doc); // PDF PAGES : A4 a la largeur du document
     var MARGE_BAS = 15;
     var rectBody = body.getBoundingClientRect();
-    var hautDernierePage = dernierWrapper ? (dernierWrapper.getBoundingClientRect().top - rectBody.top) : 0;
+    // PDF PAGES : le pied de page va en bas de la page ou il se termine (pages calees sur l'A4)
     var basFooterAvant = footer.getBoundingClientRect().bottom - rectBody.top;
-    var hauteurUtilisee = basFooterAvant - hautDernierePage;
-    var espaceRestant = PAGE_HAUTEUR_PX - hauteurUtilisee - MARGE_BAS;
+    var hautFooter = footer.getBoundingClientRect().top - rectBody.top;
+    // le pied de page ne tient plus sous la derniere ligne libre (signatures) : elle passe avec lui
+    // sur la page suivante, pour ne jamais laisser une page avec le seul pied de page
+    var derLibre = lignesLibres.length ? lignesLibres[lignesLibres.length - 1] : null;
+    var pageFooter = Math.floor(hautFooter / PAGE_HAUTEUR_PX);
+    if(derLibre && (basFooterAvant > (pageFooter + 1) * PAGE_HAUTEUR_PX - 3
+                    || pageFooter > Math.floor((derLibre.getBoundingClientRect().top - rectBody.top) / PAGE_HAUTEUR_PX))){
+      pousserSurPageSuivante(derLibre);
+      rectBody = body.getBoundingClientRect();
+      basFooterAvant = footer.getBoundingClientRect().bottom - rectBody.top;
+      hautFooter = footer.getBoundingClientRect().top - rectBody.top;
+    }
+    var finPageFooter = (Math.floor(hautFooter / PAGE_HAUTEUR_PX) + 1) * PAGE_HAUTEUR_PX;
+    // il tient sur sa page : on le plaque en bas ; il deborde : il passe en bas de la page suivante
+    var espaceRestant = basFooterAvant <= finPageFooter - 3
+      ? finPageFooter - MARGE_BAS - basFooterAvant
+      : finPageFooter + PAGE_HAUTEUR_PX - MARGE_BAS - basFooterAvant;
     if(espaceRestant > 0){
       var spacer = doc.createElement('div');
       spacer.style.height = espaceRestant+'px';
@@ -30493,8 +30558,9 @@ function exporterPDF(){
       // Legere marge de securite sur la hauteur (le pied de page est
       // maintenant positionne precisement via un espaceur calcule dans
       // _paginerPourPdf — cette marge n'est qu'un filet de securite).
-      width: doc.body.scrollWidth, height: doc.body.scrollHeight+20,
-      windowWidth: doc.body.scrollWidth, windowHeight: doc.body.scrollHeight+20
+      // PDF PAGES : un nombre entier de pages (l'ancienne marge de +20 px creait une page blanche)
+      width: doc.body.scrollWidth, height: _hauteurTotalePdf(doc),
+      windowWidth: doc.body.scrollWidth, windowHeight: _hauteurTotalePdf(doc)
     },
     jsPDF: { unit:'mm', format:'a4', orientation:'portrait' },
     pagebreak: { mode:['css','legacy'] }
@@ -31295,7 +31361,7 @@ function imprimerBonLivraison(vid){
     lignes = v.chiffrage.lignes.filter(function(l){ return (l.piece||'').trim() && !l.differe; });
   }
   var travauxHtml = lignes.length
-    ? lignes.map(function(l){ return '<div style="margin-bottom:3px">- '+(l.piece||'')+'</div>'; }).join('')
+    ? lignes.map(function(l){ return '<div data-pdf-ligne="1" style="margin-bottom:3px">- '+(l.piece||'')+'</div>'; }).join('')
     : '<div style="color:#888">Aucun travail enregistre.</div>';
 
   var dateEdit = new Date().toLocaleDateString('fr-FR');
@@ -31389,17 +31455,17 @@ function imprimerBonLivraison(vid){
     +(dateEntree ? ', entré au garage le <strong>'+dateEntree+'</strong>'+(heureEntree ? ' à <strong>'+heureEntree+'</strong>' : '')+',' : '')
     +' le <strong>'+dateLivraison.toLocaleDateString('fr-FR')+'</strong> dans ses locaux après avoir effectué ces travaux.'
     +'</div>'
-    +'<div style="font-size:14px;font-style:italic;margin-bottom:20px">(Se référer à la facture en annexe.)</div>'
+    +'<div style="margin-bottom:20px"></div>'   // mention « Se referer a la facture » retiree
 
     // TRAVAUX REALISES
     +'<div style="border:1.5px solid #1a1a1a;border-radius:6px;padding:8px 14px;text-align:center;font-weight:700;font-size:15px;margin-bottom:12px">TRAVAUX RÉALISÉS</div>'
     +'<div style="font-size:14px;margin-bottom:60px">'+travauxHtml+'</div>'
 
     // Signatures Client / Garage cote a cote
-    +'<div style="display:flex;justify-content:space-between;margin-top:auto">'
+    +'<div data-pdf-ligne="1"><div style="display:flex;justify-content:space-between;margin-top:auto">'
     +'<div style="font-size:16px;font-weight:700;text-decoration:underline">CLIENT</div>'
     +'<div style="font-size:16px;font-weight:700;text-decoration:underline">LE GARAGE SMART</div>'
-    +'</div>'
+    +'</div></div>'
 
     +'<div style="text-align:right;font-size:12px;color:#888;margin-top:16px">1 / 1</div>'
 
