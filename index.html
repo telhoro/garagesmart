@@ -30312,8 +30312,46 @@ function _convertirFlexEnTable(doc, conteneur){
 // de nombre de lignes (plutot qu'une mesure de hauteur en pixels,
 // dependante du rendu exact et donc plus fragile) — previsible et
 // facile a verifier.
+// IMPRESSION LISIBLE : repartit les lignes du tableau en pages A4 d'apres leur hauteur mesuree.
+// Page 1 : de la premiere ligne jusqu'au pied de page ; pages suivantes : marge haute (10 mm) +
+// en-tete du tableau repete. La derniere page garde la place du total, de l'acompte, du montant en
+// lettres et de la signature : sinon, quelques lignes passent avec eux sur une page de plus.
+function _groupesLignesPdf(body, table, thead, lignes, footer){
+  if(!lignes.length) return [lignes];
+  var PAGE_H = Math.round(body.scrollWidth * 297 / 210);   // A4 a la largeur du document
+  var MARGE = 20;                                           // securite en bas de page
+  var hPied = footer ? footer.getBoundingClientRect().height + 12 : 0;
+  var hTete = thead ? thead.getBoundingClientRect().height : 0;
+  var haut = function(el){ return el.getBoundingClientRect().height; };
+  var rB = body.getBoundingClientRect();
+  var dernier = lignes[lignes.length - 1].getBoundingClientRect();
+  // ce qui suit les lignes : total (tfoot) + blocs apres le tableau, jusqu'au dernier element du contenu
+  var conteneur = table.parentNode, finContenu = dernier.bottom;
+  Array.prototype.forEach.call(conteneur.children, function(el){
+    if(el === footer || el.tagName === 'FOOTER') return;
+    var r = el.getBoundingClientRect(); if(r.height > 0 && r.bottom > finContenu) finContenu = r.bottom;
+  });
+  var hFin = Math.max(0, finContenu - dernier.bottom);
+  var dispoPage1 = PAGE_H - MARGE - hPied - (lignes[0].getBoundingClientRect().top - rB.top);
+  var dispoSuite = PAGE_H - MARGE - hPied - 38 - hTete;      // 38 px = marge haute de 10 mm
+  var groupes = [], courant = [], dispo = dispoPage1;
+  lignes.forEach(function(tr){
+    var h = haut(tr);
+    if(courant.length && h > dispo){ groupes.push(courant); courant = []; dispo = dispoSuite; }
+    courant.push(tr); dispo -= h;
+  });
+  // la fin du document (total, signature) doit tenir sous les dernieres lignes : sinon les
+  // dernieres lignes passent avec elle sur une nouvelle page
+  var report = [];
+  while(dispo < hFin && courant.length > 1){ var tr = courant.pop(); report.unshift(tr); dispo += haut(tr); }
+  groupes.push(courant);
+  if(report.length) groupes.push(report);
+  return groupes.filter(function(g){ return g.length; });
+}
+
 function _paginerPourPdf(doc, body){
-  var LIGNES_PAR_PAGE = 25; // au format A4, avec l'entete + le pied de page, ~25 lignes tiennent confortablement
+  // IMPRESSION LISIBLE : le decoupage se calcule sur la hauteur REELLE des lignes (texte agrandi,
+  // designations sur deux lignes...) et non plus sur un nombre fixe de 25 lignes par page.
 
   var footer = body.querySelector('footer');
   var tablePieces = null, maxRows = 0;
@@ -30335,12 +30373,8 @@ function _paginerPourPdf(doc, body){
   var derniereTable = tablePieces;
   var dernierWrapper = null; // reste null si tout tient sur une seule page (la page demarre alors au tout debut du body)
 
-  if(lignes.length > LIGNES_PAR_PAGE){
-    // Regrouper les lignes par page de LIGNES_PAR_PAGE.
-    var groupes = [];
-    for(var i=0;i<lignes.length;i+=LIGNES_PAR_PAGE){
-      groupes.push(lignes.slice(i, i+LIGNES_PAR_PAGE));
-    }
+  var groupes = _groupesLignesPdf(body, tablePieces, thead, lignes, footer);
+  if(groupes.length > 1){
 
     if(tfoot) tfoot.parentNode.removeChild(tfoot); // retire le total de la 1ere page, rattache plus bas a la derniere
 
@@ -30624,9 +30658,10 @@ function ouvrirModaleImpression(titre, htmlContenu){
     +'*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}'
     +'*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}'
     +'@page{size:A4 portrait;margin:15mm}'
-    +'html,body{width:210mm;font-size:11px;color:#1a1a1a;background:#fff}'
+    +'html,body{width:210mm;font-size:14px;color:#1a1a1a;background:#fff}'
+    +'@media print{html,body{width:auto}}'   // IMPRESSION LISIBLE
     +'table{width:100%;border-collapse:collapse}'
-    +'footer{margin-top:20mm;border-top:2px solid #1a1a1a;padding-top:5px;text-align:center;font-size:9px;color:#555}'
+    +'footer{margin-top:20mm;border-top:2px solid #1a1a1a;padding-top:5px;text-align:center;font-size:12px;color:#555}'
     +'</style></head><body>'
     +htmlContenu
     +'</body></html>');
@@ -30742,7 +30777,7 @@ function imprimerFicheEntree(vid, immatParam, vOverride){
 
   // Construire le SVG des zones endommagees
   function svgZones(activeZones){
-    var s = '<svg viewBox="0 0 320 180" width="280" height="160" style="border:1px solid #ccc;border-radius:6px;background:#f9f8f7">';
+    var s = '<svg viewBox="0 0 320 180" width="360" height="203" style="border:1px solid #ccc;border-radius:6px;background:#f9f8f7;flex:none">';   // IMPRESSION LISIBLE
     s += '<rect x="80" y="20" width="160" height="140" rx="20" fill="#ddd" stroke="#999" stroke-width="1.5"/>';
     var parts = [
       ['capot',90,22,140,40,10,'CAPOT',160,47],
@@ -30763,15 +30798,15 @@ function imprimerFicheEntree(vid, immatParam, vOverride){
       var zone=p[0],x=p[1],y=p[2],w=p[3],h2=p[4],rx=p[5],label=p[6],tx=p[7],ty=p[8];
       var active = activeZones.indexOf(zone)>=0;
       s += '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h2+'" rx="'+rx+'" fill="'+(active?'#E8A44A':'#e8e5e0')+'" stroke="'+(active?'#854F0B':'#bbb')+'" stroke-width="1"/>';
-      s += '<text x="'+tx+'" y="'+ty+'" text-anchor="middle" font-size="7" fill="#555">'+label+'</text>';
+      s += '<text x="'+tx+'" y="'+ty+'" text-anchor="middle" font-size="8.5" font-weight="700" fill="#333">'+label+'</text>';
     });
     // Pare-brise et lunette
     var pbActive = activeZones.indexOf('pare_brise')>=0;
     var luActive = activeZones.indexOf('lunette')>=0;
     s += '<rect x="100" y="56" width="120" height="14" rx="3" fill="'+(pbActive?'#E8A44A':'#cce0f5')+'" stroke="'+(pbActive?'#854F0B':'#bbb')+'" stroke-width="1"/>';
-    s += '<text x="160" y="67" text-anchor="middle" font-size="7" fill="#555">PARE-BRISE</text>';
+    s += '<text x="160" y="67" text-anchor="middle" font-size="8.5" font-weight="700" fill="#333">PARE-BRISE</text>';
     s += '<rect x="100" y="110" width="120" height="14" rx="3" fill="'+(luActive?'#E8A44A':'#cce0f5')+'" stroke="'+(luActive?'#854F0B':'#bbb')+'" stroke-width="1"/>';
-    s += '<text x="160" y="121" text-anchor="middle" font-size="7" fill="#555">LUNETTE</text>';
+    s += '<text x="160" y="121" text-anchor="middle" font-size="8.5" font-weight="700" fill="#333">LUNETTE</text>';
     s += '</svg>';
     return s;
   }
@@ -30780,8 +30815,8 @@ function imprimerFicheEntree(vid, immatParam, vOverride){
   var invRows = '';
   Object.keys(INV_LABELS).forEach(function(k){
     var checked = inv[k] ? '&#x2611;' : '&#x2610;';
-    var color = inv[k] ? '#3B6D11' : '#aaa';
-    invRows += '<span style="display:inline-flex;align-items:center;gap:4px;margin:2px 8px 2px 0;font-size:11px;color:'+color+'">'+checked+' '+INV_LABELS[k]+'</span>';
+    var color = inv[k] ? '#3B6D11' : '#666';
+    invRows += '<span style="display:inline-flex;align-items:center;gap:4px;margin:2px 8px 2px 0;font-size:13px;color:'+color+'">'+checked+' '+INV_LABELS[k]+'</span>';
   });
 
   // Carburant et dates
@@ -30789,7 +30824,7 @@ function imprimerFicheEntree(vid, immatParam, vOverride){
   if(inv.carburant){
     var niveaux = {'0/4':'0%','1/4':'25%','2/4':'50%','3/4':'75%','4/4':'100%'};
     var pct = niveaux[inv.carburant] || '—';
-    carburantBar = '<span style="font-size:11px">Carburant : <strong>'+inv.carburant+'</strong> ('+pct+')</span>';
+    carburantBar = '<span style="font-size:13px">Carburant : <strong>'+inv.carburant+'</strong> ('+pct+')</span>';
   }
 
   var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Fiche entree - '+v.immat+'</title></head><body>';
@@ -30802,16 +30837,16 @@ function imprimerFicheEntree(vid, immatParam, vOverride){
   html += '*{box-sizing:border-box}';
   html += '*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}';
   html += '@page{size:A4 portrait;margin:12mm}';
-  html += 'body{font-family:Arial,sans-serif;margin:0;width:186mm;font-size:12px;color:#222}';
-  html += 'h1{font-size:16px;margin:0 0 2px}';
-  html += 'h2{font-size:12px;color:#185FA5;border-bottom:1px solid #ddd;padding-bottom:3px;margin:12px 0 6px}';
+  html += 'body{font-family:Arial,sans-serif;margin:0;width:186mm;font-size:14px;color:#222}';
+  html += 'h1{font-size:20px;margin:0 0 2px}';
+  html += 'h2{font-size:14px;color:#185FA5;border-bottom:1px solid #ddd;padding-bottom:3px;margin:12px 0 6px}';
   html += '.header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #185FA5;padding-bottom:8px;margin-bottom:12px}';
-  html += '.logo{font-size:18px;font-weight:700;color:#185FA5}';
+  html += '.logo{font-size:22px;font-weight:700;color:#185FA5}';
   html += '.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:12px}';
   html += '.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px}';
   html += '.box{background:#f9f8f7;border:1px solid #e0ddd8;border-radius:6px;padding:8px 10px}';
-  html += '.lbl{font-size:10px;color:#888;margin-bottom:2px}';
-  html += '.val{font-weight:600;font-size:12px}';
+  html += '.lbl{font-size:12px;color:#555;margin-bottom:2px}';
+  html += '.val{font-weight:600;font-size:14px}';
   html += '.inv-grid{display:flex;flex-wrap:wrap;background:#f9f8f7;border:1px solid #e0ddd8;border-radius:6px;padding:8px}';
   html += '.sig{border:1px solid #ccc;border-radius:6px;height:60px;margin-top:4px}';
   html += '.photos-opt{margin-top:10px}';
@@ -30823,17 +30858,17 @@ function imprimerFicheEntree(vid, immatParam, vOverride){
 
   // Contrôles impression
   html += '<div class="no-print">';
-  html += '<label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer"><input type="checkbox" id="chkPhotos"> Inclure les photos</label>';
-  html += '<button onclick="var s=document.getElementById(\'photoSection\');if(s)s.style.display=document.getElementById(\'chkPhotos\').checked?\'block\':\'none\'" style="background:#185FA5;color:#fff;border:none;padding:5px 14px;border-radius:5px;cursor:pointer;font-size:12px">Appliquer</button>';
-  html += '<button onclick="window.print()" style="background:#3B6D11;color:#fff;border:none;padding:5px 14px;border-radius:5px;cursor:pointer;font-size:12px">&#x1F5A8; Imprimer</button>';
+  html += '<label style="display:flex;align-items:center;gap:5px;font-size:14px;cursor:pointer"><input type="checkbox" id="chkPhotos"> Inclure les photos</label>';
+  html += '<button onclick="var s=document.getElementById(\'photoSection\');if(s)s.style.display=document.getElementById(\'chkPhotos\').checked?\'block\':\'none\'" style="background:#185FA5;color:#fff;border:none;padding:5px 14px;border-radius:5px;cursor:pointer;font-size:14px">Appliquer</button>';
+  html += '<button onclick="window.print()" style="background:#3B6D11;color:#fff;border:none;padding:5px 14px;border-radius:5px;cursor:pointer;font-size:14px">&#x1F5A8; Imprimer</button>';
   html += '</div>';
 
   // En-tête
   html += '<div class="header">';
-  html += '<div><div class="logo">Smart Services Garage</div><div style="font-size:10px;color:#888">Fiche d&#x27;entree vehicule</div></div>';
-  html += '<div style="text-align:right;font-size:11px"><div><strong>Date entree :</strong> '+dateEntree+'</div>';
+  html += '<div><div class="logo">Smart Services Garage</div><div style="font-size:12px;color:#888">Fiche d&#x27;entree vehicule</div></div>';
+  html += '<div style="text-align:right;font-size:13px"><div><strong>Date entree :</strong> '+dateEntree+'</div>';
   html += '<div><strong>Livraison prevue :</strong> '+dateLivraison+'</div>';
-  html += '<div style="font-size:14px;font-weight:700;color:#185FA5;margin-top:4px">'+v.immat+'</div></div>';
+  html += '<div style="font-size:17px;font-weight:700;color:#185FA5;margin-top:4px">'+v.immat+'</div></div>';
   html += '</div>';
 
   // Infos véhicule + client
@@ -30861,15 +30896,15 @@ function imprimerFicheEntree(vid, immatParam, vOverride){
   html += '<div><h2>Motif d entree</h2>';
   html += '<div class="box">';
   html += '<div class="lbl">Motif</div><div class="val" style="margin-bottom:6px">'+(v.motif||'—')+'</div>';
-  if(v.symptomes){ html += '<div class="lbl">Symptomes</div><div style="font-size:11px">'+(v.symptomes||'—')+'</div>'; }
+  if(v.symptomes){ html += '<div class="lbl">Symptomes</div><div style="font-size:13px">'+(v.symptomes||'—')+'</div>'; }
   html += '</div></div>';
 
   html += '<div><h2>Inventaire</h2>';
   html += '<div class="inv-grid">'+invRows+'</div>';
   if(carburantBar) html += '<div style="margin-top:6px">'+carburantBar+'</div>';
-  if(inv.controle_tech) html += '<div style="font-size:11px;margin-top:4px">Controle technique : <strong>'+inv.controle_tech+'</strong></div>';
-  if(inv.assurance) html += '<div style="font-size:11px;margin-top:2px">Assurance : <strong>'+inv.assurance+'</strong></div>';
-  if(inv.autres) html += '<div style="font-size:11px;margin-top:2px">Autres : '+inv.autres+'</div>';
+  if(inv.controle_tech) html += '<div style="font-size:13px;margin-top:4px">Controle technique : <strong>'+inv.controle_tech+'</strong></div>';
+  if(inv.assurance) html += '<div style="font-size:13px;margin-top:2px">Assurance : <strong>'+inv.assurance+'</strong></div>';
+  if(inv.autres) html += '<div style="font-size:13px;margin-top:2px">Autres : '+inv.autres+'</div>';
   html += '</div>';
   html += '</div>';
 
@@ -30878,7 +30913,7 @@ function imprimerFicheEntree(vid, immatParam, vOverride){
   html += '<div style="display:flex;gap:16px;align-items:flex-start">';
   html += svgZones(zones);
   if(zones.length){
-    html += '<div style="font-size:11px;padding:8px;background:#FAEEDA;border-radius:6px;border:1px solid #E8A44A;flex:1">';
+    html += '<div style="font-size:13px;padding:8px;background:#FAEEDA;border-radius:6px;border:1px solid #E8A44A;flex:1">';
     html += '<div style="font-weight:700;color:#854F0B;margin-bottom:6px">Zones signalees ('+zones.length+')</div>';
     zones.forEach(function(z){ html += '<div style="margin-bottom:2px">• '+(ZONE_LABELS_LOCAL[z]||z)+'</div>'; });
     html += '</div>';
@@ -30901,8 +30936,8 @@ function imprimerFicheEntree(vid, immatParam, vOverride){
   // Signatures
   html += '<h2>Signatures</h2>';
   html += '<div class="grid2" style="gap:20px">';
-  html += '<div><div style="font-size:11px;margin-bottom:4px">Signature du client</div><div class="sig"></div></div>';
-  html += '<div><div style="font-size:11px;margin-bottom:4px">Signature du receptionniste</div><div class="sig"></div></div>';
+  html += '<div><div style="font-size:13px;margin-bottom:4px">Signature du client</div><div class="sig"></div></div>';
+  html += '<div><div style="font-size:13px;margin-bottom:4px">Signature du receptionniste</div><div class="sig"></div></div>';
   html += '</div>';
 
 
@@ -31010,8 +31045,8 @@ function blocAcompteDocument(v, totalDocument){
 
   function ligne(libelle, montant, signe){
     return '<tr>'
-      + '<td style="padding:5px 10px;font-size:11px;text-align:right">'+libelle+'</td>'
-      + '<td style="padding:5px 10px;font-size:11px;text-align:right;font-weight:700;width:130px">'
+      + '<td style="padding:5px 10px;font-size:14px;text-align:right">'+libelle+'</td>'
+      + '<td style="padding:5px 10px;font-size:14px;text-align:right;font-weight:700;width:130px">'
       + (signe||'') + Math.round(montant).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA</td></tr>';
   }
 
@@ -31031,8 +31066,8 @@ function blocAcompteDocument(v, totalDocument){
   }
   h += '<tr><td colspan="2" style="padding:0"><div style="border-top:2px solid #1a1a1a"></div></td></tr>';
   h += '<tr>'
-     + '<td style="padding:7px 10px;font-size:12px;font-weight:700;text-align:right">NET À PAYER</td>'
-     + '<td style="padding:7px 10px;font-size:13px;font-weight:900;text-align:right;background:#1a1a1a;color:#fff">'
+     + '<td style="padding:7px 10px;font-size:15px;font-weight:700;text-align:right">NET À PAYER</td>'
+     + '<td style="padding:7px 10px;font-size:16px;font-weight:900;text-align:right;background:#1a1a1a;color:#fff">'
      + Math.round(net).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA</td></tr>';
   h += '</table></div>';
   return h;
@@ -31065,15 +31100,15 @@ function imprimerDocument(vid, type){
     if(sansVente.length){
       var h = '<div style="padding:4px 0 10px">';
       h += '<div style="background:#FBE9E7;border-left:4px solid #A32D2D;padding:12px 14px;margin-bottom:14px">';
-      h += '<div style="font-weight:700;color:#A32D2D;font-size:14px;margin-bottom:6px">'
+      h += '<div style="font-weight:700;color:#A32D2D;font-size:17px;margin-bottom:6px">'
          + 'Document non imprimé : le prix de vente manque</div>';
-      h += '<div style="font-size:13px;line-height:1.5">Le chiffrage de ce dossier porte un prix d’achat, '
+      h += '<div style="font-size:16px;line-height:1.5">Le chiffrage de ce dossier porte un prix d’achat, '
          + 'mais aucun prix de vente sur ' + sansVente.length + ' ligne(s). Le document sortirait '
          + 'à zéro, colonnes vides et total nul.<br>'
          + 'Complétez le prix de vente dans le chiffrage, puis relancez l’impression.</div>';
       h += '</div>';
-      h += '<div style="font-size:13px;font-weight:700;margin-bottom:6px">Pièces concernées :</div>';
-      h += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+      h += '<div style="font-size:16px;font-weight:700;margin-bottom:6px">Pièces concernées :</div>';
+      h += '<table style="width:100%;border-collapse:collapse;font-size:15px">';
       h += '<thead><tr style="background:#f5f3ef">'
          + '<th style="text-align:left;padding:6px 10px;border:1px solid #ddd">Pièce</th>'
          + '<th style="padding:6px 10px;border:1px solid #ddd">Qté</th>'
@@ -31091,7 +31126,7 @@ function imprimerDocument(vid, type){
       });
       h += '</tbody></table>';
       if(estDossierAssurance(v)){
-        h += '<div style="margin-top:14px;background:#EAF1FA;border:1px solid #BDD5F0;padding:10px 12px;font-size:12px;color:#185FA5">'
+        h += '<div style="margin-top:14px;background:#EAF1FA;border:1px solid #BDD5F0;padding:10px 12px;font-size:15px;color:#185FA5">'
           + '&#x2139; Ce dossier est un dossier assurance : il se facture à l’assureur au prix de '
           + 'vente, marge comprise, comme un dossier devis. Le chiffrage propose désormais la colonne '
           + '« Prix vente ».</div>';
@@ -31116,12 +31151,12 @@ function imprimerDocument(vid, type){
     var remise = parseFloat(l.remise)||0;
     var mt = montantChiffrageLigne(l);
     rowsHtml += '<tr>'
-      +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:center;font-size:11px">'+(i+1)+'</td>'
-      +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+(l.piece||'')+'</td>'
-      +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:center;font-size:11px">'+qte+'</td>'
-      +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:right;font-size:11px">'+(pu?pu.toLocaleString('fr-FR', GOS_FMT0):'')+'</td>'
-      +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:right;font-size:11px">'+(remise?remise+'%':'')+'</td>'
-      +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:right;font-weight:700;font-size:11px">'+(mt?Math.round(mt).toLocaleString('fr-FR', GOS_FMT0):'')+'</td>'
+      +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:center;font-size:14px">'+(i+1)+'</td>'
+      +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:14px">'+(l.piece||'')+'</td>'
+      +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:center;font-size:14px">'+qte+'</td>'
+      +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:right;font-size:14px">'+(pu?pu.toLocaleString('fr-FR', GOS_FMT0):'')+'</td>'
+      +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:right;font-size:14px">'+(remise?remise+'%':'')+'</td>'
+      +'<td style="border:1px solid #bbb;padding:6px 10px;text-align:right;font-weight:700;font-size:14px">'+(mt?Math.round(mt).toLocaleString('fr-FR', GOS_FMT0):'')+'</td>'
       +'</tr>';
   });
 
@@ -31130,19 +31165,21 @@ function imprimerDocument(vid, type){
     +'*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}'
     +'*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}'
     +'@page{size:A4 portrait;margin:15mm}'
-    +'html,body{width:210mm;background:#fff;font-size:11px;color:#1a1a1a}'
+    +'html,body{width:210mm;background:#fff;font-size:14px;color:#1a1a1a}'
     +'body{padding:0;margin:0}'
     +'table{width:100%;border-collapse:collapse}'
     +'.page{min-height:247mm;padding:8mm 10mm;display:flex;flex-direction:column}'
     +'.content{flex:1}'
     +'@media print{'
     +'  @page{size:A4 portrait;margin:15mm 15mm 20mm 15mm}'
-    +'  html,body{width:210mm}'
+    +'  html,body{width:auto!important}'   // IMPRESSION LISIBLE : plus de reduction a 86 %
+    +'  .page{padding:0 0 4mm!important;min-height:0!important}'
+    +'  tfoot{display:table-row-group}'
     +'  .no-print{display:none!important}'
-    +'  footer{position:fixed;bottom:0;left:0;right:0;padding:6mm 15mm 4mm;border-top:2px solid #1a1a1a;text-align:center;font-size:9px;color:#555;background:#fff}'
+    +'  footer{position:fixed;bottom:0;left:0;right:0;padding:6mm 15mm 4mm;border-top:2px solid #1a1a1a;text-align:center;font-size:12px;color:#555;background:#fff}'
     +'  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'
     +'}'
-    +'footer{margin-top:auto;border-top:2px solid #1a1a1a;padding-top:8px;text-align:center;font-size:9px;color:#555}'
+    +'footer{margin-top:auto;border-top:2px solid #1a1a1a;padding-top:8px;text-align:center;font-size:12px;color:#555}'
     +'</style>'
 
     // Début page A4
@@ -31157,59 +31194,59 @@ function imprimerDocument(vid, type){
     // Titre + Numéro dossier
     +'<div style="text-align:center">'
     +'<div style="border:3px solid #1a1a1a;padding:8px 20px;display:inline-block;margin-bottom:8px">'
-    +'<span style="font-size:20px;font-weight:900;letter-spacing:1px">'+(isFacture?'FACTURE':'DEVIS')+' N° '+numDoc+'</span>'
+    +'<span style="font-size:24px;font-weight:900;letter-spacing:1px">'+(isFacture?'FACTURE':'DEVIS')+' N° '+numDoc+'</span>'
     +'</div>'
-    +'<div style="font-size:13px;font-weight:700;margin-top:4px">DOSSIER N°'+(v.id||'').slice(-6).toUpperCase()+'</div>'
+    +'<div style="font-size:16px;font-weight:700;margin-top:4px">DOSSIER N°'+(v.id||'').slice(-6).toUpperCase()+'</div>'
     +'</div></div>'
 
     // CLIENT
     +'<div style="margin-bottom:22px">'
-    +'<div style="font-size:11px;font-weight:700;margin-bottom:3px">CLIENT</div>'
+    +'<div style="font-size:14px;font-weight:700;margin-bottom:3px">CLIENT</div>'
     +'<div style="border-bottom:1.5px solid #888;padding-bottom:4px;margin-bottom:6px"></div>'
-    +'<div style="font-size:13px;font-weight:700">'+(v.client||'')+'</div>'
+    +'<div style="font-size:16px;font-weight:700">'+(v.client||'')+'</div>'
     +'</div>'
 
     // VEHICULE + date
     +'<div style="display:flex;justify-content:space-between;margin-bottom:24px">'
     +'<div>'
-    +'<div style="font-size:11px;font-weight:700;margin-bottom:3px">VEHICULE</div>'
+    +'<div style="font-size:14px;font-weight:700;margin-bottom:3px">VEHICULE</div>'
     +'<div style="border-bottom:1.5px solid #888;padding-bottom:4px;margin-bottom:8px;width:200px"></div>'
     +'<table style="border:none;width:auto">'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px;white-space:nowrap">Immatriculation :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.immat||'')+'</td></tr>'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Marque :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.marque||'')+'</td></tr>'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Modèle :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.modele||'')+'</td></tr>'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Kilométrage (Km) :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.km?v.km.toLocaleString('fr-FR', GOS_FMT0):'N/A')+'</td></tr>'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Mise en circulation :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+mec+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px;white-space:nowrap">Immatriculation :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(v.immat||'')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Marque :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(v.marque||'')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Modèle :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(v.modele||'')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Kilométrage (Km) :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(v.km?v.km.toLocaleString('fr-FR', GOS_FMT0):'N/A')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Mise en circulation :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+mec+'</td></tr>'
     +'</table>'
     +'</div>'
     +'<div style="text-align:left">'
-    +'<div style="font-size:11px;font-weight:700;margin-bottom:3px">&nbsp;</div>'
+    +'<div style="font-size:14px;font-weight:700;margin-bottom:3px">&nbsp;</div>'
     +'<div style="border-bottom:1.5px solid transparent;padding-bottom:4px;margin-bottom:8px"></div>'
-    +'<div style="font-size:11px;font-weight:700;margin-bottom:8px;text-align:right">Édité le '+dateEdit+'</div>'
+    +'<div style="font-size:14px;font-weight:700;margin-bottom:8px;text-align:right">Édité le '+dateEdit+'</div>'
     +'<table style="border:none;width:auto">'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">N° série :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.vin||'')+'</td></tr>'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Énergie :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.carburant||'').toUpperCase()+'</td></tr>'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Genre :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px"></td></tr>'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Couleur :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px"></td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">N° série :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(v.vin||'')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Énergie :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(v.carburant||'').toUpperCase()+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Genre :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px"></td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Couleur :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px"></td></tr>'
     +'</table>'
     +'</div>'
     +'</div>'
 
     // DETAILS
-    +'<div style="font-size:11px;font-weight:700;margin-bottom:6px">DETAILS</div>'
+    +'<div style="font-size:14px;font-weight:700;margin-bottom:6px">DETAILS</div>'
     +'<table style="border-collapse:collapse">'
     +'<thead><tr style="background:#e8e8e8">'
-    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;font-weight:700;text-align:center;width:60px">Ref</th>'
-    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;font-weight:700;text-align:left">Nom</th>'
-    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;font-weight:700;text-align:center;width:50px">Qte</th>'
-    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;font-weight:700;text-align:right;width:120px">Prix Unitaire</th>'
-    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;font-weight:700;text-align:right;width:80px">Remise</th>'
-    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;font-weight:700;text-align:right;width:120px">Montant TTC</th>'
+    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:14px;font-weight:700;text-align:center;width:60px">Ref</th>'
+    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:14px;font-weight:700;text-align:left">Nom</th>'
+    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:14px;font-weight:700;text-align:center;width:50px">Qte</th>'
+    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:14px;font-weight:700;text-align:right;width:120px">Prix Unitaire</th>'
+    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:14px;font-weight:700;text-align:right;width:80px">Remise</th>'
+    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:14px;font-weight:700;text-align:right;width:120px">Montant TTC</th>'
     +'</tr></thead>'
     +'<tbody>'+rowsHtml+'</tbody>'
     +'<tfoot><tr>'
     +'<td colspan="5" style="border:1px solid #1a1a1a;background:#1a1a1a;padding:8px 10px"></td>'
-    +'<td style="border:1px solid #1a1a1a;background:#1a1a1a;color:#fff;font-weight:700;font-size:14px;padding:8px 10px;text-align:right">'
+    +'<td style="border:1px solid #1a1a1a;background:#1a1a1a;color:#fff;font-weight:700;font-size:17px;padding:8px 10px;text-align:right;white-space:nowrap">'
     +(total?total.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—')+'</td>'
     +'</tr></tfoot>'
     +'</table>'
@@ -31221,17 +31258,17 @@ function imprimerDocument(vid, type){
 
     // Montant en lettres — celui du TOTAL, pas du net : c'est le montant de
     // la facture, l'acompte n'en est qu'une deduction au paiement.
-    +'<div style="margin-top:16px;font-size:11px">'
+    +'<div style="margin-top:16px;font-size:14px">'
     +'Arrêté la présente facture à la somme de : <strong>'+totalLettres+'</strong>'
     +'</div>'
 
     // Signature
     +'<div style="text-align:right;margin-top:50px;margin-right:50px">'
-    +'<div style="font-size:13px;font-weight:700;text-decoration:underline">La Direction</div>'
+    +'<div style="font-size:16px;font-weight:700;text-decoration:underline">La Direction</div>'
     +'</div>'
 
     // Numéro de page
-    +'<div style="text-align:right;font-size:9px;color:#888;margin-top:16px">1 / 1</div>'
+    +'<div style="text-align:right;font-size:12px;color:#888;margin-top:16px">1 / 1</div>'
 
     // Fermer content + page, puis footer fixe A4
     +'</div></div>'
@@ -31270,19 +31307,21 @@ function imprimerBonLivraison(vid){
     +'*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}'
     +'*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}'
     +'@page{size:A4 portrait;margin:15mm}'
-    +'html,body{width:210mm;background:#fff;font-size:11px;color:#1a1a1a}'
+    +'html,body{width:210mm;background:#fff;font-size:14px;color:#1a1a1a}'
     +'body{padding:0;margin:0}'
     +'table{width:100%;border-collapse:collapse}'
     +'.page{min-height:247mm;padding:8mm 10mm;display:flex;flex-direction:column}'
     +'.content{flex:1}'
     +'@media print{'
     +'  @page{size:A4 portrait;margin:15mm 15mm 20mm 15mm}'
-    +'  html,body{width:210mm}'
+    +'  html,body{width:auto!important}'   // IMPRESSION LISIBLE : plus de reduction a 86 %
+    +'  .page{padding:0 0 4mm!important;min-height:0!important}'
+    +'  tfoot{display:table-row-group}'
     +'  .no-print{display:none!important}'
-    +'  footer{position:fixed;bottom:0;left:0;right:0;padding:6mm 15mm 4mm;border-top:2px solid #1a1a1a;text-align:center;font-size:9px;color:#555;background:#fff}'
+    +'  footer{position:fixed;bottom:0;left:0;right:0;padding:6mm 15mm 4mm;border-top:2px solid #1a1a1a;text-align:center;font-size:12px;color:#555;background:#fff}'
     +'  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'
     +'}'
-    +'footer{margin-top:auto;border-top:2px solid #1a1a1a;padding-top:8px;text-align:center;font-size:9px;color:#555}'
+    +'footer{margin-top:auto;border-top:2px solid #1a1a1a;padding-top:8px;text-align:center;font-size:12px;color:#555}'
     +'</style>'
 
     +'<div class="page"><div class="content">'
@@ -31292,9 +31331,9 @@ function imprimerBonLivraison(vid){
     +'<img src="'+LOGO_BASE64+'" style="height:65px;width:auto;display:block" alt="Smart Services">'
     +'<div style="text-align:center;flex:1">'
     +'<div style="border:2px solid #1a1a1a;border-radius:10px;padding:8px 20px;display:inline-block">'
-    +'<span style="font-size:20px;font-weight:900;letter-spacing:1px">BON DE LIVRAISON</span>'
+    +'<span style="font-size:24px;font-weight:900;letter-spacing:1px">BON DE LIVRAISON</span>'
     +'</div>'
-    +'<div style="font-size:12px;font-weight:700;margin-top:6px">'+(v.typeClient==='forfait'?'N° '+numFacture:'Facture N° '+numFacture)+'</div>'
+    +'<div style="font-size:15px;font-weight:700;margin-top:6px">'+(v.typeClient==='forfait'?'N° '+numFacture:'Facture N° '+numFacture)+'</div>'
     +'</div>'
     +'<div style="width:65px"></div>'
     +'</div>'
@@ -31302,57 +31341,57 @@ function imprimerBonLivraison(vid){
     // CLIENT (gauche) + tampon LIVRE (droite)
     +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px">'
     +'<div>'
-    +'<div style="font-size:11px;font-weight:700;margin-bottom:3px">CLIENT</div>'
+    +'<div style="font-size:14px;font-weight:700;margin-bottom:3px">CLIENT</div>'
     +'<div style="border-bottom:1.5px solid #888;padding-bottom:4px;margin-bottom:6px;width:180px"></div>'
-    +'<div style="font-size:13px;font-weight:700">'+(v.client||'')+'</div>'
+    +'<div style="font-size:16px;font-weight:700">'+(v.client||'')+'</div>'
     +'</div>'
-    +'<div style="border:3px solid #A32D2D;color:#A32D2D;border-radius:6px;padding:8px 24px;font-size:22px;font-weight:900;letter-spacing:2px;transform:rotate(-3deg)">LIVRÉ</div>'
+    +'<div style="border:3px solid #A32D2D;color:#A32D2D;border-radius:6px;padding:8px 24px;font-size:26px;font-weight:900;letter-spacing:2px;transform:rotate(-3deg)">LIVRÉ</div>'
     +'</div>'
 
-    +'<div style="text-align:right;font-size:11px;font-weight:700;margin-bottom:16px">Édité le '+dateEdit+'</div>'
+    +'<div style="text-align:right;font-size:14px;font-weight:700;margin-bottom:16px">Édité le '+dateEdit+'</div>'
 
     // VEHICULE + Date/Technicien/N°serie/Energie/Genre/Couleur
     +'<div style="display:flex;justify-content:space-between;margin-bottom:24px">'
     +'<div>'
-    +'<div style="font-size:11px;font-weight:700;margin-bottom:3px">VEHICULE</div>'
+    +'<div style="font-size:14px;font-weight:700;margin-bottom:3px">VEHICULE</div>'
     +'<div style="border-bottom:1.5px solid #888;padding-bottom:4px;margin-bottom:8px;width:200px"></div>'
     +'<table style="border:none;width:auto">'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px;white-space:nowrap">Immatriculation :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.immat||'')+'</td></tr>'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Marque :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.marque||'')+'</td></tr>'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Modèle :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.modele||'')+'</td></tr>'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Kilométrage (Km) :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.km?v.km.toLocaleString('fr-FR', GOS_FMT0):'N/A')+'</td></tr>'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Mise en circulation :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+mec+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px;white-space:nowrap">Immatriculation :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(v.immat||'')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Marque :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(v.marque||'')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Modèle :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(v.modele||'')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Kilométrage (Km) :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(v.km?v.km.toLocaleString('fr-FR', GOS_FMT0):'N/A')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Mise en circulation :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+mec+'</td></tr>'
     +'</table>'
     +'</div>'
     +'<div style="text-align:left">'
     +'<table style="border:none;width:auto">'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Date :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+dateLivraison.toLocaleDateString('fr-FR')+'</td><td style="border:none;padding:2px 0 2px 16px;color:#555;font-size:11px">Heure :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+dateLivraison.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+'</td></tr>'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Technicien :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.technicien||'N/A')+'</td></tr>'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">N° série :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.vin||'')+'</td></tr>'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Énergie :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:11px">'+(v.carburant||'').toUpperCase()+'</td></tr>'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Genre :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:11px"></td></tr>'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:11px">Couleur :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:11px"></td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Date :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+dateLivraison.toLocaleDateString('fr-FR')+'</td><td style="border:none;padding:2px 0 2px 16px;color:#555;font-size:14px">Heure :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+dateLivraison.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Technicien :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(v.technicien||'N/A')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">N° série :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(v.vin||'')+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Énergie :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(v.carburant||'').toUpperCase()+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Genre :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:14px"></td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Couleur :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:14px"></td></tr>'
     +'</table>'
     +'</div>'
     +'</div>'
 
     // Texte de livraison
-    +'<div style="font-size:12px;margin-bottom:6px;line-height:1.5">'
+    +'<div style="font-size:15px;margin-bottom:6px;line-height:1.5">'
     +'Le garage SMART a livré le véhicule <strong>'+(v.marque||'')+'</strong> immatriculé <strong>'+(v.immat||'')+'</strong> le <strong>'+dateLivraison.toLocaleDateString('fr-FR')+'</strong> dans ses locaux après avoir effectués ces travaux.'
     +'</div>'
-    +'<div style="font-size:11px;font-style:italic;margin-bottom:20px">(Se référer à la facture en annexe.)</div>'
+    +'<div style="font-size:14px;font-style:italic;margin-bottom:20px">(Se référer à la facture en annexe.)</div>'
 
     // TRAVAUX REALISES
-    +'<div style="border:1.5px solid #1a1a1a;border-radius:6px;padding:8px 14px;text-align:center;font-weight:700;font-size:12px;margin-bottom:12px">TRAVAUX RÉALISÉS</div>'
-    +'<div style="font-size:11px;margin-bottom:60px">'+travauxHtml+'</div>'
+    +'<div style="border:1.5px solid #1a1a1a;border-radius:6px;padding:8px 14px;text-align:center;font-weight:700;font-size:15px;margin-bottom:12px">TRAVAUX RÉALISÉS</div>'
+    +'<div style="font-size:14px;margin-bottom:60px">'+travauxHtml+'</div>'
 
     // Signatures Client / Garage cote a cote
     +'<div style="display:flex;justify-content:space-between;margin-top:auto">'
-    +'<div style="font-size:13px;font-weight:700;text-decoration:underline">CLIENT</div>'
-    +'<div style="font-size:13px;font-weight:700;text-decoration:underline">LE GARAGE AUTO</div>'
+    +'<div style="font-size:16px;font-weight:700;text-decoration:underline">CLIENT</div>'
+    +'<div style="font-size:16px;font-weight:700;text-decoration:underline">LE GARAGE AUTO</div>'
     +'</div>'
 
-    +'<div style="text-align:right;font-size:9px;color:#888;margin-top:16px">1 / 1</div>'
+    +'<div style="text-align:right;font-size:12px;color:#888;margin-top:16px">1 / 1</div>'
 
     +'</div></div>'
     +'<footer>CI -ABJ-2007-A6390 — 2345 ABJ 01 — 27 22 43 63 55 — 07 07 73 90 73</footer>';
@@ -31396,12 +31435,12 @@ function imprimerFactureForfait(periodeKey){
 
   var rowsHtml = '';
   if(!lignesParVehicule.length){
-    rowsHtml = '<tr><td colspan="2" style="border:1px solid #bbb;padding:10px;text-align:center;color:#888;font-size:11px">Aucune piece enregistree pour ce mois.</td></tr>';
+    rowsHtml = '<tr><td colspan="2" style="border:1px solid #bbb;padding:10px;text-align:center;color:#888;font-size:14px">Aucune piece enregistree pour ce mois.</td></tr>';
   } else {
     lignesParVehicule.forEach(function(lv){
       rowsHtml += '<tr>'
-        +'<td style="border:1px solid #bbb;padding:6px 10px;font-weight:700;font-size:11px;vertical-align:top;white-space:nowrap">'+lv.immat+'<br><span style="font-weight:400;color:#555">'+(lv.marque||'')+' '+(lv.modele||'')+'</span></td>'
-        +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:11px">'+lv.pieces.map(function(p){return '&bull; '+p;}).join('<br>')+'</td>'
+        +'<td style="border:1px solid #bbb;padding:6px 10px;font-weight:700;font-size:14px;vertical-align:top;white-space:nowrap">'+lv.immat+'<br><span style="font-weight:400;color:#555">'+(lv.marque||'')+' '+(lv.modele||'')+'</span></td>'
+        +'<td style="border:1px solid #bbb;padding:6px 10px;font-size:14px">'+lv.pieces.map(function(p){return '&bull; '+p;}).join('<br>')+'</td>'
         +'</tr>';
     });
   }
@@ -31411,19 +31450,21 @@ function imprimerFactureForfait(periodeKey){
     +'*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}'
     +'*{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}'
     +'@page{size:A4 portrait;margin:15mm}'
-    +'html,body{width:210mm;background:#fff;font-size:11px;color:#1a1a1a}'
+    +'html,body{width:210mm;background:#fff;font-size:14px;color:#1a1a1a}'
     +'body{padding:0;margin:0}'
     +'table{width:100%;border-collapse:collapse}'
     +'.page{min-height:247mm;padding:8mm 10mm;display:flex;flex-direction:column}'
     +'.content{flex:1}'
     +'@media print{'
     +'  @page{size:A4 portrait;margin:15mm 15mm 20mm 15mm}'
-    +'  html,body{width:210mm}'
+    +'  html,body{width:auto!important}'   // IMPRESSION LISIBLE : plus de reduction a 86 %
+    +'  .page{padding:0 0 4mm!important;min-height:0!important}'
+    +'  tfoot{display:table-row-group}'
     +'  .no-print{display:none!important}'
-    +'  footer{position:fixed;bottom:0;left:0;right:0;padding:6mm 15mm 4mm;border-top:2px solid #1a1a1a;text-align:center;font-size:9px;color:#555;background:#fff}'
+    +'  footer{position:fixed;bottom:0;left:0;right:0;padding:6mm 15mm 4mm;border-top:2px solid #1a1a1a;text-align:center;font-size:12px;color:#555;background:#fff}'
     +'  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'
     +'}'
-    +'footer{margin-top:auto;border-top:2px solid #1a1a1a;padding-top:8px;text-align:center;font-size:9px;color:#555}'
+    +'footer{margin-top:auto;border-top:2px solid #1a1a1a;padding-top:8px;text-align:center;font-size:12px;color:#555}'
     +'</style>'
 
     +'<div class="page"><div class="content">'
@@ -31432,37 +31473,37 @@ function imprimerFactureForfait(periodeKey){
     +'<img src="'+LOGO_BASE64+'" style="height:65px;width:auto;display:block" alt="Smart Services">'
     +'<div style="text-align:center">'
     +'<div style="border:3px solid #1a1a1a;padding:8px 20px;display:inline-block;margin-bottom:8px">'
-    +'<span style="font-size:20px;font-weight:900;letter-spacing:1px">FACTURE FORFAIT N&deg; '+numDoc+'</span>'
+    +'<span style="font-size:24px;font-weight:900;letter-spacing:1px">FACTURE FORFAIT N&deg; '+numDoc+'</span>'
     +'</div>'
     +'</div></div>'
 
     +'<div style="margin-bottom:22px">'
-    +'<div style="font-size:11px;font-weight:700;margin-bottom:3px">CLIENT</div>'
+    +'<div style="font-size:14px;font-weight:700;margin-bottom:3px">CLIENT</div>'
     +'<div style="border-bottom:1.5px solid #888;padding-bottom:4px;margin-bottom:6px"></div>'
-    +'<div style="font-size:13px;font-weight:700">'+(client||'')+'</div>'
+    +'<div style="font-size:16px;font-weight:700">'+(client||'')+'</div>'
     +'</div>'
 
     +'<div style="display:flex;justify-content:space-between;margin-bottom:24px">'
-    +'<div style="font-size:13px;font-weight:700">Forfait mensuel — '+moisNom+' '+annee+'</div>'
-    +'<div style="font-size:11px;font-weight:700">Edite le '+dateEdit+'</div>'
+    +'<div style="font-size:16px;font-weight:700">Forfait mensuel — '+moisNom+' '+annee+'</div>'
+    +'<div style="font-size:14px;font-weight:700">Edite le '+dateEdit+'</div>'
     +'</div>'
 
-    +'<div style="font-size:11px;font-weight:700;margin-bottom:6px">PIECES REMPLACEES CE MOIS (par vehicule)</div>'
+    +'<div style="font-size:14px;font-weight:700;margin-bottom:6px">PIECES REMPLACEES CE MOIS (par vehicule)</div>'
     +'<table style="border-collapse:collapse">'
     +'<thead><tr style="background:#e8e8e8">'
-    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;font-weight:700;text-align:left;width:160px">Vehicule</th>'
-    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:11px;font-weight:700;text-align:left">Pieces</th>'
+    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:14px;font-weight:700;text-align:left;width:160px">Vehicule</th>'
+    +'<th style="border:1px solid #bbb;padding:7px 10px;font-size:14px;font-weight:700;text-align:left">Pieces</th>'
     +'</tr></thead>'
     +'<tbody>'+rowsHtml+'</tbody>'
     +'</table>'
 
     +'<div style="margin-top:24px;padding:14px 16px;background:#1a1a1a;color:#fff;display:flex;justify-content:space-between;align-items:center">'
-    +'<span style="font-size:13px;font-weight:700">Forfait mensuel '+moisNom+' '+annee+'</span>'
-    +'<span style="font-size:16px;font-weight:900">'+(montant?montant.toLocaleString('fr-FR', GOS_FMT0):'0')+' FCFA</span>'
+    +'<span style="font-size:16px;font-weight:700">Forfait mensuel '+moisNom+' '+annee+'</span>'
+    +'<span style="font-size:19px;font-weight:900">'+(montant?montant.toLocaleString('fr-FR', GOS_FMT0):'0')+' FCFA</span>'
     +'</div>'
 
     +'<div style="text-align:right;margin-top:50px;margin-right:50px">'
-    +'<div style="font-size:13px;font-weight:700;text-decoration:underline">La Direction</div>'
+    +'<div style="font-size:16px;font-weight:700;text-decoration:underline">La Direction</div>'
     +'</div>'
 
     +'</div></div>'
@@ -31485,7 +31526,7 @@ function imprimerFactureForfait(periodeKey){
   document.body.removeChild(a);
   setTimeout(function(){ URL.revokeObjectURL(a.href); }, 2000);
   var msg = document.createElement('div');
-  msg.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1a1a;color:#fff;padding:10px 18px;border-radius:8px;font-size:12px;z-index:99999;text-align:center';
+  msg.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1a1a;color:#fff;padding:10px 18px;border-radius:8px;font-size:15px;z-index:99999;text-align:center';
   msg.innerHTML = '<strong>Fichier telecharge !</strong><br>Ouvrez-le &rarr; Imprimer &rarr; Enregistrer en PDF';
   document.body.appendChild(msg);
   setTimeout(function(){ msg.style.opacity='0'; msg.style.transition='opacity 0.5s'; setTimeout(function(){ if(msg.parentNode)msg.parentNode.removeChild(msg); },600); },4000);
