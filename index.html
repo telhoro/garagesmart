@@ -5816,7 +5816,7 @@ function uneModaleEstOuverte(){
     'modalModifStock','modalMoveTech','modalNumerosFacture','modalPaiement','modalPaiementChargeFixe',
     'modalPaiementFournisseur','modalRapport','modalRec','modalRepriseChef','modalRepriseTest',
     'modalStatutFacturesClient','modalSuppression','modalSuppressionEmiseForfait','modalTech','modalPaiementEcheance',
-    'modalPiecesACommander','modalNouvelleCS','modalCommandesSpeciales','modalCorrectionStatut','modalForfaitTKM'
+    'modalPiecesACommander','modalNouvelleCS','modalCommandesSpeciales','modalCorrectionStatut','modalForfaitTKM','modalCoffre'
   ];
   for(var i=0;i<modals.length;i++){
     var el = document.getElementById(modals[i]);
@@ -30359,6 +30359,24 @@ function _groupesLignesPdf(body, table, thead, lignes, footer){
   return groupes.filter(function(g){ return g.length; });
 }
 
+// NUMEROS DE PAGE : chaque page du PDF porte exactement un pied de page (voir _paginerPourPdf) ;
+// le numero « page / total » s'ecrit a sa droite, sans changer sa hauteur.
+function _numeroterPagesPdf(doc){
+  var pieds = doc.body.querySelectorAll('footer');
+  var n = pieds.length;
+  Array.prototype.forEach.call(pieds, function(f, i){
+    f.style.position = 'relative';
+    var num = doc.createElement('span');
+    num.textContent = (i + 1) + ' / ' + n;
+    // aligne sur le bord droit du tableau (le dernier pied de page est plus large que le contenu)
+    var bordDroit = 0, droite = 0;
+    Array.prototype.forEach.call(doc.body.querySelectorAll('table'), function(t){ bordDroit = Math.max(bordDroit, t.getBoundingClientRect().right); });
+    if(bordDroit > 0) droite = Math.max(0, f.getBoundingClientRect().right - bordDroit);
+    num.style.cssText = 'position:absolute;right:' + droite + 'px;top:' + (parseFloat(getComputedStyle(f).paddingTop) || 0) + 'px;font-size:12px;color:#555';
+    f.appendChild(num);
+  });
+}
+
 function _paginerPourPdf(doc, body){
   // IMPRESSION LISIBLE : le decoupage se calcule sur la hauteur REELLE des lignes (texte agrandi,
   // designations sur deux lignes...) et non plus sur un nombre fixe de 25 lignes par page.
@@ -30539,6 +30557,7 @@ function exporterPDF(){
   // rendu), et AVANT le calcul de scrollWidth/scrollHeight ci-dessous
   // (la pagination modifie la hauteur totale du document).
   _paginerPourPdf(doc, doc.body);
+  _numeroterPagesPdf(doc);   // NUMEROS DE PAGE
 
   afficherToastNotif('Generation du PDF...', 'Le telechargement demarre dans quelques secondes.', 'info');
 
@@ -31237,12 +31256,12 @@ function imprimerDocument(vid, type){
     +'.page{min-height:247mm;padding:8mm 10mm;display:flex;flex-direction:column}'
     +'.content{flex:1}'
     +'@media print{'
-    +'  @page{size:A4 portrait;margin:15mm 15mm 20mm 15mm}'
+    +'  @page{size:A4 portrait;margin:15mm 15mm 20mm 15mm;@bottom-left{content:"";border-top:2px solid #1a1a1a;vertical-align:top;margin-top:3mm}@bottom-center{content:"CI -ABJ-2007-A6390 — 2345 ABJ 01 — 27 22 43 63 55 — 07 07 73 90 73";border-top:2px solid #1a1a1a;vertical-align:top;padding-top:2mm;margin-top:3mm;font-family:Arial,Helvetica,sans-serif;font-size:9pt;color:#555;white-space:nowrap}@bottom-right{content:counter(page) " / " counter(pages);border-top:2px solid #1a1a1a;vertical-align:top;text-align:right;padding-top:2mm;margin-top:3mm;font-family:Arial,Helvetica,sans-serif;font-size:9pt;color:#555}}'   // NUMEROS DE PAGE : pied + numero dans la marge
     +'  html,body{width:auto!important}'   // IMPRESSION LISIBLE : plus de reduction a 86 %
     +'  .page{padding:0 0 4mm!important;min-height:0!important}'
     +'  tfoot{display:table-row-group}'
     +'  .no-print{display:none!important}'
-    +'  footer{position:fixed;bottom:0;left:0;right:0;padding:6mm 15mm 4mm;border-top:2px solid #1a1a1a;text-align:center;font-size:12px;color:#555;background:#fff}'
+    +'  footer{display:none!important}'   // NUMEROS DE PAGE : remplace par la marge du bas (@page)
     +'  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'
     +'}'
     +'footer{margin-top:auto;border-top:2px solid #1a1a1a;padding-top:8px;text-align:center;font-size:12px;color:#555}'
@@ -31334,7 +31353,6 @@ function imprimerDocument(vid, type){
     +'</div>'
 
     // Numéro de page
-    +'<div style="text-align:right;font-size:12px;color:#888;margin-top:16px">1 / 1</div>'
 
     // Fermer content + page, puis footer fixe A4
     +'</div></div>'
@@ -31385,12 +31403,12 @@ function imprimerBonLivraison(vid){
     +'.page{min-height:247mm;padding:8mm 10mm;display:flex;flex-direction:column}'
     +'.content{flex:1}'
     +'@media print{'
-    +'  @page{size:A4 portrait;margin:15mm 15mm 20mm 15mm}'
+    +'  @page{size:A4 portrait;margin:15mm 15mm 20mm 15mm;@bottom-left{content:"";border-top:2px solid #1a1a1a;vertical-align:top;margin-top:3mm}@bottom-center{content:"CI -ABJ-2007-A6390 — 2345 ABJ 01 — 27 22 43 63 55 — 07 07 73 90 73";border-top:2px solid #1a1a1a;vertical-align:top;padding-top:2mm;margin-top:3mm;font-family:Arial,Helvetica,sans-serif;font-size:9pt;color:#555;white-space:nowrap}@bottom-right{content:counter(page) " / " counter(pages);border-top:2px solid #1a1a1a;vertical-align:top;text-align:right;padding-top:2mm;margin-top:3mm;font-family:Arial,Helvetica,sans-serif;font-size:9pt;color:#555}}'   // NUMEROS DE PAGE : pied + numero dans la marge
     +'  html,body{width:auto!important}'   // IMPRESSION LISIBLE : plus de reduction a 86 %
     +'  .page{padding:0 0 4mm!important;min-height:0!important}'
     +'  tfoot{display:table-row-group}'
     +'  .no-print{display:none!important}'
-    +'  footer{position:fixed;bottom:0;left:0;right:0;padding:6mm 15mm 4mm;border-top:2px solid #1a1a1a;text-align:center;font-size:12px;color:#555;background:#fff}'
+    +'  footer{display:none!important}'   // NUMEROS DE PAGE : remplace par la marge du bas (@page)
     +'  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'
     +'}'
     +'footer{margin-top:auto;border-top:2px solid #1a1a1a;padding-top:8px;text-align:center;font-size:12px;color:#555}'
@@ -31467,7 +31485,6 @@ function imprimerBonLivraison(vid){
     +'<div style="font-size:16px;font-weight:700;text-decoration:underline">LE GARAGE SMART</div>'
     +'</div></div>'
 
-    +'<div style="text-align:right;font-size:12px;color:#888;margin-top:16px">1 / 1</div>'
 
     +'</div></div>'
     +'<footer>CI -ABJ-2007-A6390 — 2345 ABJ 01 — 27 22 43 63 55 — 07 07 73 90 73</footer>';
@@ -31532,12 +31549,12 @@ function imprimerFactureForfait(periodeKey){
     +'.page{min-height:247mm;padding:8mm 10mm;display:flex;flex-direction:column}'
     +'.content{flex:1}'
     +'@media print{'
-    +'  @page{size:A4 portrait;margin:15mm 15mm 20mm 15mm}'
+    +'  @page{size:A4 portrait;margin:15mm 15mm 20mm 15mm;@bottom-left{content:"";border-top:2px solid #1a1a1a;vertical-align:top;margin-top:3mm}@bottom-center{content:"CI -ABJ-2007-A6390 — 2345 ABJ 01 — 27 22 43 63 55 — 07 07 73 90 73";border-top:2px solid #1a1a1a;vertical-align:top;padding-top:2mm;margin-top:3mm;font-family:Arial,Helvetica,sans-serif;font-size:9pt;color:#555;white-space:nowrap}@bottom-right{content:counter(page) " / " counter(pages);border-top:2px solid #1a1a1a;vertical-align:top;text-align:right;padding-top:2mm;margin-top:3mm;font-family:Arial,Helvetica,sans-serif;font-size:9pt;color:#555}}'   // NUMEROS DE PAGE : pied + numero dans la marge
     +'  html,body{width:auto!important}'   // IMPRESSION LISIBLE : plus de reduction a 86 %
     +'  .page{padding:0 0 4mm!important;min-height:0!important}'
     +'  tfoot{display:table-row-group}'
     +'  .no-print{display:none!important}'
-    +'  footer{position:fixed;bottom:0;left:0;right:0;padding:6mm 15mm 4mm;border-top:2px solid #1a1a1a;text-align:center;font-size:12px;color:#555;background:#fff}'
+    +'  footer{display:none!important}'   // NUMEROS DE PAGE : remplace par la marge du bas (@page)
     +'  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'
     +'}'
     +'footer{margin-top:auto;border-top:2px solid #1a1a1a;padding-top:8px;text-align:center;font-size:12px;color:#555}'
@@ -35486,7 +35503,8 @@ function pageCaisseJour(){
 }
 
 function pageAccesClients(){
-  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+  var html = GOS_COFFRE.bandeau();   // COFFRE MDP
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Acces clients — Portail distant</h2>';
   html += '<button class="btn btn-primary btn-sm" onclick="ouvrirCreationCompteClient()">+ Nouveau compte</button>';
   html += '</div>';
@@ -35500,7 +35518,7 @@ function pageAccesClients(){
   }
 
   html += '<div class="card"><div class="tw"><table><thead><tr>';
-  html += '<th>Client</th><th>Departement</th><th>Contact</th><th>Email</th><th>Cree le</th><th></th>';
+  html += '<th>Client</th><th>Departement</th><th>Contact</th><th>Email</th><th>Cree le</th><th>Mot de passe</th><th></th>';
   html += '</tr></thead><tbody>';
   uids.forEach(function(uid){
     var c = CLIENT_ACCOUNTS[uid];
@@ -35510,6 +35528,7 @@ function pageAccesClients(){
     html += '<td class="xs">'+(c.nomContact||'—')+'</td>';
     html += '<td class="xs" style="font-family:monospace">'+(c.email||'—')+'</td>';
     html += '<td class="xs muted">'+(c.creeLe ? new Date(c.creeLe).toLocaleDateString('fr-FR') : '—')+'</td>';
+    html += '<td>'+GOS_COFFRE.cellule(uid, 'client', c.email || '')+'</td>';   // COFFRE MDP
     html += '<td><button class="btn btn-sm" style="color:#A32D2D;border-color:#E0A0A0" data-uid="'+uid+'" onclick="supprimerCompteClientByEl(this)">&#x1F5D1;</button></td>';
     html += '</tr>';
   });
@@ -35618,10 +35637,13 @@ function creerCompteClient(){
         creeLe: Date.now()
       };
       saveClientAccount(uid, data);
-      // Deconnecter immediatement l'instance secondaire (le compte cree
-      // reste actif dans Firebase Auth, seule cette session temporaire
-      // de creation est fermee) — n'affecte jamais la session Direction.
-      return authSecondaire.signOut();
+      // COFFRE MDP : le mot de passe choisi par la Direction est depose chiffre dans le coffre
+      return GOS_COFFRE.enregistrer(uid, password, 'client').catch(function(){ return null; }).then(function(){
+        // Deconnecter immediatement l'instance secondaire (le compte cree
+        // reste actif dans Firebase Auth, seule cette session temporaire
+        // de creation est fermee) — n'affecte jamais la session Direction.
+        return authSecondaire.signOut();
+      });
     })
     .then(function(){
       document.getElementById('modalCreationCompteClient').style.display = 'none';
@@ -35646,6 +35668,7 @@ function supprimerCompteClientByEl(btn){
   var nom = c ? c.clientNom : uid;
   if(!confirm('Supprimer l\'acces client de "'+nom+'" ?\n\nAttention : ceci retire uniquement le profil GarageOS associe. Le compte de connexion (email/mot de passe) devra etre supprime separement depuis la console Firebase si vous voulez qu\'il ne puisse plus jamais se connecter.')) return;
   deleteClientAccountData(uid);
+  GOS_COFFRE.supprimer(uid);   // COFFRE MDP
   renderPage();
 }
 
@@ -37786,7 +37809,7 @@ var GOS_IGNORES_ONCLICK = /^(if|event\.\w+|this\.\w+|document\.\w+|window\.\w+|r
 var GOS_LIBELLES_ECRITURE = /^[\s -⯿\uD800-\uDFFF]*(enregistrer|valider|supprimer|ajouter|cr[eé]er|confirmer|r[eé]server|encaisser|payer|facturer|cl[oô]turer|commander|r[eé]ceptionner|sauvegarder|appliquer|affecter|d[eé]marrer|terminer|livrer|pointer|importer|restaurer|envoyer|archiver)/i;
 function gosEstBoutonEcriture(el){
   if(!el || el.id === 'gosPastilleConnexion') return false;
-  if(el.closest && (el.closest('#loginScreen') || el.closest('#gosModaleConflits'))) return false;
+  if(el.closest && (el.closest('#loginScreen') || el.closest('#gosModaleConflits') || el.closest('#gosChangementMdp'))) return false;   // COFFRE MDP : correctif premiere connexion
   var oc = el.getAttribute && el.getAttribute('onclick');
   if(oc){
     var noms = oc.match(/[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?=\s*\()/g) || [];
@@ -38183,7 +38206,8 @@ function gosEchecStock(op, r){
 //      * adresse e-mail reelle (Direction, administration, achats, accueil) ;
 //      * identifiant simple (techniciens) -> identifiant@<domaine B2>, domaine
 //        fourni par la configuration (vrai domaine a renseigner avant la production).
-//  - Le mot de passe n'est ni stocke ni affiche dans GarageOS.
+//  - Mots de passe : conserves uniquement CHIFFRES dans le coffre (GOS_COFFRE), lisibles par la
+//    Direction seule apres saisie de la phrase secrete (decision Direction du 23/10/2026).
 //  - Les droits viennent de gos_staff/{uid} (role, actif), imposes par les regles.
 //  - Internet est obligatoire pour se connecter ; une session ouverte permet
 //    ensuite de travailler hors ligne.
@@ -38355,6 +38379,9 @@ var GOS_AUTH = (function(){
         user.updatePassword(a).then(function(){
           return fbDb.ref('gos_staff/' + user.uid + '/doitChangerMdp').set(false);
         }).then(function(){
+          // COFFRE MDP : depot chiffre du nouveau mot de passe (un echec ne bloque pas la connexion)
+          return GOS_COFFRE.enregistrer(user.uid, a, 'personnel', user.uid).catch(function(){ return null; });
+        }).then(function(){
           o.remove(); p.doitChangerMdp = false; ecrireCache({uid: user.uid, profil: p}); ouvrirSession(user.uid, p, 'serveur');
         }).catch(function(e){ err.textContent = 'Echec : ' + (e && e.code ? e.code : e); document.getElementById('gosMdpOk').disabled = false; });
       };
@@ -38508,12 +38535,13 @@ var GOS_PERSONNEL = (function(){
     demarrerEcoute();
     var h = '<div class="card" style="margin-bottom:16px"><div class="card-head"><strong>Comptes du personnel (connexion Firebase)</strong></div><div class="card-body" style="padding:12px">';
     if(GOS_AUTH.mode !== 'firebase'){ return h + '<div class="xs muted">Connectez-vous avec votre compte Firebase personnel pour gerer les comptes.</div></div></div>'; }
-    h += '<table class="tbl" style="width:100%;font-size:12px"><thead><tr><th>Nom</th><th>Connexion</th><th>Role</th><th>Etat</th><th>Derniere connexion</th><th></th></tr></thead><tbody>';
+    h += '<table class="tbl" style="width:100%;font-size:12px"><thead><tr><th>Nom</th><th>Connexion</th><th>Role</th><th>Etat</th><th>Derniere connexion</th><th>Mot de passe</th><th></th></tr></thead><tbody>';
     Object.keys(liste).sort(function(a, b){ return String(liste[a].nom).localeCompare(String(liste[b].nom)); }).forEach(function(uid){
       var p = liste[uid] || {};
       h += '<tr><td>' + esc(p.nom) + '</td><td>' + esc(p.typeCompte === 'identifiant' ? p.login : p.email) + '</td><td>' + esc(p.role) + '</td>'
         + '<td>' + (p.actif ? (p.doitChangerMdp ? 'actif (mot de passe a changer)' : 'actif') : '<span style="color:#A32D2D">desactive</span>') + '</td>'
-        + '<td>' + (p.derniereConnexion ? new Date(p.derniereConnexion).toLocaleString('fr-FR', GOS_FMT0) : 'jamais') + '</td><td>'
+        + '<td>' + (p.derniereConnexion ? new Date(p.derniereConnexion).toLocaleString('fr-FR', GOS_FMT0) : 'jamais') + '</td>'
+        + '<td>' + GOS_COFFRE.cellule(uid, 'personnel', p.typeCompte === 'identifiant' ? (p.login ? GOS_AUTH.versAdresse(p.login) : '') : (p.email || '')) + '</td><td>'
         + (uid === GOS_AUTH.uid ? '<span class="xs muted">vous</span>' : (p.actif ? '<button class="btn btn-sm" onclick="GOS_PERSONNEL.changerEtat(\'' + uid + '\', false)">Desactiver</button>'
                                                                             : '<button class="btn btn-sm" onclick="GOS_PERSONNEL.changerEtat(\'' + uid + '\', true)">Reactiver</button>'))
         + '</td></tr>';
@@ -38528,7 +38556,7 @@ var GOS_PERSONNEL = (function(){
       + '<div><label class="fl">Equipe (optionnel)</label><input class="fi" id="pEquipe"></div>'
       + '<div><label class="fl">Mot de passe provisoire (identifiant uniquement, 10 caracteres min.)</label><input class="fi" id="pProvisoire" type="password" autocomplete="new-password"></div>'
       + '</div><div id="pMsg" class="xs" style="margin:8px 0;color:#A32D2D"></div><button class="btn btn-primary btn-sm" id="pCreer" onclick="GOS_PERSONNEL.creer()">Creer le compte</button>'
-      + '<div class="xs muted" style="margin-top:6px">Adresse e-mail : l\'employe recoit un lien pour choisir son mot de passe. Identifiant : remettez le mot de passe provisoire en main propre ; il devra le changer a la premiere connexion. Aucun mot de passe n\'est conserve par GarageOS.</div></div>';
+      + '<div class="xs muted" style="margin-top:6px">Adresse e-mail : l\'employe recoit un lien pour choisir son mot de passe. Identifiant : remettez le mot de passe provisoire en main propre ; il devra le changer a la premiere connexion. Les mots de passe connus de GarageOS sont conserves chiffres dans le coffre (visibles par la Direction seulement).</div></div>';
     return h + '</div></div>';
   }
   function msg(t, ok){ var el = document.getElementById('pMsg'); if(el){ el.style.color = ok ? '#3B6D11' : '#A32D2D'; el.textContent = t; } }
@@ -38559,9 +38587,14 @@ var GOS_PERSONNEL = (function(){
       if(equipe) p.equipe = equipe;
       return fbDb.ref('gos_staff/' + uid).set(p);
     }).then(function(){
+      // COFFRE MDP : le mot de passe provisoire est depose chiffre dans le coffre
+      if(type !== 'identifiant') return null;
+      return GOS_COFFRE.enregistrer(uid, prov, 'personnel').catch(function(){ return {ok: false}; });
+    }).then(function(depot){
       try{ auth2.signOut(); }catch(e){}
       document.getElementById('pProvisoire').value = '';
-      msg(type === 'email' ? 'Compte cree. Un lien pour choisir le mot de passe a ete envoye a ' + email + '.' : 'Compte cree. Remettez le mot de passe provisoire en main propre.', true);
+      msg(type === 'email' ? 'Compte cree. Un lien pour choisir le mot de passe a ete envoye a ' + email + '.'
+        : 'Compte cree. Remettez le mot de passe provisoire en main propre.' + (depot && depot.ok ? ' Il est conserve dans le coffre.' : ' (Non conserve dans le coffre : coffre absent ou injoignable.)'), true);
       btn.disabled = false;
     }).catch(function(e){
       try{ auth2.signOut(); }catch(x){}
@@ -38601,7 +38634,259 @@ var GOS_M1_OUTIL = {
     fbDb.ref('gos_config/m1').set({etat: 'actif', le: firebase.database.ServerValue.TIMESTAMP, par: GOS_AUTH.uid}).then(function(){ renderPage(); });
   }
 };
-function pageComptes(){ return GOS_M1_OUTIL.html() + GOS_PERSONNEL.html() + pageComptesAncien(); }
+// ══════════════════════════════════════════════════════════════════════════
+// COFFRE MDP (23/10/2026) : coffre chiffre des mots de passe (personnel + clients)
+// Decision Direction du 23/10/2026 : les mots de passe peuvent etre affiches dans
+// GarageOS, a condition d'etre chiffres et lisibles uniquement par la Direction.
+//  - Une paire de cles RSA-OAEP (2048 bits) est creee dans le navigateur.
+//  - Cle publique (gos_coffre/cle_publique) : sert a CHIFFRER ; tout compte actif
+//    peut la lire (l'employe qui change son mot de passe le depose lui-meme).
+//  - Cle privee (gos_coffre/cle_privee) : sert a DECHIFFRER ; elle n'est stockee que
+//    chiffree par la phrase secrete de la Direction (PBKDF2-SHA256 600 000 tours +
+//    AES-GCM 256). La phrase n'est jamais enregistree ni envoyee.
+//  - Mots de passe (gos_coffre/mdp/{uid}) : uniquement chiffres ; lecture reservee
+//    a la Direction par les regles Firebase. Une fuite de la base ne revele rien
+//    sans la phrase secrete.
+//  - Phrase oubliee = coffre perdu : il faut le recreer et re-enregistrer les mots
+//    de passe (aucune porte derobee).
+//  - Deverrouillage en memoire seulement, 15 minutes, ou jusqu'au rechargement.
+// ══════════════════════════════════════════════════════════════════════════
+var GOS_COFFRE = (function(){
+  var ITERATIONS = 600000, DUREE_OUVERTURE = 15 * 60 * 1000, DUREE_AFFICHAGE = 30000;
+  var config = null, configChargee = false, entrees = {}, ecoute = false;
+  var clePrivee = null, finOuverture = 0, minuterie = null, clairs = {};
+
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function versB64(buf){ var b = new Uint8Array(buf), s = ''; for(var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s); }
+  function depuisB64(t){ var s = atob(t), b = new Uint8Array(s.length); for(var i = 0; i < s.length; i++) b[i] = s.charCodeAt(i); return b; }
+  function octets(t){ return new TextEncoder().encode(t); }
+  function texte(buf){ return new TextDecoder().decode(buf); }
+  function cryptoOk(){ return !!(window.crypto && crypto.subtle && window.TextEncoder); }
+  function estDirection(){ return typeof currentRole !== 'undefined' && currentRole === 'direction' && typeof GOS_AUTH !== 'undefined' && GOS_AUTH.mode === 'firebase'; }
+  function ouvert(){ return !!clePrivee && Date.now() < finOuverture; }
+  function existe(){ return !!(config && config.jwk); }
+
+  function rafraichir(){
+    if(typeof currentPage === 'undefined' || (currentPage !== 'comptes' && currentPage !== 'acces_clients')) return;
+    if(typeof uneModaleEstOuverte === 'function' && uneModaleEstOuverte()) return;
+    if(typeof renderPage === 'function') renderPage();
+  }
+  function demarrerEcoute(){
+    if(ecoute || !estDirection() || typeof fbDb === 'undefined' || !fbDb) return;
+    ecoute = true;
+    fbDb.ref('gos_coffre/cle_publique').on('value', function(s){ config = s.val(); configChargee = true; rafraichir(); }, function(){ ecoute = false; });
+    fbDb.ref('gos_coffre/mdp').on('value', function(s){ entrees = s.val() || {}; rafraichir(); }, function(){});
+  }
+
+  function deriver(phrase, sel, iterations){
+    return crypto.subtle.importKey('raw', octets(phrase), 'PBKDF2', false, ['deriveKey']).then(function(base){
+      return crypto.subtle.deriveKey({name: 'PBKDF2', salt: sel, iterations: iterations, hash: 'SHA-256'}, base, {name: 'AES-GCM', length: 256}, false, ['encrypt', 'decrypt']);
+    });
+  }
+  function clePubliqueServeur(){
+    return fbDb.ref('gos_coffre/cle_publique').once('value').then(function(s){
+      var c = s.val(); if(!c || !c.jwk) return null;
+      return crypto.subtle.importKey('jwk', JSON.parse(c.jwk), {name: 'RSA-OAEP', hash: 'SHA-256'}, false, ['encrypt']);
+    });
+  }
+  function programmerFermeture(){
+    if(minuterie) clearTimeout(minuterie);
+    minuterie = setTimeout(function(){ verrouiller(); }, Math.max(0, finOuverture - Date.now()) + 50);
+  }
+  function verrouiller(){ clePrivee = null; finOuverture = 0; clairs = {}; if(minuterie){ clearTimeout(minuterie); minuterie = null; } rafraichir(); }
+
+  // Creation (ou recreation apres phrase oubliee : les anciennes entrees, illisibles, sont effacees)
+  function creer(phrase){
+    var paire;
+    return crypto.subtle.generateKey({name: 'RSA-OAEP', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256'}, true, ['encrypt', 'decrypt']).then(function(p){
+      paire = p;
+      return Promise.all([crypto.subtle.exportKey('jwk', p.publicKey), crypto.subtle.exportKey('pkcs8', p.privateKey)]);
+    }).then(function(r){
+      var sel = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+      return deriver(phrase, sel, ITERATIONS).then(function(k){ return crypto.subtle.encrypt({name: 'AES-GCM', iv: iv}, k, r[1]); }).then(function(ct){
+        var maj = {
+          cle_publique: {jwk: JSON.stringify(r[0]), version: 1, creeLe: firebase.database.ServerValue.TIMESTAMP, creePar: GOS_AUTH.uid},
+          cle_privee: {ct: versB64(ct), sel: versB64(sel), iv: versB64(iv), iterations: ITERATIONS},
+          mdp: null
+        };
+        return fbDb.ref('gos_coffre').update(maj);
+      });
+    }).then(function(){
+      // la cle privee reste en memoire, non exportable : le coffre est ouvert tout de suite
+      return crypto.subtle.exportKey('pkcs8', paire.privateKey);
+    }).then(function(brut){
+      return crypto.subtle.importKey('pkcs8', brut, {name: 'RSA-OAEP', hash: 'SHA-256'}, false, ['decrypt']);
+    }).then(function(k){ clePrivee = k; finOuverture = Date.now() + DUREE_OUVERTURE; programmerFermeture(); });
+  }
+  function deverrouiller(phrase){
+    return fbDb.ref('gos_coffre/cle_privee').once('value').then(function(s){
+      var c = s.val(); if(!c || !c.ct) throw {code: 'coffre_absent'};
+      return deriver(phrase, depuisB64(c.sel), c.iterations || ITERATIONS).then(function(k){
+        return crypto.subtle.decrypt({name: 'AES-GCM', iv: depuisB64(c.iv)}, k, depuisB64(c.ct));
+      }).catch(function(e){ if(e && e.code) throw e; throw {code: 'phrase_incorrecte'}; });
+    }).then(function(brut){
+      return crypto.subtle.importKey('pkcs8', brut, {name: 'RSA-OAEP', hash: 'SHA-256'}, false, ['decrypt']);
+    }).then(function(k){ clePrivee = k; finOuverture = Date.now() + DUREE_OUVERTURE; programmerFermeture(); rafraichir(); });
+  }
+  // Depot d'un mot de passe (cle publique seulement : pas besoin d'ouvrir le coffre)
+  function enregistrer(uid, mdp, type, par){
+    if(!cryptoOk() || typeof fbDb === 'undefined' || !fbDb || !uid || !mdp) return Promise.resolve({ok: false, raison: 'indisponible'});
+    return clePubliqueServeur().then(function(k){
+      if(!k) return {ok: false, raison: 'pas_de_coffre'};
+      return crypto.subtle.encrypt({name: 'RSA-OAEP'}, k, octets(mdp)).then(function(ct){
+        return fbDb.ref('gos_coffre/mdp/' + uid).set({ct: versB64(ct), type: type, le: firebase.database.ServerValue.TIMESTAMP, par: par || GOS_AUTH.uid});
+      }).then(function(){ delete clairs[uid]; return {ok: true}; });
+    });
+  }
+  function supprimer(uid){
+    if(typeof fbDb === 'undefined' || !fbDb || !uid) return Promise.resolve();
+    return fbDb.ref('gos_coffre/mdp/' + uid).remove().catch(function(){});
+  }
+  function lire(uid){
+    var e = entrees[uid];
+    if(!e || !e.ct) return Promise.reject({code: 'absent'});
+    if(!ouvert()) return Promise.reject({code: 'verrouille'});
+    return crypto.subtle.decrypt({name: 'RSA-OAEP'}, clePrivee, depuisB64(e.ct)).then(texte);
+  }
+
+  // ------------------------------------------------------------------ interface
+  function minutesRestantes(){ return Math.max(1, Math.ceil((finOuverture - Date.now()) / 60000)); }
+  function bandeau(){
+    demarrerEcoute();
+    if(!estDirection()) return '';
+    var h = '<div class="card" style="margin-bottom:16px" id="gosCoffreCarte"><div class="card-head"><strong>&#x1F510; Coffre des mots de passe</strong></div><div class="card-body" style="padding:12px;font-size:12px">';
+    if(!cryptoOk()) return h + 'Ce navigateur ne permet pas le chiffrement : utilisez Chrome ou Edge a jour.</div></div>';
+    if(!configChargee){ return h + '<span class="muted">Chargement...</span></div></div>'; }
+    if(!existe()){
+      h += 'Aucun coffre pour l\'instant. Le coffre conserve les mots de passe du personnel et des clients, <b>chiffres</b> : seule la Direction peut les afficher, apres avoir saisi la phrase secrete du coffre.'
+        + '<div style="margin-top:8px"><button class="btn btn-primary btn-sm" onclick="GOS_COFFRE.ouvrirCreation(false)">Creer le coffre</button></div>';
+    } else if(ouvert()){
+      h += '<span style="color:#3B6D11;font-weight:700">&#x1F513; Ouvert</span> — se referme dans ' + minutesRestantes() + ' min. Les mots de passe s\'affichent avec le bouton &#x1F441; de chaque compte.'
+        + ' <button class="btn btn-sm" style="margin-left:8px" onclick="GOS_COFFRE.verrouiller()">Verrouiller maintenant</button>';
+    } else {
+      h += '<span style="font-weight:700">&#x1F512; Verrouille</span> — saisissez la phrase secrete pour afficher les mots de passe.'
+        + ' <button class="btn btn-primary btn-sm" style="margin-left:8px" onclick="GOS_COFFRE.ouvrirDeverrouillage()">Deverrouiller</button>'
+        + '<div class="xs muted" style="margin-top:6px">Phrase oubliee ? <a href="#" onclick="GOS_COFFRE.ouvrirCreation(true);return false;">Recreer le coffre</a> (les mots de passe deja enregistres seront perdus et a re-enregistrer).</div>';
+    }
+    return h + '</div></div>';
+  }
+  // Cellule « Mot de passe » d'un compte. email = adresse de connexion (pour verifier un mot de passe saisi a la main)
+  function cellule(uid, type, email){
+    if(!estDirection() || !cryptoOk() || !existe()) return '<span class="xs muted">—</span>';
+    var e = entrees[uid], a = ' data-uid="' + esc(uid) + '" data-type="' + esc(type) + '" data-email="' + esc(email || '') + '"';
+    var enreg = '<button class="btn btn-sm" title="Enregistrer le mot de passe actuel de ce compte"' + a + ' onclick="GOS_COFFRE.ouvrirEnregistrement(this)">' + (e ? '&#x270E;' : 'Enregistrer') + '</button>';
+    if(!e) return '<span class="xs muted">non enregistre</span> ' + enreg;
+    var date = e.le ? '<div class="xs muted">enregistre le ' + new Date(e.le).toLocaleDateString('fr-FR') + '</div>' : '';
+    var valeur = clairs[uid] && ouvert() ? '<code style="font-size:13px;background:#FFF8E6;padding:1px 5px;border-radius:3px;user-select:all">' + esc(clairs[uid].mdp) + '</code>' : '<span style="letter-spacing:2px">&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;</span>';
+    var boutons = clairs[uid] && ouvert()
+      ? ' <button class="btn btn-sm" title="Copier"' + a + ' onclick="GOS_COFFRE.copier(this)">Copier</button> <button class="btn btn-sm" title="Masquer"' + a + ' onclick="GOS_COFFRE.masquer(this)">Masquer</button>'
+      : ' <button class="btn btn-sm" title="Afficher"' + a + ' onclick="GOS_COFFRE.afficher(this)">&#x1F441;</button>';
+    return '<span style="white-space:nowrap">' + valeur + boutons + ' ' + enreg + '</span>' + date;
+  }
+
+  // Fenetre commune (creation / deverrouillage / enregistrement)
+  function fenetre(titre, corps, actionOk, libelleOk){
+    fermer();
+    var o = document.createElement('div'); o.id = 'modalCoffre'; o.className = 'overlay'; o.style.display = 'flex'; o.style.zIndex = '100005';
+    o.innerHTML = '<div class="modal" style="width:440px;max-width:94vw"><div class="mhead"><h2>' + titre + '</h2><button class="btn btn-sm" onclick="GOS_COFFRE.fermer()">X</button></div>'
+      + '<div class="mbody" style="padding:16px;font-size:13px">' + corps + '<div id="coffreErr" style="color:#A32D2D;font-size:12px;margin-top:8px;min-height:16px"></div>'
+      + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px"><button class="btn btn-sm" onclick="GOS_COFFRE.fermer()">Annuler</button><button class="btn btn-primary btn-sm" id="coffreOk">' + libelleOk + '</button></div></div></div>';
+    document.body.appendChild(o);
+    var ok = document.getElementById('coffreOk');
+    ok.onclick = function(){ erreur(''); ok.disabled = true; var t = ok.textContent; ok.textContent = 'Patientez...';
+      Promise.resolve().then(actionOk).then(function(fini){ if(fini !== false) fermer(); else { ok.disabled = false; ok.textContent = t; } })
+        .catch(function(e){ erreur(messageErreur(e)); ok.disabled = false; ok.textContent = t; }); };
+    var premier = o.querySelector('input'); if(premier) setTimeout(function(){ premier.focus(); }, 30);
+    o.addEventListener('keydown', function(ev){ if(ev.key === 'Enter' && !ok.disabled) ok.click(); });
+  }
+  function fermer(){ var o = document.getElementById('modalCoffre'); if(o) o.remove(); rafraichir(); }
+  function erreur(t){ var el = document.getElementById('coffreErr'); if(el) el.textContent = t; }
+  function val(id){ var el = document.getElementById(id); return el ? el.value : ''; }
+  function messageErreur(e){
+    var c = e && e.code || '';
+    var m = {
+      phrase_incorrecte: 'Phrase secrete incorrecte.',
+      coffre_absent: 'Le coffre n\'existe pas encore.',
+      verrouille: 'Le coffre est verrouille.',
+      'auth/invalid-credential': 'Ce mot de passe ne correspond pas au compte : rien n\'a ete enregistre.',
+      'auth/wrong-password': 'Ce mot de passe ne correspond pas au compte : rien n\'a ete enregistre.',
+      'auth/user-not-found': 'Compte de connexion introuvable dans Firebase.',
+      'auth/too-many-requests': 'Trop d\'essais sur ce compte : Firebase le bloque quelques minutes. Reessayez plus tard.',
+      'auth/network-request-failed': 'Connexion Internet necessaire.',
+      PERMISSION_DENIED: 'Refuse par les regles Firebase (regles du coffre publiees ?).',
+      GOS_HORS_LIGNE: 'Serveur injoignable : rien n\'a ete enregistre.'
+    };
+    if(m[c]) return m[c];
+    if(/permission/i.test(String(e && e.message))) return m.PERMISSION_DENIED;
+    return 'Echec : ' + (c || (e && e.message) || e);
+  }
+
+  function ouvrirCreation(recreer){
+    if(!estDirection()) return;
+    var corps = (recreer ? '<div style="background:#FBE9E7;border-left:4px solid #A32D2D;padding:8px 10px;margin-bottom:10px">Recreer le coffre <b>efface tous les mots de passe enregistres</b> (ils ne sont plus lisibles sans l\'ancienne phrase). Il faudra les enregistrer a nouveau.<br>Tapez <b>RECREER</b> pour confirmer :<input class="fi" id="coffreConfirme" style="margin-top:6px"></div>' : '')
+      + '<p class="xs muted" style="margin-bottom:8px">Choisissez une phrase secrete d\'au moins 12 caracteres (ex. une courte phrase). Elle n\'est enregistree nulle part : <b>si elle est oubliee, le coffre est perdu</b>. Notez-la en lieu sur, hors de l\'ordinateur.</p>'
+      + '<label class="fl">Phrase secrete</label><input class="fi" type="password" id="coffreP1" autocomplete="new-password">'
+      + '<label class="fl" style="margin-top:8px">Confirmer la phrase</label><input class="fi" type="password" id="coffreP2" autocomplete="new-password">';
+    fenetre(recreer ? 'Recreer le coffre' : 'Creer le coffre', corps, function(){
+      if(recreer && val('coffreConfirme').trim() !== 'RECREER'){ erreur('Tapez RECREER pour confirmer.'); return false; }
+      var a = val('coffreP1'), b = val('coffreP2');
+      if(a.length < 12){ erreur('Au moins 12 caracteres.'); return false; }
+      if(a !== b){ erreur('Les deux saisies sont differentes.'); return false; }
+      return creer(a).then(function(){ if(typeof afficherToastNotif === 'function') afficherToastNotif('Coffre cree', 'Les nouveaux mots de passe y seront deposes automatiquement. Enregistrez ceux des comptes existants avec le bouton « Enregistrer ».', 'succes'); });
+    }, recreer ? 'Recreer' : 'Creer le coffre');
+  }
+  function ouvrirDeverrouillage(suite){
+    if(!estDirection()) return;
+    fenetre('Deverrouiller le coffre', '<label class="fl">Phrase secrete du coffre</label><input class="fi" type="password" id="coffreP" autocomplete="current-password">', function(){
+      var p = val('coffreP'); if(!p){ erreur('Saisissez la phrase.'); return false; }
+      return deverrouiller(p).then(function(){ if(typeof suite === 'function') setTimeout(suite, 0); });
+    }, 'Deverrouiller');
+  }
+  function ouvrirEnregistrement(btn){
+    if(!estDirection()) return;
+    var uid = btn.getAttribute('data-uid'), type = btn.getAttribute('data-type'), email = btn.getAttribute('data-email');
+    var corps = '<p class="xs muted" style="margin-bottom:8px">Saisissez le mot de passe <b>actuel</b> de ce compte (' + esc(email || uid) + '). Il est d\'abord verifie aupres de Firebase, puis depose chiffre dans le coffre. Il ne change pas le mot de passe du compte.</p>'
+      + '<label class="fl">Mot de passe actuel</label><input class="fi" type="text" id="coffreMdp" autocomplete="off" spellcheck="false" style="font-family:monospace">';
+    fenetre('Enregistrer un mot de passe', corps, function(){
+      var mdp = val('coffreMdp'); if(!mdp){ erreur('Saisissez le mot de passe.'); return false; }
+      if(mdp.length > 120){ erreur('120 caracteres au maximum.'); return false; }
+      var verifier = Promise.resolve();
+      if(email){
+        var auth2 = getFirebaseAuthSecondaire();
+        verifier = auth2.signInWithEmailAndPassword(email, mdp).then(function(){ try{ return auth2.signOut(); }catch(e){} });
+      }
+      return verifier.then(function(){ return enregistrer(uid, mdp, type); }).then(function(r){
+        if(!r.ok) throw {code: r.raison === 'pas_de_coffre' ? 'coffre_absent' : r.raison};
+        if(typeof afficherToastNotif === 'function') afficherToastNotif('Mot de passe enregistre', 'Verifie aupres de Firebase et depose chiffre dans le coffre.', 'succes');
+      });
+    }, 'Verifier et enregistrer');
+  }
+  function afficher(btn){
+    var uid = btn.getAttribute('data-uid');
+    if(!ouvert()){ ouvrirDeverrouillage(function(){ afficherUid(uid); }); return; }
+    afficherUid(uid);
+  }
+  function afficherUid(uid){
+    lire(uid).then(function(m){
+      clairs[uid] = {mdp: m, jusque: Date.now() + DUREE_AFFICHAGE};
+      setTimeout(function(){ if(clairs[uid] && Date.now() >= clairs[uid].jusque - 50){ delete clairs[uid]; rafraichir(); } }, DUREE_AFFICHAGE);
+      rafraichir();
+    }).catch(function(e){ alert(messageErreur(e)); });
+  }
+  function masquer(btn){ delete clairs[btn.getAttribute('data-uid')]; rafraichir(); }
+  function copier(btn){
+    var c = clairs[btn.getAttribute('data-uid')]; if(!c) return;
+    var fait = function(){ if(typeof afficherToastNotif === 'function') afficherToastNotif('Copie', 'Mot de passe copie dans le presse-papiers.', 'info'); };
+    try{ navigator.clipboard.writeText(c.mdp).then(fait, function(){ prompt('Copiez le mot de passe :', c.mdp); }); }catch(e){ prompt('Copiez le mot de passe :', c.mdp); }
+  }
+
+  return {bandeau: bandeau, cellule: cellule, enregistrer: enregistrer, supprimer: supprimer, verrouiller: verrouiller,
+          ouvrirCreation: ouvrirCreation, ouvrirDeverrouillage: ouvrirDeverrouillage, ouvrirEnregistrement: ouvrirEnregistrement,
+          afficher: afficher, masquer: masquer, copier: copier, fermer: fermer,
+          _etat: function(){ return {existe: existe(), ouvert: ouvert(), entrees: Object.keys(entrees).length}; }};
+})();
+
+function pageComptes(){ return GOS_COFFRE.bandeau() + GOS_M1_OUTIL.html() + GOS_PERSONNEL.html() + pageComptesAncien(); }
 
 
 var firebaseConfig = {
