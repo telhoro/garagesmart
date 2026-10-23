@@ -31301,6 +31301,12 @@ function imprimerBonLivraison(vid){
   var dateEdit = new Date().toLocaleDateString('fr-FR');
   var dateLivraison = v.livraison ? new Date(v.livraison) : new Date();
   var mec = v.mec ? new Date(v.mec).toLocaleDateString('fr-FR') : '';
+  // BON LIVRAISON : date d'entree du vehicule au garage
+  var dEntree = v.entree ? new Date(v.entree) : null;
+  var dateEntree = (dEntree && !isNaN(dEntree.getTime())) ? dEntree.toLocaleDateString('fr-FR') : '';
+  // heure de reception : absente si seule la date a ete saisie (minuit pile, ex. passage d'un prospect en travaux)
+  var heureEntree = (dateEntree && (dEntree.getTime() % 60000 !== 0 || dEntree.getUTCHours() + dEntree.getUTCMinutes() > 0))
+    ? dEntree.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'}) : '';
 
   var html = ''
     +'<style>'
@@ -31365,7 +31371,9 @@ function imprimerBonLivraison(vid){
     +'</div>'
     +'<div style="text-align:left">'
     +'<table style="border:none;width:auto">'
-    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Date :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+dateLivraison.toLocaleDateString('fr-FR')+'</td><td style="border:none;padding:2px 0 2px 16px;color:#555;font-size:14px">Heure :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+dateLivraison.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+'</td></tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px;white-space:nowrap">Date d\'entrée :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(dateEntree||'—')+'</td>'
+    +(heureEntree ? '<td style="border:none;padding:2px 0 2px 16px;color:#555;font-size:14px">Heure :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+heureEntree+'</td>' : '<td colspan="2" style="border:none"></td>')+'</tr>'
+    +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px;white-space:nowrap">Date de livraison :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+dateLivraison.toLocaleDateString('fr-FR')+'</td><td style="border:none;padding:2px 0 2px 16px;color:#555;font-size:14px">Heure :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+dateLivraison.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+'</td></tr>'
     +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Technicien :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(v.technicien||'N/A')+'</td></tr>'
     +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">N° série :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(v.vin||'')+'</td></tr>'
     +'<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px">Énergie :</td><td colspan="3" style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+(v.carburant||'').toUpperCase()+'</td></tr>'
@@ -31377,7 +31385,9 @@ function imprimerBonLivraison(vid){
 
     // Texte de livraison
     +'<div style="font-size:15px;margin-bottom:6px;line-height:1.5">'
-    +'Le garage SMART a livré le véhicule <strong>'+(v.marque||'')+'</strong> immatriculé <strong>'+(v.immat||'')+'</strong> le <strong>'+dateLivraison.toLocaleDateString('fr-FR')+'</strong> dans ses locaux après avoir effectués ces travaux.'
+    +'Le garage SMART a livré le véhicule <strong>'+(v.marque||'')+'</strong> immatriculé <strong>'+(v.immat||'')+'</strong>'
+    +(dateEntree ? ', entré au garage le <strong>'+dateEntree+'</strong>'+(heureEntree ? ' à <strong>'+heureEntree+'</strong>' : '')+',' : '')
+    +' le <strong>'+dateLivraison.toLocaleDateString('fr-FR')+'</strong> dans ses locaux après avoir effectué ces travaux.'
     +'</div>'
     +'<div style="font-size:14px;font-style:italic;margin-bottom:20px">(Se référer à la facture en annexe.)</div>'
 
@@ -31388,7 +31398,7 @@ function imprimerBonLivraison(vid){
     // Signatures Client / Garage cote a cote
     +'<div style="display:flex;justify-content:space-between;margin-top:auto">'
     +'<div style="font-size:16px;font-weight:700;text-decoration:underline">CLIENT</div>'
-    +'<div style="font-size:16px;font-weight:700;text-decoration:underline">LE GARAGE AUTO</div>'
+    +'<div style="font-size:16px;font-weight:700;text-decoration:underline">LE GARAGE SMART</div>'
     +'</div>'
 
     +'<div style="text-align:right;font-size:12px;color:#888;margin-top:16px">1 / 1</div>'
