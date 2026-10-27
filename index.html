@@ -2506,6 +2506,7 @@ function saveV(){
   // C-09 v4 : la sauvegarde de l'utilisateur devient la nouvelle reference,
   // sinon son propre enregistrement declencherait l'avertissement de la fiche.
   try{ if(typeof majSnapshotFicheOuverte === 'function') majSnapshotFicheOuverte(); }catch(e){ console.error(e); }
+  try{ gosStockReconcilierModifies(); }catch(e){ console.error('STOCK VALIDATION', e); }   // STOCK VALIDATION
   // Detection systematique : marque TOUT vehicule dont le contenu a
   // reellement change depuis la derniere sauvegarde, peu importe quelle
   // fonction a fait la modification.
@@ -5063,6 +5064,7 @@ function clotureDossierForcee(vid){
     // dossier des calculs de CA/depenses (bases sur chiffrage.lignes), tout
     // en gardant une trace de ce qui avait ete chiffre (via les commentaires
     // et travauxAPrevoir).
+    rendreStockLignes(v, v.chiffrage.lignes);   // STOCK VALIDATION : aucun travaux, les pieces reviennent en stock
     v.chiffrage.lignes = [];
   }
 
@@ -5816,7 +5818,7 @@ function uneModaleEstOuverte(){
     'modalModifStock','modalMoveTech','modalNumerosFacture','modalPaiement','modalPaiementChargeFixe',
     'modalPaiementFournisseur','modalRapport','modalRec','modalRepriseChef','modalRepriseTest',
     'modalStatutFacturesClient','modalSuppression','modalSuppressionEmiseForfait','modalTech','modalPaiementEcheance',
-    'modalPiecesACommander','modalNouvelleCS','modalCommandesSpeciales','modalCorrectionStatut','modalForfaitTKM','modalCoffre'
+    'modalPiecesACommander','modalNouvelleCS','modalCommandesSpeciales','modalCorrectionStatut','modalForfaitTKM','modalCoffre','modalAnnulReserve'
   ];
   for(var i=0;i<modals.length;i++){
     var el = document.getElementById(modals[i]);
@@ -7226,14 +7228,105 @@ var METRIQUES_FINANCIERES_LISTE = [
   {cle:'tauxMarge', label:'Taux de marge', format:'pourcentage', hausseEstPositive:true},
   {cle:'chargesVariables', label:'Charges variables (Caisse)', format:'montant', hausseEstPositive:false},
   {cle:'dettesFournisseurs', label:'Dettes fournisseurs (manuelles)', format:'montant', hausseEstPositive:false},
-  {cle:'resultatOperationnel', label:'Resultat operationnel', format:'montant', hausseEstPositive:true},
-  {cle:'margeOperationnelle', label:'Marge operationnelle', format:'pourcentage', hausseEstPositive:true},
+  {cle:'resultatAvantChargesFixes', label:'Resultat avant charges fixes', format:'montant', hausseEstPositive:true},
+  {cle:'chargesFixes', label:'Charges fixes (payees + prevues en vigueur)', format:'montant', hausseEstPositive:false},
+  {cle:'resultatOperationnel', label:'Resultat net (apres charges fixes)', format:'montant', hausseEstPositive:true},
+  {cle:'margeOperationnelle', label:'Marge nette (resultat net / CA)', format:'pourcentage', hausseEstPositive:true},
   {cle:'encaissementsRealises', label:'Encaissements realises', format:'montant', hausseEstPositive:true},
   {cle:'tauxEncaissement', label:'Taux d\'encaissement', format:'pourcentage', hausseEstPositive:true},
   {cle:'montantNonEncaisse', label:'Montant CA non encaisse (cumule)', format:'montant', hausseEstPositive:false},
   {cle:'expositionMoyenne', label:'Exposition financiere (moyenne)', format:'montant', hausseEstPositive:false},
   {cle:'echeances', label:'Echeances de la periode', format:'montant', hausseEstPositive:false}
 ];
+
+// RESULTAT NET : nombre de mois couverts par une periode, en mois CIVILS.
+// Un mois complet compte 1 (quel que soit son nombre de jours), un trimestre 3, une annee 12 ;
+// un mois entame compte au prorata de ses propres jours. La fin est inclusive (23:59:59.999).
+function moisEquivalentsPeriode(deb, fin){
+  if(!(fin > deb)) return 0;
+  var total = 0, d0 = new Date(deb), d = new Date(d0.getFullYear(), d0.getMonth(), 1);
+  while(d.getTime() <= fin){
+    var debMois = d.getTime(), suivant = new Date(d.getFullYear(), d.getMonth() + 1, 1), finMois = suivant.getTime();
+    var a = Math.max(deb, debMois), b = Math.min(fin + 1, finMois);
+    if(b > a) total += (b - a) / (finMois - debMois);
+    d = suivant;
+  }
+  return Math.round(total * 10000) / 10000;
+}
+
+// CHARGES REELLES : charges fixes d'une periode, mois civil par mois civil.
+//  - prevu : une charge ACTIVE compte son montant mensuel sur les mois ou elle est en vigueur
+//    (date de debut <= fin du mois, date de fin >= debut du mois) ;
+//  - reel : ce qui a ete PAYE pour ce mois (echeancesPayees), meme si la charge a ete desactivee
+//    depuis ; un paiement trimestriel / annuel est reparti sur les mois de son cycle ;
+//  - compte = le plus grand des deux ; un mois entame compte au prorata de ses jours.
+// Renvoie {total, paye, prevuNonPaye, mois}.
+function chargesFixesDePeriode(deb, fin){
+  var res = {total: 0, paye: 0, prevuNonPaye: 0, mois: moisEquivalentsPeriode(deb, fin)};
+  if(!(fin > deb) || typeof CHARGES_FIXES === 'undefined') return res;
+  var mois = [], d0 = new Date(deb), d = new Date(d0.getFullYear(), d0.getMonth(), 1);
+  while(d.getTime() <= fin){
+    var suivant = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+    var a = Math.max(deb, d.getTime()), b = Math.min(fin + 1, suivant.getTime());
+    if(b > a) mois.push({cle: d.getFullYear() * 12 + d.getMonth(), deb: d.getTime(), fin: suivant.getTime() - 1, f: (b - a) / (suivant.getTime() - d.getTime())});
+    d = suivant;
+  }
+  CHARGES_FIXES.forEach(function(c){
+    var pas = c.periodicite === 'trimestriel' ? 3 : (c.periodicite === 'annuel' ? 12 : 1);
+    var mensuel = (parseFloat(c.montant) || 0) / pas;
+    var payeParMois = {};
+    (c.echeancesPayees || []).forEach(function(entry){
+      var ancien = typeof entry === 'number';
+      var dateE = ancien ? entry : (entry && entry.dateEcheance);
+      var mt = ancien ? (parseFloat(c.montant) || 0) : (parseFloat(entry && entry.montant) || 0);
+      if(!dateE || !mt) return;
+      var de = new Date(dateE), k0 = de.getFullYear() * 12 + de.getMonth();
+      for(var i = 0; i < pas; i++) payeParMois[k0 + i] = (payeParMois[k0 + i] || 0) + mt / pas;
+    });
+    mois.forEach(function(m){
+      var enVigueur = c.actif && (!c.dateDebut || c.dateDebut <= m.fin) && (!c.dateFin || c.dateFin >= m.deb);
+      var prevu = enVigueur ? mensuel : 0, reel = payeParMois[m.cle] || 0;
+      var compte = Math.max(prevu, reel);
+      res.total += compte * m.f;
+      res.paye += Math.min(reel, compte) * m.f;
+    });
+  });
+  res.prevuNonPaye = Math.max(0, res.total - res.paye);
+  return res;
+}
+
+// CHARGES REELLES : montant CA non encaisse a la fin d'une periode, meme population que les
+// « Encaissements attendus » du tableau de bord (devis livres, factures forfait deposees).
+// Periode en cours (ou future) : exactement le chiffre du tableau de bord. Periode passee : ce qui
+// restait du a sa fin (factures deja deposees / livrees, paiements dates jusqu'a cette fin).
+function montantNonEncaisseFinPeriode(borneFin){
+  if(borneFin >= Date.now()){
+    return collecterEncaissementsAttendus().reduce(function(s, e){ return s + (e.montant || 0); }, 0);
+  }
+  var total = 0;
+  var payeAvant = function(liste, montantSansDate, dateSeule){
+    if(liste && liste.length) return liste.reduce(function(s, p){ return s + ((p.date || 0) <= borneFin ? (parseFloat(p.montant) || 0) : 0); }, 0);
+    if(!montantSansDate) return 0;
+    return (!dateSeule || dateSeule <= borneFin) ? montantSansDate : 0;
+  };
+  vehicles.forEach(function(v){
+    if(!v.chiffrage || !v.chiffrage.lignes || LIV_ST.indexOf(v.status) < 0) return;
+    var dateRef = v.factureDeposeeLe || v.livraison || 0;
+    if(!dateRef || dateRef > borneFin) return;
+    var facture = v.chiffrage.lignes.filter(function(cl){ return (cl.piece || '').trim(); }).reduce(function(s, cl){ return s + montantChiffrageLigne(cl); }, 0);
+    if(!facture) return;
+    total += Math.max(0, facture - payeAvant(v.paiementsClient, parseFloat(v.montantPaye) || 0, v.paiementDate));
+  });
+  FORFAIT_FACTURES.forEach(function(f){
+    if(f.statut !== 'deposee' && f.statut !== 'payee') return;
+    var dateRef = f.deposeeDate || f.emiseDate || 0;
+    if(!dateRef || dateRef > borneFin) return;
+    var montant = f.montant || 0;
+    var paye = payeAvant(f.paiementsClient, f.statut === 'payee' ? montant : (f.montantPaye || 0), f.statut === 'payee' ? (f.paiementDate || f.datePaiement) : null);
+    total += Math.max(0, montant - paye);
+  });
+  return total;
+}
 
 // Calcule TOUS les indicateurs financiers pour une plage de dates
 // arbitraire — reprend EXACTEMENT la meme logique de calcul que
@@ -7252,9 +7345,14 @@ function calculerMetriquesFinancieres(borneDebut, borneFin){
     if(v.typeClient==='forfait'){ caForfait+=vente; achatForfait+=achat; }
     else { caDevis+=vente; achatDevis+=achat; }
   });
+  // CHARGES REELLES : meme regle que le tableau de bord — une facture forfait compte dans le
+  // mois QU'ELLE COUVRE (periodeKey), une fois deposee ou payee.
   FORFAIT_FACTURES.forEach(function(f){
-    var dateFacture = f.deposeeDate || f.emiseDate || 0;
-    if(dateFacture<borneDebut || dateFacture>borneFin) return;
+    if(f.statut!=='deposee' && f.statut!=='payee') return;
+    if(!f.periodeKey) return;
+    var parts = f.periodeKey.split('-');
+    var dateRepresentative = new Date(parseInt(parts[0],10), parseInt(parts[1],10)-1, 15).getTime();
+    if(dateRepresentative<borneDebut || dateRepresentative>borneFin) return;
     caForfait += f.montant||0;
   });
   var caTotal = caDevis+caForfait;
@@ -7273,14 +7371,14 @@ function calculerMetriquesFinancieres(borneDebut, borneFin){
     if(c.periodicite==='annuel') return s+m/12;
     return s+m;
   },0);
-  var joursPeriode = Math.max(1, Math.round((borneFin-borneDebut)/86400000));
-  var chargesFixesPeriode = chargesFixesMensuelEquiv * (joursPeriode/30);
+  var chargesFixesPeriode = chargesFixesDePeriode(borneDebut, borneFin).total;   // CHARGES REELLES : prevu + paye reel
 
   var dettesManuellesPeriode = DETTES_MANUELLES.filter(function(dm){
     return dm.dateAchat>=borneDebut && dm.dateAchat<=borneFin;
   }).reduce(function(s,dm){return s+(parseFloat(dm.prixAchat)||0)*(parseInt(dm.qte)||1);},0);
 
-  var resultatOperationnel = caTotal - achatTotal - chargesVariablesCaisse - chargesFixesPeriode - dettesManuellesPeriode;
+  var resultatAvantChargesFixes = caTotal - achatTotal - chargesVariablesCaisse - dettesManuellesPeriode;   // RESULTAT NET
+  var resultatOperationnel = resultatAvantChargesFixes - chargesFixesPeriode;   // resultat net, apres charges fixes
   var margeOperationnelle = caTotal>0 ? (resultatOperationnel/caTotal*100) : null;
 
   var encaisseRealise = 0, factureSurPeriode = 0;
@@ -7331,27 +7429,15 @@ function calculerMetriquesFinancieres(borneDebut, borneFin){
   // d'origine. Un solde de 1M fin janvier devient, fin fevrier, 1M + les
   // nouvelles ventes de fevrier non encore encaissees - les paiements
   // recus en fevrier (y compris sur d'anciennes factures).
-  var montantNonEncaisse = 0;
-  vehicles.forEach(function(v){
-    if(!v.chiffrage || !v.chiffrage.lignes) return;
-    var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
-    if(!dateFacture || dateFacture>borneFin) return;
-    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
-    var vente = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
-    var paye = parseFloat(v.montantPaye)||0;
-    montantNonEncaisse += Math.max(0, vente-paye);
-  });
-  FORFAIT_FACTURES.forEach(function(f){
-    var dateFacture = f.deposeeDate || f.emiseDate || 0;
-    if(!dateFacture || dateFacture>borneFin) return;
-    var montant = f.montant||0;
-    var paye = f.statut==='payee' ? montant : (f.montantPaye||0);
-    montantNonEncaisse += Math.max(0, montant-paye);
-  });
+  // CHARGES REELLES : meme population et meme chiffre que le tableau de bord (voir la fonction)
+  var montantNonEncaisse = montantNonEncaisseFinPeriode(borneFin);
+  // Taux d'encaissement : meme formule que le tableau de bord — encaisse / (encaisse + reste a encaisser)
+  tauxEncaissement = (encaisseRealise + montantNonEncaisse) > 0 ? Math.min(100, encaisseRealise / (encaisseRealise + montantNonEncaisse) * 100) : null;
 
   return {
     ca:caTotal, depenses:achatTotal, margeBrute:margeBrute, tauxMarge:tauxMarge,
     chargesVariables:chargesVariablesCaisse, dettesFournisseurs:dettesManuellesPeriode,
+    resultatAvantChargesFixes:resultatAvantChargesFixes, chargesFixes:chargesFixesPeriode,
     resultatOperationnel:resultatOperationnel, margeOperationnelle:margeOperationnelle,
     encaissementsRealises:encaisseRealise, tauxEncaissement:tauxEncaissement,
     montantNonEncaisse:montantNonEncaisse,
@@ -7409,11 +7495,22 @@ function rapportKPIs(sectionId, bornes){
         {label:'Devis', value:fmtFCFA(K.margeDevis)}, {label:'Forfaits', value:fmtFCFA(K.margeForfait)}]},
       {label:'Taux de marge', value:fmtPct(K.tauxTotal), sousLignes:[
         {label:'Devis', value:fmtPct(K.tauxDevis)}, {label:'Forfaits', value:fmtPct(K.tauxForfait)}]},
+      {label:'Repartition du CA', value:'', sousLignes:REPARTITION_CA_CATEGORIES.map(function(c){
+        var r = (K.repartitionCA || {})[c.cle] || {ca: 0, vehicules: 0};
+        return {label:c.label + ' (' + r.vehicules + ' veh.)', value:fmtFCFA(r.ca) + (K.caTotal > 0 ? ' — ' + fmtPct(r.ca / K.caTotal * 100) : '')}; })},
+      {label:'Vehicules traites', value:String(K.nbVehiculesTraites || 0)},
+      {label:'Exposition par type de client', value:fmtFCFA(K.totalExposePeriode || 0), sousLignes:REPARTITION_CA_CATEGORIES.map(function(c){
+        var t = (K.tresoParType || {})[c.cle] || {expose: 0};
+        return {label:c.label, value:fmtFCFA(t.expose) + (K.totalExposePeriode > 0 ? ' (' + fmtPct(t.expose / K.totalExposePeriode * 100) + ')' : '')}; })},
+      {label:'Delai moyen de paiement par type', value:(function(){ var n = 0, t = 0; REPARTITION_CA_CATEGORIES.forEach(function(c){ var d = ((K.tresoParType || {})[c.cle] || {}).delais || []; n += d.length; t += d.reduce(function(a, x){ return a + x; }, 0); }); return n ? 'general ' + Math.round(t / n) + ' j' : '—'; })(), sousLignes:REPARTITION_CA_CATEGORIES.map(function(c){
+        var t = (K.tresoParType || {})[c.cle] || {delaiMoyen: null, nbReglements: 0};
+        return {label:c.label, value:(t.delaiMoyen === null ? '—' : t.delaiMoyen + ' j') + ' (' + t.nbReglements + ' regl.)'}; })},
       {label:'Charges variables (Caisse)', value:fmtFCFA(K.chargesVariablesCaisse)},
       {label:'Dettes fournisseurs (manuelles)', value:fmtFCFA(K.dettesManuellesPeriode)},
+      {label:'Resultat avant charges fixes', value:fmtFCFA(K.resultatAvantChargesFixes)},
       {label:'Charges fixes (periode)', value:fmtFCFA(K.chargesFixesPeriode)},
-      {label:'Resultat operationnel', value:fmtFCFA(K.resultatOperationnel)},
-      {label:'Marge operationnelle', value:fmtPct(K.margeOperationnelle)},
+      {label:'Resultat net (apres charges fixes)', value:fmtFCFA(K.resultatOperationnel)},
+      {label:'Marge nette', value:fmtPct(K.margeOperationnelle)},
       {label:'Encaissements attendus', value:fmtFCFA(K.totalAttendu), sousLignes:[
         {label:'Devis', value:fmtFCFA(K.attenduDevis)}, {label:'Forfaits', value:fmtFCFA(K.attenduForfait)}]},
       {label:'Encaissements realises', value:fmtFCFA(K.encaisseRealise), sousLignes:[
@@ -7426,7 +7523,7 @@ function rapportKPIs(sectionId, bornes){
   if(sectionId==='facturation'){
     var collecte = collecterExpositionFinanciere();
     var totalExpo = 0; Object.keys(collecte.buckets).forEach(function(k){ totalExpo += collecte.buckets[k].totalExpose; });
-    return [{label:'Exposition financiere totale', value:fmtFCFA(totalExpo)}, {label:'Nombre de clients exposes', value:Object.keys(collecte.buckets).length}];
+    return [{label:'Exposition financiere totale', value:fmtFCFA(totalExpo)}, {label:'Nombre de clients exposes', value:Object.keys(Object.keys(collecte.buckets).reduce(function(o,k){ o[collecte.buckets[k].client]=1; return o; },{})).length}];
   }
   if(sectionId==='caisse'){
     var solde = CAISSE_MOUVEMENTS.reduce(function(s,mv){return s+(mv.type==='entree'?(parseFloat(mv.montant)||0):-(parseFloat(mv.montant)||0));},0);
@@ -10048,7 +10145,30 @@ function pageFacturationEcheances(){
 var bilanPeriode = 'mois';     // 'mois' | 'trimestre' | 'annee' | 'custom' | 'tout'
 var bilanDebut = '';
 var bilanFin = '';
-var bilanTri = 'ca';           // 'ca' | 'du' | 'marge' | 'client' | 'taux'
+var bilanTri = 'ca';           // 'client' | 'ca' | 'du' | 'pct' | 'delai' | 'expose' | 'marge' | 'taux'
+var bilanSens = 'desc';        // BILAN TRI : 'desc' = du plus grand au plus petit, 'asc' = l'inverse
+// BILAN TRI : valeur triee de chaque colonne (null = inconnue, toujours en fin de liste)
+var BILAN_TRI_VALEURS = {
+  ca: function(c){ return c.ca; }, du: function(c){ return c.reste; }, pct: function(c){ return c.pctEncaisse; },
+  delai: function(c){ return c.delaiMoyen; }, expose: function(c){ return c.expose; },
+  marge: function(c){ return c.marge; }, taux: function(c){ return c.taux; }
+};
+// 1er clic : du plus grand au plus petit (A -> Z pour le nom) ; clic suivant : sens inverse
+function bilanTrierPar(cle){
+  if(bilanTri === cle) bilanSens = bilanSens === 'desc' ? 'asc' : 'desc';
+  else { bilanTri = cle; bilanSens = cle === 'client' ? 'asc' : 'desc'; }
+  renderPage();
+}
+function bilanInverserSens(){ bilanSens = bilanSens === 'desc' ? 'asc' : 'desc'; renderPage(); }
+// Libelle de colonne cliquable, avec la fleche du sens sur la colonne triee
+function bilanEnteteTri(cle, libelle, droite){
+  var actif = bilanTri === cle;
+  var fleche = actif ? (bilanSens === 'desc' ? '&#x25BC;' : '&#x25B2;') : '&#x21C5;';
+  var aide = cle === 'client' ? 'Trier par nom (A-Z / Z-A)' : 'Trier : du plus grand au plus petit, ou l\'inverse';
+  return '<th style="cursor:pointer;user-select:none;white-space:nowrap' + (droite ? ';text-align:right' : '') + (actif ? ';color:#185FA5' : '') + '"'
+    + ' title="' + aide + '" onclick="bilanTrierPar(\'' + cle + '\')">' + libelle
+    + ' <span style="font-size:10px;' + (actif ? '' : 'opacity:.35') + '">' + fleche + '</span></th>';
+}
 var bilanClientsOuverts = {};
 
 function bilanSetPeriode(p){ bilanPeriode = p; renderPage(); }
@@ -10057,7 +10177,7 @@ function bilanSetDateByEl(el){
   bilanPeriode = 'custom';
   renderPage();
 }
-function bilanSetTriByEl(el){ bilanTri = el.value; renderPage(); }
+function bilanSetTriByEl(el){ bilanTri = el.value; bilanSens = el.value === 'client' ? 'asc' : 'desc'; renderPage(); }
 function bilanBasculerClient(el){
   var k = el.getAttribute('data-bcl');
   bilanClientsOuverts[k] = !bilanClientsOuverts[k];
@@ -10209,12 +10329,18 @@ function bilanParClient(){
     return c;
   });
 
+  // BILAN TRI : toute colonne, dans les deux sens ; valeur inconnue toujours en fin de liste ;
+  // a valeur egale, ordre alphabetique des clients
+  var sens = bilanSens === 'asc' ? 1 : -1;
+  var valeur = BILAN_TRI_VALEURS[bilanTri] || BILAN_TRI_VALEURS.ca;
   liste.sort(function(a, z){
-    if(bilanTri === 'client') return a.client.localeCompare(z.client, 'fr');
-    if(bilanTri === 'du') return z.reste - a.reste;
-    if(bilanTri === 'marge') return z.marge - a.marge;
-    if(bilanTri === 'taux') return (z.taux === null ? -1e9 : z.taux) - (a.taux === null ? -1e9 : a.taux);
-    return z.ca - a.ca;
+    var nom = a.client.localeCompare(z.client, 'fr');
+    if(bilanTri === 'client') return sens * nom;
+    var va = valeur(a), vz = valeur(z);
+    var ia = va === null || va === undefined || isNaN(va), iz = vz === null || vz === undefined || isNaN(vz);
+    if(ia || iz) return ia === iz ? nom : (ia ? 1 : -1);
+    if(va === vz) return nom;
+    return sens * (va - vz);
   });
   return liste;
 }
@@ -10614,10 +10740,14 @@ function pageBilanGlobal(){
   h += '</div>';
   h += '<div class="flex gap6" style="align-items:center"><span class="xs muted">Trier par</span>';
   h += '<select class="inp" style="width:auto;font-size:11px" onchange="bilanSetTriByEl(this)">';
-  [['ca','CA genere'],['du','Montant du'],['marge','Marge'],['taux','Taux de rentabilite'],['client','Nom du client']].forEach(function(t){
+  [['ca','CA genere'],['du','Montant du'],['pct','% encaisse'],['delai','Delai moyen'],['expose','Expose'],['marge','Marge'],['taux','Taux de rentabilite'],['client','Nom du client']].forEach(function(t){
     h += '<option value="' + t[0] + '"' + (bilanTri === t[0] ? ' selected' : '') + '>' + t[1] + '</option>';
   });
-  h += '</select></div></div>';
+  h += '</select>';
+  // BILAN TRI : sens du classement
+  h += '<button class="btn btn-sm" style="font-size:11px" title="Inverser le sens" onclick="bilanInverserSens()">'
+     + (bilanTri === 'client' ? (bilanSens === 'asc' ? 'A &#x2192; Z' : 'Z &#x2192; A') : (bilanSens === 'desc' ? '&#x25BC; plus grand d\'abord' : '&#x25B2; plus petit d\'abord')) + '</button>';
+  h += '</div></div>';
 
   h += '<div class="kgrid k4" style="margin-bottom:14px">';
   h += kpi('CA genere', totCA ? Math.round(totCA).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA' : '—', 'blue');
@@ -10636,9 +10766,10 @@ function pageBilanGlobal(){
   h += bilanBarreExport(liste.length);
 
   h += '<div class="card"><div class="tw"><table><thead><tr>';
-  h += '<th>Client</th><th>Type</th><th style="text-align:right">CA genere</th><th style="text-align:right">Montant du</th>';
-  h += '<th style="text-align:right">% encaisse</th><th style="text-align:right">Delai moyen</th>';
-  h += '<th style="text-align:right">Expose</th><th style="text-align:right">Marge</th><th style="text-align:right">Rentabilite</th>';
+  // BILAN TRI : libelles cliquables
+  h += bilanEnteteTri('client', 'Client', false) + '<th>Type</th>' + bilanEnteteTri('ca', 'CA genere', true) + bilanEnteteTri('du', 'Montant du', true);
+  h += bilanEnteteTri('pct', '% encaisse', true) + bilanEnteteTri('delai', 'Delai moyen', true);
+  h += bilanEnteteTri('expose', 'Expose', true) + bilanEnteteTri('marge', 'Marge', true) + bilanEnteteTri('taux', 'Rentabilite', true);
   h += '</tr></thead><tbody>';
 
   if(!liste.length){
@@ -11983,10 +12114,11 @@ function creancesParClient(dossiers, enCoursNonFactures){
   Object.keys(clientsKpi).forEach(function(k){ totalReste += clientsKpi[k].totalReste; });
 
   var collecteExpo = collecterExpositionFinanciere();
-  var totalExpo = 0, clientsExposes = 0;
+  var totalExpo = 0, clientsExposes = 0, vusExpo = {};   // EXPOSITION COHERENTE
   Object.keys(collecteExpo.buckets).forEach(function(k){
     totalExpo += collecteExpo.buckets[k].totalExpose;
-    if(collecteExpo.buckets[k].totalExpose>0) clientsExposes++;
+    var cliExpo = collecteExpo.buckets[k].client;
+    if(collecteExpo.buckets[k].totalExpose>0 && !vusExpo[cliExpo]){ vusExpo[cliExpo] = 1; clientsExposes++; }
   });
 
   var delaiGlobal = (function(){
@@ -12475,19 +12607,19 @@ function traiterClientForfaitExposition(client){
   var maintenant = Date.now();
   var engageParMois = {}, dossiersParMois = {};
 
-  vehicles.filter(function(v){return v.client===client && v.typeClient==='forfait' && v.chiffrage && v.chiffrage.lignes;})
+  vehicles.filter(function(v){return v.client===client && v.typeClient==='forfait';})   // EXPOSITION COHERENTE : aussi sans piece (depenses Caisse)
     .forEach(function(v){
       // Meme regle que pour les devis : seules les pieces dont l'achat a
       // ete valide (cl.valideDir) representent un engagement financier
       // reel a inclure dans l'exposition. On y ajoute aussi les depenses
       // de Caisse attribuees a ce vehicule precis.
-      var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
+      var lignes = ((v.chiffrage && v.chiffrage.lignes) || []).filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true && !cl.differe;});   // EXPOSITION COHERENTE : hors travaux mis de cote
       var montantEngagePieces = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
       var montantEngageCaisse = CAISSE_MOUVEMENTS.filter(function(m){return m.type==='sortie' && m.vehiculeId===v.id;})
         .reduce(function(s,m){return s+(parseFloat(m.montant)||0);},0);
       var montantEngage = montantEngagePieces + montantEngageCaisse;
       if(!montantEngage) return;
-      var dateEngagement = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree;
+      var dateEngagement = (v.chiffrage && (v.chiffrage.valideDirLe || v.chiffrage.soumisLe)) || v.entree;
       if(!dateEngagement) return;
       var d = new Date(dateEngagement);
       var moisKey = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
@@ -12522,7 +12654,17 @@ function traiterClientForfaitExposition(client){
     ? Math.floor((maintenant - new Date(ledger.debutExpositionActuelle+'-01').getTime())/86400000)
     : 0;
 
+  // TRESORERIE PAR TYPE : exposition rattachee aux mois les plus recents (les paiements eteignent
+  // d'abord les depenses les plus anciennes) -> {'AAAA-MM': montant}
+  var expoParMois = {}, resteARattacher = ledger.montantExpose;
+  ledger.detail.slice().reverse().forEach(function(d){
+    if(resteARattacher <= 0) return;
+    var part = Math.min(d.engage || 0, resteARattacher);
+    if(part > 0){ expoParMois[d.mois] = part; resteARattacher -= part; }
+  });
+
   return {
+    expoParMois:expoParMois,
     client:client, type:'forfait',
     montantExpose:ledger.montantExpose, forfaitMensuel:forfaitMensuel,
     factureFenetre:forfaitMensuel, nbMoisFenetre:nbMoisFenetre,
@@ -12543,12 +12685,12 @@ function collecterExpositionFinanciere(){
   var totalEngageGlobal = 0;
 
   // ── DEVIS : inchange, par dossier ──
-  vehicles.filter(function(v){return v.typeClient!=='forfait' && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length;}).forEach(function(v){
+  vehicles.filter(function(v){return v.typeClient!=='forfait';}).forEach(function(v){   // EXPOSITION COHERENTE : aussi sans piece (depenses Caisse)
     // Seules les pieces dont l'ACHAT A ETE VALIDE par Direction (cl.valideDir)
     // representent un vrai engagement financier reel — une piece juste
     // presente dans le chiffrage mais jamais validee n'a pas encore ete
     // achetee, elle ne doit pas compter dans l'exposition.
-    var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
+    var lignes = ((v.chiffrage && v.chiffrage.lignes) || []).filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true && !cl.differe;});   // EXPOSITION COHERENTE : hors travaux mis de cote
     var montantEngagePieces = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
     // Ajoute aussi les depenses de Caisse attribuees a ce vehicule precis
     // (carburant, frais divers... rattaches lors de la saisie) — completent
@@ -12558,12 +12700,21 @@ function collecterExpositionFinanciere(){
     var montantEngage = montantEngagePieces + montantEngageCaisse;
     if(!montantEngage) return;
     var montantPaye = parseFloat(v.montantPaye)||0;
-    var montantExpose = Math.max(0, montantEngage - montantPaye);
+    // EXPOSITION COHERENTE : dossier livre = facture definitive ; on ne peut plus recuperer que
+    // le montant facture. Un dossier solde qui a coute plus que facture est une PERTE (visible
+    // dans la marge), pas une exposition en attente de remboursement.
+    var recuperable = montantEngage;
+    if(LIV_ST.indexOf(v.status) >= 0){
+      var factureFinale = ((v.chiffrage && v.chiffrage.lignes) || []).filter(function(cl){return (cl.piece||'').trim() && !cl.differe;})
+        .reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
+      if(factureFinale > 0) recuperable = Math.min(montantEngage, factureFinale);
+    }
+    var montantExpose = Math.max(0, recuperable - montantPaye);
     if(montantExpose<=0) return;
 
     totalEngageGlobal += montantEngage;
     var dateOuverture = v.entree || 0;
-    var dateEngagement = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || maintenant;
+    var dateEngagement = (v.chiffrage && (v.chiffrage.valideDirLe || v.chiffrage.soumisLe)) || v.entree || maintenant;
     var joursExposition = Math.floor((maintenant-dateEngagement)/86400000);
     var montantFacture = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     var margePrevisionnelle = montantFacture - montantEngage;
@@ -12571,7 +12722,7 @@ function collecterExpositionFinanciere(){
     if(!buckets[v.client]) buckets[v.client] = {client:v.client, type:'devis', dossiers:[], totalExpose:0, totalFacture:0, totalMarge:0};
     buckets[v.client].dossiers.push({
       id:v.id, immat:v.immat, marque:v.marque, modele:v.modele, entite:v.entite,
-      dateOuverture:dateOuverture, montantFacture:montantFacture, montantEngage:montantEngage,
+      dateOuverture:dateOuverture, dateEngagement:dateEngagement, montantFacture:montantFacture, montantEngage:montantEngage,   // TRESORERIE PAR TYPE
       montantPaye:montantPaye, montantExpose:montantExpose, margePrevisionnelle:margePrevisionnelle,
       joursExposition:joursExposition
     });
@@ -12592,10 +12743,14 @@ function collecterExpositionFinanciere(){
     var resultat = traiterClientForfaitExposition(client);
     if(!resultat) return;
     totalEngageGlobal += resultat.dossiers.reduce(function(s,d){return s+d.montantEngage;},0);
-    buckets[client] = {
+    // EXPOSITION COHERENTE : un client deja expose en devis garde sa ligne devis ; le forfait
+    // s'ajoute sur une seconde ligne (meme nom de client) au lieu de l'ecraser.
+    var cleForfait = buckets[client] ? client + ' \u2014 forfait' : client;
+    buckets[cleForfait] = {
       client:client, type:'forfait',
       dossiers: resultat.dossiers,
       totalExpose: resultat.montantExpose,
+      expoParMois: resultat.expoParMois,   // TRESORERIE PAR TYPE
       totalFacture: resultat.factureFenetre,
       totalMarge: resultat.margeTotale,
       forfaitMensuel: resultat.forfaitMensuel,
@@ -12616,7 +12771,8 @@ function pageExpositionFinanciere(){
   var html = '<div class="kgrid k4" style="margin-bottom:16px">';
   html += kpi('Total engage en cours', collecte.totalEngageGlobal?collecte.totalEngageGlobal.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', 'blue');
   html += kpi('Total expose (non couvert)', totalExposeGlobal?totalExposeGlobal.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', totalExposeGlobal>0?'red':'green');
-  html += kpi('Clients exposes', clientsListe.length, clientsListe.length>0?'amber':'green');
+  var nbClientsExposes = Object.keys(clientsListe.reduce(function(o,b){ o[b.client]=1; return o; },{})).length;   // EXPOSITION COHERENTE
+  html += kpi('Clients exposes', nbClientsExposes, nbClientsExposes>0?'amber':'green');
   html += kpi('Total dossiers exposes', clientsListe.reduce(function(s,c){return s+c.dossiers.length;},0), '');
   html += '</div>';
 
@@ -13891,8 +14047,30 @@ function barrePeriode(filtreActif, prefixData, onClickFn, idDebut, idFin, valDeb
 // l'identique par le Rapport financier : garantit qu'il n'y a JAMAIS de
 // divergence entre ce qui s'affiche sur le tableau de bord et ce qui
 // apparait dans un rapport genere.
+// REPARTITION CA : categorie d'un dossier pour la repartition du CA (la plus specifique d'abord)
+var REPARTITION_CA_CATEGORIES = [
+  {cle:'entreprise', label:'Entreprise', couleur:'#185FA5'},
+  {cle:'particulier', label:'Particulier', couleur:'#3B6D11'},
+  {cle:'assurance', label:'Assurance', couleur:'#854F0B'},
+  {cle:'tkm', label:'TKM', couleur:'#7A3FA0'}
+];
+function categorieCADossier(v){
+  if(v.tkm === true) return 'tkm';
+  if(estDossierAssurance(v)) return 'assurance';
+  return String(v.entite || '').toLowerCase() === 'entreprise' ? 'entreprise' : 'particulier';
+}
+// Facture forfait (abonnement) : Entreprise, sauf client dont les vehicules sont majoritairement « Particulier »
+function categorieCAClientForfait(client){
+  var e = 0, p = 0;
+  vehicles.forEach(function(v){ if(v.client === client){ if(String(v.entite || '').toLowerCase() === 'particulier') p++; else e++; } });
+  return p > e ? 'particulier' : 'entreprise';
+}
+
 function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
   var caDevis=0, achatDevis=0, caForfait=0, achatForfait=0;
+  // REPARTITION CA : memes dossiers et memes montants que le CA de la periode
+  var repartitionCA = {}, vehiculesTraites = {};
+  REPARTITION_CA_CATEGORIES.forEach(function(c){ repartitionCA[c.cle] = {ca: 0, vehicules: 0}; });
   vehicles.forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     var dateFacture = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
@@ -13902,6 +14080,10 @@ function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
     var achat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
     if(v.typeClient==='forfait'){ caForfait+=vente; achatForfait+=achat; }
     else { caDevis+=vente; achatDevis+=achat; }
+    // REPARTITION CA
+    var catCA = categorieCADossier(v);
+    repartitionCA[catCA].ca += vente;
+    if(lignes.length && !vehiculesTraites[v.id]){ vehiculesTraites[v.id] = 1; repartitionCA[catCA].vehicules++; }
   });
   FORFAIT_FACTURES.forEach(function(f){
     // Le CA d'une facture forfait est rattache au MOIS QUE LE FORFAIT
@@ -13914,6 +14096,7 @@ function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
     var dateRepresentative = new Date(parseInt(parts[0],10), parseInt(parts[1],10)-1, 15).getTime();
     if(dateRepresentative<bornesActivite.deb || dateRepresentative>bornesActivite.fin) return;
     caForfait += f.montant||0;
+    repartitionCA[categorieCAClientForfait(f.client)].ca += f.montant||0;   // REPARTITION CA
   });
 
   var caTotal = caDevis+caForfait;
@@ -13934,14 +14117,16 @@ function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
     if(c.periodicite==='annuel') return s+m/12;
     return s+m;
   },0);
-  var joursPeriodeActivite = Math.max(1, Math.round((bornesActivite.fin-bornesActivite.deb)/86400000));
-  var chargesFixesPeriode = chargesFixesMensuelEquiv * (joursPeriodeActivite/30);
+  var moisPeriodeActivite = moisEquivalentsPeriode(bornesActivite.deb, bornesActivite.fin);   // RESULTAT NET
+  var detailChargesFixes = chargesFixesDePeriode(bornesActivite.deb, bornesActivite.fin);   // CHARGES REELLES
+  var chargesFixesPeriode = detailChargesFixes.total;
 
   var dettesManuellesPeriode = DETTES_MANUELLES.filter(function(dm){
     return dm.dateAchat>=bornesActivite.deb && dm.dateAchat<=bornesActivite.fin;
   }).reduce(function(s,dm){return s+(parseFloat(dm.prixAchat)||0)*(parseInt(dm.qte)||1);},0);
 
-  var resultatOperationnel = caTotal - achatTotal - chargesVariablesCaisse - chargesFixesPeriode - dettesManuellesPeriode;
+  var resultatAvantChargesFixes = caTotal - achatTotal - chargesVariablesCaisse - dettesManuellesPeriode;   // RESULTAT NET
+  var resultatOperationnel = resultatAvantChargesFixes - chargesFixesPeriode;   // resultat net, apres charges fixes
   var margeOperationnelle = caTotal>0 ? (resultatOperationnel/caTotal*100) : null;
 
   var encaissementsAttendus = collecterEncaissementsAttendus();
@@ -14000,6 +14185,46 @@ function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
     });
   })();
 
+  // TRESORERIE PAR TYPE : delai moyen de paiement et exposition par type de client (periode de tresorerie)
+  var tresoParType = {};
+  REPARTITION_CA_CATEGORIES.forEach(function(c){ tresoParType[c.cle] = {delais: [], expose: 0}; });
+  vehicles.forEach(function(v){
+    var dPaie = datePaiementPourDelai(v);
+    if(!dPaie || !v.factureDeposeeLe || dPaie < bornesTreso.deb || dPaie > bornesTreso.fin) return;
+    tresoParType[categorieCADossier(v)].delais.push(Math.floor((dPaie - v.factureDeposeeLe)/86400000));
+  });
+  FORFAIT_FACTURES.forEach(function(f){
+    if(f.statut !== 'payee' || !f.paiementDate || !f.deposeeDate || f.paiementDate < bornesTreso.deb || f.paiementDate > bornesTreso.fin) return;
+    tresoParType[categorieCAClientForfait(f.client)].delais.push(Math.floor((f.paiementDate - f.deposeeDate)/86400000));
+  });
+  (function(){
+    var col = collecterExpositionFinanciere(), parId = {};
+    vehicles.forEach(function(v){ parId[v.id] = v; });
+    Object.keys(col.buckets).forEach(function(k){
+      var b = col.buckets[k];
+      if(b.type === 'forfait'){
+        var cat = categorieCAClientForfait(b.client);
+        Object.keys(b.expoParMois || {}).forEach(function(m){
+          var p = m.split('-'), t = new Date(parseInt(p[0],10), parseInt(p[1],10)-1, 15).getTime();
+          if(t >= bornesTreso.deb && t <= bornesTreso.fin) tresoParType[cat].expose += b.expoParMois[m];
+        });
+      } else {
+        (b.dossiers || []).forEach(function(d){
+          if(!d.dateEngagement || d.dateEngagement < bornesTreso.deb || d.dateEngagement > bornesTreso.fin) return;
+          var v = parId[d.id];
+          tresoParType[v ? categorieCADossier(v) : 'particulier'].expose += d.montantExpose;
+        });
+      }
+    });
+  })();
+  var totalExposePeriode = 0;
+  REPARTITION_CA_CATEGORIES.forEach(function(c){
+    var t = tresoParType[c.cle];
+    t.delaiMoyen = t.delais.length ? Math.round(t.delais.reduce(function(a, x){ return a + x; }, 0) / t.delais.length) : null;
+    t.nbReglements = t.delais.length;
+    totalExposePeriode += t.expose;
+  });
+
   var decaissementsAttendus = collecterDecaissementsAttendus();
   var echDansPeriode = decaissementsAttendus.filter(function(d){return d.dateEcheance>=bornesTreso.deb && d.dateEcheance<=bornesTreso.fin;});
   var echFourn = echDansPeriode.filter(function(d){return d.categorie==='fournisseur';}).reduce(function(s,d){return s+d.montant;},0);
@@ -14018,10 +14243,14 @@ function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
   toutesEcheances.sort(function(a,b){return a.dateEcheance-b.dateEcheance;});
 
   return {
+    tresoParType:tresoParType, totalExposePeriode:totalExposePeriode,   // TRESORERIE PAR TYPE
+    repartitionCA:repartitionCA, nbVehiculesTraites:Object.keys(vehiculesTraites).length,   // REPARTITION CA
     caDevis:caDevis, achatDevis:achatDevis, caForfait:caForfait, achatForfait:achatForfait,
     caTotal:caTotal, achatTotal:achatTotal, margeDevis:margeDevis, margeForfait:margeForfait, margeTotal:margeTotal,
     tauxDevis:tauxDevis, tauxForfait:tauxForfait, tauxTotal:tauxTotal,
     chargesVariablesCaisse:chargesVariablesCaisse, chargesFixesPeriode:chargesFixesPeriode, dettesManuellesPeriode:dettesManuellesPeriode,
+    resultatAvantChargesFixes:resultatAvantChargesFixes, chargesFixesMensuel:chargesFixesMensuelEquiv, moisPeriodeActivite:moisPeriodeActivite,
+    chargesFixesPayees:detailChargesFixes.paye, chargesFixesNonPayees:detailChargesFixes.prevuNonPaye,
     resultatOperationnel:resultatOperationnel, margeOperationnelle:margeOperationnelle,
     totalAttendu:totalAttendu, attenduDevis:attenduDevis, attenduForfait:attenduForfait,
     encaisseRealise:encaisseRealise, tauxEncaissement:tauxEncaissement, expositionTotale:expositionTotale,
@@ -14089,16 +14318,59 @@ function pageFinancesDashboard(){
   ]);
   html += '</div>';
 
+  // REPARTITION CA : Entreprise / Particulier / Assurance / TKM + vehicules traites (periode d'activite)
+  (function(){
+    var R = K.repartitionCA || {}, totRep = 0;
+    REPARTITION_CA_CATEGORIES.forEach(function(c){ totRep += (R[c.cle] && R[c.cle].ca) || 0; });
+    html += '<div class="card" style="padding:14px 16px;margin:-8px 0 20px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:10px">'
+         + '<div class="fw7">Repartition du CA par type de client</div>'
+         + '<div><span class="xs muted">Vehicules traites sur la periode : </span><strong style="font-size:18px;color:#185FA5">' + (K.nbVehiculesTraites || 0) + '</strong></div></div>';
+    // barre empilee
+    html += '<div style="display:flex;height:12px;border-radius:6px;overflow:hidden;background:#eee;margin-bottom:12px">';
+    REPARTITION_CA_CATEGORIES.forEach(function(c){
+      var v = (R[c.cle] && R[c.cle].ca) || 0;
+      if(totRep > 0 && v > 0) html += '<div title="' + c.label + '" style="width:' + (v / totRep * 100).toFixed(2) + '%;background:' + c.couleur + '"></div>';
+    });
+    html += '</div>';
+    html += '<div class="kgrid k4" style="margin-bottom:0">';
+    REPARTITION_CA_CATEGORIES.forEach(function(c){
+      var r = R[c.cle] || {ca: 0, vehicules: 0};
+      var pct = totRep > 0 ? (r.ca / totRep * 100) : null;
+      html += '<div style="border-left:4px solid ' + c.couleur + ';padding:4px 10px">'
+           + '<div style="font-size:15px;font-weight:800;color:' + c.couleur + '">' + c.label + '</div>'
+           + '<div style="font-size:18px;font-weight:700;color:' + c.couleur + '">' + (pct === null ? '—' : pct.toFixed(1) + '%') + '</div>'
+           + '<div style="font-size:13px;font-family:monospace">' + Math.round(r.ca).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA</div>'
+           + '<div class="xs muted">' + r.vehicules + ' vehicule' + (r.vehicules > 1 ? 's' : '') + '</div></div>';
+    });
+    html += '</div>';
+    html += '</div>';
+  })();
+
   // ── Marge operationnelle : CA - pieces - charges variables (Caisse) -
   // charges fixes proratisees. Indicateur de rentabilite REELLE, plus
   // exigeant que la marge brute ci-dessus. ──
-  html += '<div class="kgrid k5" style="margin-bottom:20px">';
+  // RESULTAT NET : resultat avant charges fixes, charges fixes (mensuel x nombre de mois), resultat net
+  var resultatAvantChargesFixes = K.resultatAvantChargesFixes, moisCF = K.moisPeriodeActivite;
+  var fmtMoisCF = (Math.abs(moisCF - Math.round(moisCF)) < 0.0001 ? String(Math.round(moisCF)) : moisCF.toFixed(2).replace('.', ',')) + ' mois';
+  html += '<div class="kgrid k3" style="margin-bottom:12px">';
   html += bloc('Charges variables (Caisse)', chargesVariablesCaisse?chargesVariablesCaisse.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', '#854F0B', []);
   html += bloc('Dettes fournisseurs (manuelles)', dettesManuellesPeriode?dettesManuellesPeriode.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', '#854F0B', []);
-  html += bloc('Charges fixes (periode)', chargesFixesPeriode?Math.round(chargesFixesPeriode).toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', '#854F0B', []);
-  html += bloc('Resultat operationnel', resultatOperationnel?(resultatOperationnel>0?'+':'')+Math.round(resultatOperationnel).toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', resultatOperationnel>=0?'#3B6D11':'#A32D2D', []);
-  html += bloc('Marge operationnelle', margeOperationnelle!==null?margeOperationnelle.toFixed(1)+'%':'—', margeOperationnelle!==null&&margeOperationnelle>=10?'#3B6D11':(margeOperationnelle!==null&&margeOperationnelle>=0?'#854F0B':'#A32D2D'), [
-    {label:'CA - pieces - Caisse - dettes - charges fixes', value:'/ CA'}
+  html += bloc('Resultat avant charges fixes', resultatAvantChargesFixes?(resultatAvantChargesFixes>0?'+':'')+Math.round(resultatAvantChargesFixes).toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', resultatAvantChargesFixes>=0?'#3B6D11':'#A32D2D', [
+    {label:'CA - pieces - Caisse - dettes', value:''}
+  ]);
+  html += '</div>';
+  html += '<div class="kgrid k3" style="margin-bottom:20px">';
+  html += bloc('Charges fixes (periode)', chargesFixesPeriode?Math.round(chargesFixesPeriode).toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', '#854F0B', [
+    {label:'Payees (reel)', value:Math.round(K.chargesFixesPayees||0).toLocaleString('fr-FR', GOS_FMT0)},
+    {label:'Prevues non payees', value:Math.round(K.chargesFixesNonPayees||0).toLocaleString('fr-FR', GOS_FMT0)},
+    {label:'Periode', value:fmtMoisCF}
+  ]);
+  html += bloc('Resultat net (apres charges fixes)', resultatOperationnel?(resultatOperationnel>0?'+':'')+Math.round(resultatOperationnel).toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', resultatOperationnel>=0?'#3B6D11':'#A32D2D', [
+    {label:'Resultat avant charges fixes - charges fixes', value:''}
+  ]);
+  html += bloc('Marge nette', margeOperationnelle!==null?margeOperationnelle.toFixed(1)+'%':'—', margeOperationnelle!==null&&margeOperationnelle>=10?'#3B6D11':(margeOperationnelle!==null&&margeOperationnelle>=0?'#854F0B':'#A32D2D'), [
+    {label:'Resultat net', value:'/ CA'}
   ]);
   html += '</div>';
 
@@ -14124,6 +14396,83 @@ function pageFinancesDashboard(){
     {label:'Engagements bancaires', value:echEngag?echEngag.toLocaleString('fr-FR', GOS_FMT0):'—'}
   ]);
   html += '</div>';
+
+  // TRESORERIE PAR TYPE : deux blocs — exposition par type, puis delai moyen de paiement par type
+  (function(){
+    var T = K.tresoParType || {}, totE = K.totalExposePeriode || 0;
+    var titreType = function(c){ return '<div style="font-size:15px;font-weight:800;color:' + c.couleur + ';margin-bottom:4px">' + c.label + '</div>'; };
+    // -- Exposition par type de client
+    html += '<div class="card" style="padding:14px 16px;margin:-8px 0 16px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:10px">'
+         + '<div class="fw7">Exposition par type de client</div>'
+         + '<div><span class="xs muted">Total expose (dossiers engages sur la periode) : </span><strong style="font-size:16px;color:#A32D2D">'
+         + (totE ? Math.round(totE).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA' : '—') + '</strong></div></div>';
+    html += '<div style="display:flex;height:12px;border-radius:6px;overflow:hidden;background:#eee;margin-bottom:12px">';
+    REPARTITION_CA_CATEGORIES.forEach(function(c){
+      var e = (T[c.cle] && T[c.cle].expose) || 0;
+      if(totE > 0 && e > 0) html += '<div title="' + c.label + '" style="width:' + (e / totE * 100).toFixed(2) + '%;background:' + c.couleur + '"></div>';
+    });
+    html += '</div><div class="kgrid k4" style="margin-bottom:0">';
+    REPARTITION_CA_CATEGORIES.forEach(function(c){
+      var t = T[c.cle] || {expose: 0};
+      var pct = totE > 0 ? (t.expose / totE * 100) : null;
+      html += '<div style="border-left:4px solid ' + c.couleur + ';padding:4px 10px">' + titreType(c)
+           + '<div style="font-size:18px;font-weight:700;color:' + c.couleur + '">' + (pct === null ? '—' : pct.toFixed(1) + '%') + '</div>'
+           + '<div style="font-size:13px;font-family:monospace;color:#A32D2D">' + Math.round(t.expose).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA</div></div>';
+    });
+    html += '</div></div>';
+    // -- Delai moyen de paiement par type de client
+    // Delai general = moyenne de TOUS les reglements de la periode. Contribution d'un type = somme de
+    // ses delais / nombre total de reglements : les quatre contributions s'additionnent pour donner
+    // le delai general, et la barre montre qui l'allonge le plus.
+    var nbTot = 0, sommeTot = 0, contrib = {};
+    REPARTITION_CA_CATEGORIES.forEach(function(c){
+      var d = (T[c.cle] && T[c.cle].delais) || [];
+      nbTot += d.length; sommeTot += d.reduce(function(a, x){ return a + x; }, 0);
+    });
+    var delaiGeneral = nbTot ? sommeTot / nbTot : null, totPositif = 0;
+    REPARTITION_CA_CATEGORIES.forEach(function(c){
+      var d = (T[c.cle] && T[c.cle].delais) || [];
+      contrib[c.cle] = nbTot ? d.reduce(function(a, x){ return a + x; }, 0) / nbTot : 0;
+      totPositif += Math.max(0, contrib[c.cle]);
+    });
+    var fmtJ = function(x){ return (Math.round(x * 10) / 10).toLocaleString('fr-FR') + ' j'; };
+    html += '<div class="card" style="padding:14px 16px;margin:0 0 20px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:10px">'
+         + '<div class="fw7">Delai moyen de paiement par type de client</div>'
+         + '<div><span class="xs muted">Delai moyen general : </span><strong style="font-size:18px;color:#1a1a1a">'
+         + (delaiGeneral === null ? '—' : Math.round(delaiGeneral) + ' jours') + '</strong>'
+         + '<span class="xs muted"> (' + nbTot + ' reglement' + (nbTot > 1 ? 's' : '') + ')</span></div></div>';
+    html += '<div class="kgrid k4" style="margin-bottom:0">';
+    REPARTITION_CA_CATEGORIES.forEach(function(c){
+      var t = T[c.cle] || {delaiMoyen: null, nbReglements: 0};
+      html += '<div style="border-left:4px solid ' + c.couleur + ';padding:4px 10px">' + titreType(c)
+           + '<div style="font-size:18px;font-weight:700;color:#1a1a1a">' + (t.delaiMoyen === null ? '—' : t.delaiMoyen + ' jours') + '</div>'
+           + '<div class="xs muted">' + t.nbReglements + ' reglement' + (t.nbReglements > 1 ? 's' : '') + ' sur la periode</div></div>';
+    });
+    html += '</div>';
+    // ligne graphique : part de chaque type dans le delai general
+    if(delaiGeneral !== null && totPositif > 0){
+      html += '<div style="margin-top:14px;border-top:1px solid #eee;padding-top:10px">';
+      html += '<div style="display:flex;height:22px;border-radius:6px;overflow:hidden;background:#eee">';
+      REPARTITION_CA_CATEGORIES.forEach(function(c){
+        var v = Math.max(0, contrib[c.cle]);
+        if(v <= 0) return;
+        var pct = v / totPositif * 100;
+        html += '<div title="' + c.label + ' : ' + fmtJ(contrib[c.cle]) + ' sur ' + fmtJ(delaiGeneral) + '" style="width:' + pct.toFixed(2) + '%;background:' + c.couleur
+             + ';color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;white-space:nowrap;overflow:hidden">'
+             + (pct >= 8 ? Math.round(pct) + '%' : '') + '</div>';
+      });
+      html += '</div><div style="display:flex;flex-wrap:wrap;gap:4px 18px;margin-top:6px">';
+      REPARTITION_CA_CATEGORIES.forEach(function(c){
+        var v = contrib[c.cle], pct = totPositif > 0 ? Math.max(0, v) / totPositif * 100 : 0;
+        html += '<span class="xs"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + c.couleur + ';margin-right:4px;vertical-align:-1px"></span>'
+             + '<strong style="color:' + c.couleur + '">' + c.label + '</strong> : ' + fmtJ(v) + ' sur ' + fmtJ(delaiGeneral) + ' (' + Math.round(pct) + '%)</span>';
+      });
+      html += '</div></div>';
+    }
+    html += '</div>';
+  })();
 
   // ── Ligne 3 : Factures en retard / Prochaines echeances ──
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">';
@@ -20327,8 +20676,10 @@ function validerAttribTech(){
     if(v.tkm===true && !obstaclesTkmAttrib.length){
       v.chiffrage.lignes.forEach(function(cl){ if((cl.piece||'').trim()) cl.valideDir = true; });
       v.chiffrage.valide = true;
-      v.chiffrage.valideDir = true;
-      v.chiffrage.valideDirLe = Date.now();
+      // CONFLITS VALIDATION : seule la Direction ecrit la « Validation Direction » ; un autre
+      // profil laisse un repere (sinon le serveur refuse et un conflit part chez la Direction)
+      if(currentRole === 'direction'){ v.chiffrage.valideDir = true; v.chiffrage.valideDirLe = Date.now(); }
+      else { v.chiffrage.valideAutoTkmLe = Date.now(); }
       reserverStockVehicule(v);
       v.status = 'travaux_cours';
       v.piecesConfirmees = true;
@@ -21914,6 +22265,7 @@ function renderChiffrageSection(v){
     s += '</div>';
   }
 
+  s += htmlBandeauStockDossier(v);   // STOCK VALIDATION : pieces sorties + Remettre en stock
   if(!v.chiffrage) v.chiffrage = {lignes:[], valide:false, soumisLe:null};
   // Synchroniser les lignes du devis vers le chiffrage si pas encore fait
   d.lignes.filter(function(l){return (l.piece||'').trim();}).forEach(function(dl){
@@ -22083,11 +22435,17 @@ function renderChiffrageSection(v){
         s += '<td style="background:#EAF1FA;font-size:10px">';
         if(artSel){
           var fSel = FOURNISSEURS.find(function(x){ return x.id===artSel.fournisseurId; });
-          var dispoSel = stockDispo(artSel) + (parseInt(cl.stockReserve,10)||0);
+          var qSortieSel = cl.stockSortie ? (parseInt(cl.stockSortieQte,10)||0) : 0;   // STOCK VALIDATION
+          var dispoSel = stockDispo(artSel) + (parseInt(cl.stockReserve,10)||0) + qSortieSel;
           var besoinSel = parseInt(cl.qte,10)||1;
           s += '<div style="font-weight:700;color:#185FA5">'+(htmlFournisseurStock(artSel) || 'Stock')+'</div>';   // STOCK FOURNISSEUR
-          s += '<div style="color:'+(besoinSel>dispoSel?'#A32D2D':'#3B6D11')+'">'+dispoSel+' dispo'
-            + (besoinSel>dispoSel ? ' &#x26A0; il en faut '+besoinSel : '') + '</div>';
+          if(qSortieSel){
+            s += '<div style="color:#3B6D11;font-weight:700">&#x2714; ' + qSortieSel + ' sorti' + (qSortieSel > 1 ? 's' : '') + ' du stock</div>'
+              + '<div class="muted">reste ' + stockDispo(artSel) + ' en stock</div>';
+          } else {
+            s += '<div style="color:'+(besoinSel>dispoSel?'#A32D2D':'#3B6D11')+'">'+dispoSel+' dispo'
+              + (besoinSel>dispoSel ? ' &#x26A0; il en faut '+besoinSel : '') + '</div>';
+          }
         } else {
           s += '<div style="color:#854F0B">&#x2190; Choisir dans la designation</div>';
         }
@@ -22413,6 +22771,7 @@ function addLigneProspect(){
 function supprimerLigneProspect(lid){
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v || !v.chiffrage) return;
+  rendreStockLignes(v, v.chiffrage.lignes.filter(function(l){ return (l.libreId||l.devisId||l.id) === lid; }));   // STOCK VALIDATION
   v.chiffrage.lignes = v.chiffrage.lignes.filter(function(l){ return (l.libreId||l.devisId||l.id) !== lid; });
   saveV();
   openDetKeepEdit(detCurrentVid);
@@ -22742,6 +23101,7 @@ function removeChiffrageLigne(lineId){
   var devisIdsASupprimer = lignesASupprimer.map(function(cl){ return cl.devisId; }).filter(function(id){ return id; });
   var nomsPiecesASupprimer = lignesASupprimer.map(function(cl){ return (cl.piece||'').trim().toLowerCase(); }).filter(function(n){ return n; });
 
+  rendreStockLignes(v, lignesASupprimer);   // STOCK VALIDATION : la piece revient en stock
   v.chiffrage.lignes = v.chiffrage.lignes.filter(function(cl){
     return cl.libreId!==lineId && cl.devisId!==lineId;
   });
@@ -22780,6 +23140,7 @@ function demanderRevalidation(){
   v.chiffrage.valide = true; // chiffrage achats valide
   v.chiffrage.valideDir = false; // reset validation direction
   v.chiffrage.revalidationDemandee = Date.now();
+  v.chiffrage.revalidationDemandeeLe = (typeof heureServeur === 'function' ? heureServeur() : Date.now());   // CONFLITS VALIDATION : repere lisible par tous
   if(!dejaEnPlace){
     // Comportement d'origine : le dossier n'a pas encore franchi la
     // porte de validation initiale (encore en devis) -> l'y envoyer.
@@ -22917,6 +23278,7 @@ function rejeterFinancier(){
   v.stepStart = Date.now();
   if(v.chiffrage){
     v.chiffrage.valide = false; v.chiffrage.devisValideDir = false; v.chiffrage.rejetDir = raison || true;
+    v.chiffrage.rejetDirLe = (typeof heureServeur === 'function' ? heureServeur() : Date.now());   // CONFLITS VALIDATION
     // IMPORTANT : reinitialiser les indicateurs d'achat/livraison — le
     // chiffrage va etre revu, donc l'etat d'achat precedent (pieces deja
     // marquees "livrees", achats deja "lances") n'a plus lieu d'etre tant
@@ -22959,6 +23321,7 @@ function validerChiffrage(){
       // Rechiffrage apres rejet direction -> retour direct direction
       v.status = 'attente_fin';
       v.chiffrage.rejetDir = null;
+      v.chiffrage.rejetLeveLe = (typeof heureServeur === 'function' ? heureServeur() : Date.now());   // CONFLITS VALIDATION
     } else if(v.isDevisCompl){
       // Devis complementaire -> réception doit d'abord envoyer le devis au client
       v.status = 'devis_termine';
@@ -23592,6 +23955,7 @@ function abandonnerDevisDiffere(btn){
     'Le dossier sera cloture. Les pieces non traitees resteront dans les travaux a prevoir.',
     function(){
       v.devisAbandonne = true;
+      reconcilierStockVehicule(v, {toutRendre: true});   // STOCK VALIDATION : devis abandonne
       v.archiveDate = Date.now();
       ajouterCommentaireSysteme(v, 'Devis abandonne apres '+jours+' jour(s) de report — client sans suite');
       if(v.isProspect){
@@ -23980,8 +24344,292 @@ var fournEditId = null;
 // Cycle : reservation a la validation direction, sortie a la livraison technicien.
 // Une ligne de chiffrage porte : stockArticleId (l'article) et stockReserve (qte reservee).
 
-// Reserver le stock pour toutes les lignes validees d'un vehicule
+// ══════════════════════════════════════════════════════════════════════════
+// STOCK VALIDATION (27/10/2026) : une piece validee prise dans le stock SORT du stock
+// des la validation du devis ; elle y revient en cas de retour en arriere, de devis
+// differe, de piece mise de cote, devalidee ou supprimee, ou d'annulation manuelle.
+// Champs d'une ligne : stockSortie (bool), stockSortieQte, stockSortieArticleId,
+// stockAnnule (remise en stock manuelle), stockIgnore (regularisation ignoree).
+// ══════════════════════════════════════════════════════════════════════════
+function gosPeutEcrireStock(){
+  return ['direction','achats','chef_atelier','chef_equipe','technicien'].indexOf(typeof currentRole !== 'undefined' ? currentRole : '') >= 0;
+}
+function _idxStatutStock(st){ return ALL_STATUSES_ORDERED.indexOf(st); }
+// Dossier livre / facture : plus aucun mouvement automatique
+function stockDossierLivre(v){ return _idxStatutStock(v.status) >= _idxStatutStock('facture_emettre') || !!v.devisAbandonne || !!v.clotureForcee; }
+// Ce qui DOIT etre sorti du stock pour chaque ligne. ctx.toutRendre : tout revient en stock ;
+// ctx.livraison : dossier livre regularise a la main (les lignes livrees comptent, validees ou non).
+function planStockVehicule(v, ctx){
+  ctx = ctx || {};
+  var plan = [];
+  if(!v || !v.chiffrage || !v.chiffrage.lignes) return plan;
+  var i = _idxStatutStock(v.status), iVal = _idxStatutStock('valide_fin');
+  v.chiffrage.lignes.forEach(function(cl, idx){
+    var lie = cl.source === 'stock' && !!cl.stockArticleId && !!(cl.piece || '').trim();
+    var artAct = cl.stockSortie ? (cl.stockSortieArticleId || cl.stockArticleId) : null;
+    var qAct = cl.stockSortie ? (parseInt(cl.stockSortieQte, 10) || parseInt(cl.qte, 10) || 1) : 0;
+    if(!lie && !artAct && !cl.stockReserve) return;
+    var artCible = null, qCible = 0;
+    var bloque = ctx.toutRendre || cl.differe || cl.stockAnnule || cl.stockIgnore || v.devisAbandonne || v.clotureForcee;
+    if(lie && !bloque && i >= iVal && (cl.valideDir === true || ctx.livraison)){ artCible = cl.stockArticleId; qCible = parseInt(cl.qte, 10) || 1; }
+    if(artAct !== artCible || qAct !== qCible || cl.stockReserve){
+      plan.push({cl: cl, idx: idx, artAct: artAct, qAct: qAct, artCible: artCible, qCible: qCible});
+    }
+  });
+  return plan;
+}
+// Applique le plan : sorties et retours, controles par le serveur. Renvoie {sorties, retours, manques}.
+function reconcilierStockVehicule(v, ctx){
+  ctx = ctx || {};
+  var bilan = {sorties: [], retours: [], manques: []};
+  if(!v || !v.chiffrage || !v.chiffrage.lignes || !gosPeutEcrireStock()) return bilan;
+  if(stockDossierLivre(v) && !ctx.toutRendre && !ctx.livraison && !ctx.force) return bilan;
+  try{ if(GOS_SYNC.ecritureAutorisee && !GOS_SYNC.ecritureAutorisee()) return bilan; }catch(e){}
+  var plan = planStockVehicule(v, ctx);
+  if(!plan.length) return bilan;
+  var change = false;
+  plan.forEach(function(p){
+    var cl = p.cl;
+    if(cl.stockReserve && !cl.stockSortie){ libererReservationLigne(cl); change = true; }   // ancien circuit : reservation remplacee par la sortie
+    var art = p.artAct, q = p.qAct;
+    var rendre = function(id, n){
+      var a = stockArticleById(id); if(!a || n <= 0) return;
+      a.qte = (parseInt(a.qte, 10) || 0) + n; GOS_SYNC.stockDelta(a, n, 0);
+      bilan.retours.push(a.nom + ' x' + n); change = true;
+    };
+    if(art && art !== p.artCible){ rendre(art, q); art = null; q = 0; }
+    if(p.artCible){
+      var a = stockArticleById(p.artCible), delta = p.qCible - q;
+      if(a && delta > 0){
+        var pris = Math.min(delta, stockDispo(a));
+        if(pris > 0){
+          a.qte = Math.max(0, (parseInt(a.qte, 10) || 0) - pris);
+          GOS_SYNC.stockDelta(a, -pris, 0, {exigeDispo: true, lien: {vid: v.id, idx: p.idx, sortie: pris}});
+          q += pris; bilan.sorties.push(a.nom + ' x' + pris); change = true;
+          if(stockSousSeuil(a)){
+            try{ afficherToastNotif('Stock bas', a.nom + ' : plus que ' + stockDispo(a) + ' en stock (seuil ' + a.seuil + ').', 'alerte'); }catch(e){}
+          }
+        }
+        if(pris < delta) bilan.manques.push(a.nom + ' : ' + (q) + '/' + p.qCible);
+      } else if(a && delta < 0){ rendre(p.artCible, -delta); q += delta; }
+      art = q > 0 ? p.artCible : null;
+    }
+    if(q > 0){ cl.stockSortie = true; cl.stockSortieQte = q; cl.stockSortieArticleId = art; }
+    else { delete cl.stockSortie; delete cl.stockSortieQte; delete cl.stockSortieArticleId; }
+    change = true;
+  });
+  if(change) saveStock();
+  if(bilan.sorties.length || bilan.retours.length){
+    ajouterCommentaireSysteme(v, (bilan.sorties.length ? 'Sortie de stock : ' + bilan.sorties.join(', ') : '')
+      + (bilan.sorties.length && bilan.retours.length ? ' — ' : '') + (bilan.retours.length ? 'Retour en stock : ' + bilan.retours.join(', ') : ''));
+  }
+  if(bilan.manques.length && !ctx.silencieux){
+    try{ afficherToastNotif('Stock insuffisant', bilan.manques.join(' · ') + ' — le reste est a commander.', 'alerte'); }catch(e){}
+  }
+  return bilan;
+}
+// Appele au debut de saveV : seuls les dossiers modifies sur CE poste depuis le dernier enregistrement
+// (empreinte differente) sont rapproches — un dossier recu d'un autre poste ne l'est jamais ici.
+function gosStockReconcilierModifies(){
+  if(!gosPeutEcrireStock() || typeof _dernierEtatVehiculesSave === 'undefined') return;
+  vehicles.forEach(function(v){
+    if(!v.chiffrage || !v.chiffrage.lignes || !v.chiffrage.lignes.length) return;
+    if(!v.chiffrage.lignes.some(function(cl){ return cl.stockArticleId || cl.stockSortie || cl.stockReserve; })) return;
+    var copie = {}; for(var k in v){ if(k !== 'lastModified') copie[k] = v[k]; }
+    if(_dernierEtatVehiculesSave[v.id] === JSON.stringify(copie)) return;   // pas modifie ici
+    reconcilierStockVehicule(v, {});
+  });
+}
+// Avant de retirer des lignes (suppression, cloture, reprise prospect) : leurs pieces reviennent en stock
+function rendreStockLignes(v, lignes){
+  if(!v || !lignes || !lignes.length) return;
+  lignes.forEach(function(cl){ cl.stockAnnule = true; });
+  reconcilierStockVehicule(v, {force: true});
+}
+// Option Direction / Achats : remettre en stock toutes les pieces sorties pour ce dossier
+function remettreEnStockDossier(vid){
+  var v = vehicles.find(function(x){ return x.id === vid; }); if(!v || !v.chiffrage) return;
+  if(!confirm('Remettre en stock les pieces sorties pour ' + v.immat + ' ?\nElles ne ressortiront qu\'apres une nouvelle validation (ou le bouton « Ressortir »).')) return;
+  v.chiffrage.lignes.forEach(function(cl){ if(cl.stockSortie) cl.stockAnnule = true; });
+  var b = reconcilierStockVehicule(v, {force: true});
+  saveV();
+  afficherToastNotif('Remis en stock', b.retours.length ? b.retours.join(', ') : 'Aucune piece a remettre.', 'ok');
+  if(typeof openDetKeepEdit === 'function') openDetKeepEdit(vid);
+}
+function ressortirStockDossier(vid){
+  var v = vehicles.find(function(x){ return x.id === vid; }); if(!v || !v.chiffrage) return;
+  v.chiffrage.lignes.forEach(function(cl){ delete cl.stockAnnule; });
+  var b = reconcilierStockVehicule(v, {force: true});
+  saveV();
+  afficherToastNotif('Sortie de stock', b.sorties.length ? b.sorties.join(', ') : 'Aucune piece a sortir.', 'ok');
+  if(typeof openDetKeepEdit === 'function') openDetKeepEdit(vid);
+}
+// Bandeau du dossier (chiffrage), Direction / Achats
+function htmlBandeauStockDossier(v){
+  if(!v || !v.chiffrage || !v.chiffrage.lignes || ['direction','achats'].indexOf(currentRole) < 0) return '';
+  var sorties = v.chiffrage.lignes.filter(function(cl){ return cl.stockSortie; });
+  var annulees = v.chiffrage.lignes.filter(function(cl){ return cl.stockAnnule && !cl.stockSortie && cl.source === 'stock' && cl.stockArticleId && cl.valideDir; });
+  if(!sorties.length && !annulees.length) return '';
+  var nb = sorties.reduce(function(s, cl){ return s + (parseInt(cl.stockSortieQte, 10) || 0); }, 0);
+  var h = '<div style="clear:both;background:#EAF1FA;border:1px solid #BDD5F0;border-radius:6px;padding:7px 10px;margin:6px 0 8px;font-size:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">';
+  if(sorties.length) h += '<span>&#x1F4E6; <strong>' + nb + ' piece(s)</strong> sortie(s) du stock pour ce dossier.</span>';
+  if(annulees.length) h += '<span style="color:#854F0B">' + annulees.length + ' piece(s) remise(s) en stock manuellement.</span>';
+  if(sorties.length && !stockDossierLivre(v)) h += '<button class="btn btn-sm" data-vid="' + v.id + '" onclick="remettreEnStockDossier(this.getAttribute(\'data-vid\'))">&#x21A9; Remettre en stock</button>';
+  if(annulees.length && !stockDossierLivre(v)) h += '<button class="btn btn-sm" data-vid="' + v.id + '" onclick="ressortirStockDossier(this.getAttribute(\'data-vid\'))">Ressortir du stock</button>';
+  return h + '</div>';
+}
+// ANNULER RESERVATION : qui tient les unites reservees d'un article, et annulation
+function detenteursReservation(aid){
+  var a = stockArticleById(aid), liste = [], tenu = 0;
+  vehicles.forEach(function(v){
+    ((v.chiffrage && v.chiffrage.lignes) || []).forEach(function(cl, idx){
+      var q = parseInt(cl.stockReserve, 10) || 0;
+      if(q > 0 && cl.stockArticleId === aid){ liste.push({v: v, cl: cl, q: q}); tenu += q; }
+    });
+  });
+  var total = a ? (parseInt(a.reserve, 10) || 0) : 0;
+  return {article: a, liste: liste, sansDossier: Math.max(0, total - tenu), total: total};
+}
+function ouvrirAnnulationReservation(aid){
+  if(['direction','achats'].indexOf(currentRole) < 0) return;
+  var d = detenteursReservation(aid);
+  if(!d.article) return;
+  var o = document.getElementById('modalAnnulReserve'); if(o) o.remove();
+  o = document.createElement('div'); o.id = 'modalAnnulReserve'; o.className = 'overlay'; o.style.display = 'flex'; o.style.zIndex = '100004';
+  var h = '<div class="modal" style="width:620px;max-width:95vw"><div class="mhead"><h2>Reservations — ' + (d.article.nom || '') + '</h2>'
+    + '<button class="btn btn-sm" onclick="document.getElementById(\'modalAnnulReserve\').remove();renderPage()">X</button></div><div class="mbody" style="padding:14px 16px;font-size:13px">';
+  h += '<p class="xs muted" style="margin-bottom:10px">' + d.total + ' unite(s) reservee(s). Annuler une reservation rend les unites disponibles ; '
+     + 'la piece du dossier ne sortira plus du stock automatiquement (une nouvelle validation du dossier la ressortira).</p>';
+  if(d.liste.length){
+    h += '<table style="width:100%;font-size:12px"><thead><tr><th style="text-align:left">Vehicule</th><th style="text-align:left">Client</th><th style="text-align:left">Statut</th><th>Qte</th><th></th></tr></thead><tbody>';
+    d.liste.forEach(function(x){
+      h += '<tr><td><strong>' + (x.v.immat || '') + '</strong></td><td>' + (x.v.client || '') + '</td><td class="xs">' + ((STATUSES[x.v.status] || {}).l || x.v.status) + '</td>'
+         + '<td style="text-align:center;font-weight:700;color:#854F0B">' + x.q + '</td>'
+         + '<td><button class="btn btn-sm" data-aid="' + aid + '" data-vid="' + x.v.id + '" onclick="annulerReservationDossier(this)">Annuler</button></td></tr>';
+    });
+    h += '</tbody></table>';
+  }
+  if(d.sansDossier){
+    h += '<div style="margin-top:10px;background:#FDF3E3;border:1px solid #E8A44A;border-radius:6px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;gap:10px">'
+       + '<span><strong>' + d.sansDossier + ' unite(s)</strong> reservee(s) sans aucun dossier (reliquat).</span>'
+       + '<button class="btn btn-sm" data-aid="' + aid + '" onclick="annulerReservationSansDossier(this)">Annuler</button></div>';
+  }
+  h += '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">'
+     + '<button class="btn btn-sm" onclick="document.getElementById(\'modalAnnulReserve\').remove();renderPage()">Fermer</button>'
+     + (d.total ? '<button class="btn btn-danger btn-sm" data-aid="' + aid + '" onclick="annulerToutesReservations(this)">Tout annuler (' + d.total + ')</button>' : '')
+     + '</div></div></div>';
+  o.innerHTML = h;
+  document.body.appendChild(o);
+}
+function _annulerReservationLigne(v, cl){
+  var q = parseInt(cl.stockReserve, 10) || 0; if(!q) return 0;
+  libererReservationLigne(cl);
+  cl.stockAnnule = true;
+  ajouterCommentaireSysteme(v, 'Reservation de stock annulee : ' + (cl.piece || '') + ' x' + q + ' (unites rendues disponibles)');
+  return q;
+}
+function _apresAnnulation(aid, n){
+  saveV(); saveStock();
+  afficherToastNotif('Reservation annulee', n + ' unite(s) de nouveau disponible(s).', 'ok');
+  var restant = detenteursReservation(aid);
+  if(restant.total) ouvrirAnnulationReservation(aid);
+  else { var o = document.getElementById('modalAnnulReserve'); if(o) o.remove(); renderPage(); }
+}
+function annulerReservationDossier(btn){
+  if(['direction','achats'].indexOf(currentRole) < 0) return;
+  try{ if(GOS_SYNC.ecritureAutorisee && !GOS_SYNC.ecritureAutorisee()){ afficherToastNotif('Hors connexion', 'Annulation impossible sans le serveur.', 'alerte'); return; } }catch(e){}
+  var aid = btn.getAttribute('data-aid'), vid = btn.getAttribute('data-vid'), n = 0;
+  var v = vehicles.find(function(x){ return x.id === vid; }); if(!v || !v.chiffrage) return;
+  v.chiffrage.lignes.forEach(function(cl){ if(cl.stockArticleId === aid && cl.stockReserve) n += _annulerReservationLigne(v, cl); });
+  _apresAnnulation(aid, n);
+}
+function annulerReservationSansDossier(btn){
+  if(['direction','achats'].indexOf(currentRole) < 0) return;
+  try{ if(GOS_SYNC.ecritureAutorisee && !GOS_SYNC.ecritureAutorisee()){ afficherToastNotif('Hors connexion', 'Annulation impossible sans le serveur.', 'alerte'); return; } }catch(e){}
+  var aid = btn.getAttribute('data-aid'), d = detenteursReservation(aid);
+  if(!d.article || !d.sansDossier) return;
+  d.article.reserve = Math.max(0, (parseInt(d.article.reserve, 10) || 0) - d.sansDossier);
+  GOS_SYNC.stockDelta(d.article, 0, -d.sansDossier);
+  _apresAnnulation(aid, d.sansDossier);
+}
+function annulerToutesReservations(btn){
+  if(['direction','achats'].indexOf(currentRole) < 0) return;
+  var aid = btn.getAttribute('data-aid'), d = detenteursReservation(aid);
+  if(!confirm('Annuler les ' + d.total + ' unite(s) reservee(s) de « ' + (d.article ? d.article.nom : '') + ' » ?')) return;
+  try{ if(GOS_SYNC.ecritureAutorisee && !GOS_SYNC.ecritureAutorisee()){ afficherToastNotif('Hors connexion', 'Annulation impossible sans le serveur.', 'alerte'); return; } }catch(e){}
+  var n = 0;
+  d.liste.forEach(function(x){ n += _annulerReservationLigne(x.v, x.cl); });
+  var reste = detenteursReservation(aid);
+  if(reste.sansDossier && reste.article){
+    reste.article.reserve = Math.max(0, (parseInt(reste.article.reserve, 10) || 0) - reste.sansDossier);
+    GOS_SYNC.stockDelta(reste.article, 0, -reste.sansDossier); n += reste.sansDossier;
+  }
+  _apresAnnulation(aid, n);
+}
+
+// Gestion du stock : dossiers dont le stock n'est pas a jour (poste sans droit, dossier deja livre...)
+function dossiersStockARegulariser(){
+  var liste = [];
+  vehicles.forEach(function(v){
+    if(!v.chiffrage || !v.chiffrage.lignes) return;
+    var livre = stockDossierLivre(v) && !v.devisAbandonne && !v.clotureForcee;
+    var plan = planStockVehicule(v, livre ? {livraison: true} : {});
+    if(!plan.length) return;
+    liste.push({v: v, livre: livre, plan: plan});
+  });
+  return liste;
+}
+function regulariserStockDossier(vid){
+  var v = vehicles.find(function(x){ return x.id === vid; }); if(!v) return;
+  var livre = stockDossierLivre(v) && !v.devisAbandonne && !v.clotureForcee;
+  var b = reconcilierStockVehicule(v, livre ? {livraison: true} : {force: true});
+  saveV();
+  afficherToastNotif('Stock regularise', [b.sorties.length ? 'Sortie : ' + b.sorties.join(', ') : '', b.retours.length ? 'Retour : ' + b.retours.join(', ') : ''].filter(Boolean).join(' — ') || 'Rien a faire.', 'ok');
+  renderPage();
+}
+function ignorerRegularisationStock(vid){
+  var v = vehicles.find(function(x){ return x.id === vid; }); if(!v || !v.chiffrage) return;
+  if(!confirm('Ignorer la regularisation de stock de ' + v.immat + ' ?\nA utiliser si le stock a deja ete corrige a la main (inventaire).')) return;
+  planStockVehicule(v, stockDossierLivre(v) ? {livraison: true} : {}).forEach(function(p){
+    if(p.artCible && !p.cl.stockSortie) p.cl.stockIgnore = true;
+    if(p.cl.stockReserve && stockDossierLivre(v)) p.cl.stockReserve = 0;
+  });
+  saveV(); renderPage();
+}
+function htmlStockARegulariser(){
+  if(['direction','achats'].indexOf(currentRole) < 0) return '';
+  var liste = dossiersStockARegulariser();
+  if(!liste.length) return '';
+  var h = '<div class="card" style="margin-bottom:16px;border:1px solid #E8A44A"><div class="card-head" style="background:#FDF3E3;color:#854F0B"><span>&#x26A0; Mouvements de stock a regulariser (' + liste.length + ' dossier' + (liste.length > 1 ? 's' : '') + ')</span></div>';
+  h += '<div class="xs muted" style="padding:8px 14px 0">Dossiers dont le stock ne correspond pas au chiffrage : dossiers deja livres avant la sortie automatique, ou modifies sur un poste sans droit sur le stock. '
+     + 'Verifiez puis « Appliquer » ; « Ignorer » si le stock a deja ete corrige a la main.</div>';
+  h += '<div class="tw"><table><thead><tr><th>Vehicule</th><th>Client</th><th>Statut</th><th>A sortir du stock</th><th>A remettre en stock</th><th></th></tr></thead><tbody>';
+  liste.forEach(function(d){
+    var aSortir = [], aRendre = [];
+    d.plan.forEach(function(p){
+      var a = p.artCible ? stockArticleById(p.artCible) : null, aa = p.artAct ? stockArticleById(p.artAct) : null;
+      if(p.artAct && p.artAct !== p.artCible) aRendre.push((aa ? aa.nom : '?') + ' x' + p.qAct);
+      var qDeja = p.artAct === p.artCible ? p.qAct : 0;
+      if(p.artCible && p.qCible > qDeja) aSortir.push((a ? a.nom : '?') + ' x' + (p.qCible - qDeja));
+      if(p.artCible && p.qCible < qDeja) aRendre.push((a ? a.nom : '?') + ' x' + (qDeja - p.qCible));
+    });
+    h += '<tr><td><strong>' + (d.v.immat || '') + '</strong></td><td class="xs">' + (d.v.client || '') + '</td><td class="xs">' + ((STATUSES[d.v.status] || {}).l || d.v.status) + '</td>'
+       + '<td class="xs">' + (aSortir.join('<br>') || '—') + '</td><td class="xs">' + (aRendre.join('<br>') || '—') + '</td>'
+       + '<td style="white-space:nowrap"><button class="btn btn-primary btn-sm" data-vid="' + d.v.id + '" onclick="regulariserStockDossier(this.getAttribute(\'data-vid\'))">Appliquer</button> '
+       + '<button class="btn btn-sm" data-vid="' + d.v.id + '" onclick="ignorerRegularisationStock(this.getAttribute(\'data-vid\'))">Ignorer</button></td></tr>';
+  });
+  return h + '</tbody></table></div></div>';
+}
+
+// STOCK VALIDATION : la validation ne reserve plus, elle SORT les pieces du stock (voir plus haut).
+// Une nouvelle validation annule une remise en stock manuelle des pieces validees.
 function reserverStockVehicule(v){
+  if(!v || !v.chiffrage || !v.chiffrage.lignes) return;
+  v.chiffrage.lignes.forEach(function(cl){ if(cl.valideDir) delete cl.stockAnnule; });
+  reconcilierStockVehicule(v, {});
+}
+// Ancien circuit (reservation), conserve pour reference — plus appele.
+function reserverStockVehicule_ancien(v){
   if(!v || !v.chiffrage || !v.chiffrage.lignes) return;
   var manques = [];
   v.chiffrage.lignes.forEach(function(cl, idxLigne){
@@ -24021,8 +24669,9 @@ function libererReservationLigne(cl){
   saveStock();
 }
 
-// Liberer toutes les reservations d'un vehicule (devis rejete)
-function libererStockVehicule(v){
+// STOCK VALIDATION : devis rejete -> tout revient en stock
+function libererStockVehicule(v){ reconcilierStockVehicule(v, {toutRendre: true}); }
+function libererStockVehicule_ancien(v){
   if(!v || !v.chiffrage || !v.chiffrage.lignes) return;
   v.chiffrage.lignes.forEach(function(cl){
     if(cl.stockReserve && !cl.stockSortie) libererReservationLigne(cl);
@@ -24030,8 +24679,9 @@ function libererStockVehicule(v){
   saveStock();
 }
 
-// Sortie definitive du stock : les pieces partent chez le technicien
-function sortirStockVehicule(v){
+// STOCK VALIDATION : la sortie a deja eu lieu a la validation ; ici, simple rapprochement
+function sortirStockVehicule(v){ reconcilierStockVehicule(v, {}); }
+function sortirStockVehicule_ancien(v){
   if(!v || !v.chiffrage || !v.chiffrage.lignes) return;
   var sorties = [];
   v.chiffrage.lignes.forEach(function(cl){
@@ -25022,6 +25672,7 @@ function pageStock(){
   html += kpi('Reserve', totalReserve, totalReserve?'amber':'');
   html += '</div>';
 
+  html += htmlStockARegulariser();   // STOCK VALIDATION
   // STOCK FOURNISSEUR : articles disponibles sans fournisseur d'achat identifie
   var sansFournAchat = FOURNISSEURS.length ? STOCK.filter(function(a){ return stockDispo(a) > 0 && !fournisseurAchatStock(a).connu; }) : [];
   if(sansFournAchat.length){
@@ -25137,7 +25788,9 @@ function htmlTableauStock(liste){
     html += '<span class="fw7" style="'+(alerte?'color:#A32D2D':'')+'">'+dispo+'</span>';
     if(alerte) html += '<div class="xs" style="color:#A32D2D">seuil '+a.seuil+'</div>';
     html += '</td>';
-    html += '<td style="text-align:center">'+((parseInt(a.reserve,10)||0) ? '<span style="color:#854F0B;font-weight:700">'+a.reserve+'</span>' : '<span class="muted">—</span>')+'</td>';
+    html += '<td style="text-align:center">'+((parseInt(a.reserve,10)||0) ? '<span style="color:#854F0B;font-weight:700">'+a.reserve+'</span>'
+      + (['direction','achats'].indexOf(currentRole) >= 0 ? ' <button class="btn btn-sm" style="font-size:10px;padding:1px 6px;margin-left:4px" title="Voir et annuler les reservations" data-aid="'+a.id+'" onclick="ouvrirAnnulationReservation(this.getAttribute(\'data-aid\'))">Annuler</button>' : '')   // ANNULER RESERVATION
+      : '<span class="muted">—</span>')+'</td>';
     html += '<td style="text-align:right;font-family:monospace">'+(parseFloat(a.prixAchat)||0).toLocaleString('fr-FR', GOS_FMT0)+'</td>';
     html += '<td style="text-align:right;font-family:monospace;color:#185FA5">'+val.toLocaleString('fr-FR', GOS_FMT0)+'</td>';
     html += '<td style="white-space:nowrap">';
@@ -29154,8 +29807,10 @@ function detAffecterEquipe(id){
     if(v.tkm===true && !obstaclesTkm.length){
       v.chiffrage.lignes.forEach(function(cl){ if((cl.piece||'').trim()) cl.valideDir = true; });
       v.chiffrage.valide = true;
-      v.chiffrage.valideDir = true;
-      v.chiffrage.valideDirLe = Date.now();
+      // CONFLITS VALIDATION : seule la Direction ecrit la « Validation Direction » ; un autre
+      // profil laisse un repere (sinon le serveur refuse et un conflit part chez la Direction)
+      if(currentRole === 'direction'){ v.chiffrage.valideDir = true; v.chiffrage.valideDirLe = Date.now(); }
+      else { v.chiffrage.valideAutoTkmLe = Date.now(); }
       reserverStockVehicule(v);
       v.status = 'travaux_cours';
       v.piecesConfirmees = true;
@@ -31940,6 +32595,7 @@ function confirmerEnTravaux(){
     // proprement depuis le devis du technicien (comme pour tout vehicule
     // normal), sans quoi les anciennes lignes resteraient en double a
     // cote des nouvelles lignes synchronisees depuis le devis.
+    rendreStockLignes(v, v.chiffrage.lignes);   // STOCK VALIDATION
     v.chiffrage = null;
     // Ecraser le devis vide (brouillon initial de creation) plutot que de
     // le laisser tel quel — construire v.devis IMMEDIATEMENT (via le
@@ -36540,7 +37196,8 @@ var GOS_SYNC = (function(){
       if(!s){ r.statut = 'echec'; r.raison = 'article_introuvable'; return r; }
       if(s._syncOps && s._syncOps.indexOf(op.opId) >= 0){ r.statut = 'deja_appliquee'; return r; }
       var q = parseInt(s.qte, 10) || 0, res = parseInt(s.reserve, 10) || 0;
-      if(!pourApercu && op.exigeDispo && op.dRes > 0 && (q - res) < op.dRes){ r.statut = 'echec'; r.raison = 'stock_insuffisant'; r.dispoServeur = q - res; return r; }
+      // STOCK VALIDATION : une sortie (dQte < 0) exige aussi le disponible, comme une reservation
+      if(!pourApercu && op.exigeDispo && ((op.dRes || 0) > 0 || (op.dQte || 0) < 0) && (q + (op.dQte || 0)) - (res + (op.dRes || 0)) < 0){ r.statut = 'echec'; r.raison = 'stock_insuffisant'; r.dispoServeur = q - res; return r; }
       s = clone(s); s.qte = Math.max(0, q + (op.dQte || 0)); s.reserve = Math.max(0, res + (op.dRes || 0));
       if(!pourApercu){ s._syncOps = (s._syncOps || []).concat([op.opId]).slice(-20); }
       carte[rid] = s; return r;
@@ -36659,7 +37316,23 @@ var GOS_SYNC = (function(){
     if(estObjet(base.chiffrage)) M1_F2.forEach(function(k){ if(base.chiffrage[k] !== undefined){ f2 = f2 || {chiffrage: {}}; f2.chiffrage[k] = base.chiffrage[k]; delete base.chiffrage[k]; } });
     return {base: base, f1: f1, f2: f2};
   }
+  // CONFLITS VALIDATION : reperes poses par les autres profils (revalidation demandee, rejet leve),
+  // appliques a l'affichage tant que la Direction n'a pas agi apres eux.
+  function m1Reperes(v){
+    var ch = v && v.chiffrage;
+    if(!estObjet(ch)) return v;
+    var reval = ch.revalidationDemandeeLe && ch.revalidationDemandeeLe > (ch.valideDirLe || 0) && ch.valideDir;
+    var leve = ch.rejetLeveLe && ch.rejetDir && ch.rejetLeveLe > (ch.rejetDirLe || 0);
+    if(!reval && !leve) return v;
+    var c = clone(v);
+    if(reval){ c.chiffrage.valideDir = false; c.chiffrage.revalidationDemandee = ch.revalidationDemandeeLe; }
+    if(leve){ c.chiffrage.rejetDir = null; }
+    return c;
+  }
   function m1Composer(liste){
+    return m1ComposerBrut(liste).map(m1Reperes);
+  }
+  function m1ComposerBrut(liste){
     var P = window.GOS_FIN_PAIEMENTS || {}, V = window.GOS_FIN_VALIDATIONS || {};
     return liste.map(function(v){
       if(!v || v.id === undefined) return v;
@@ -36709,6 +37382,17 @@ var GOS_SYNC = (function(){
     var sb = m1Separer(b);
     if(pv.length) ajouterOp({collection: 'vehicles', recordId: id, type: 'update', patch: pv, baseComplete: sansPhotos(sb.base)});
     if(p1.length) ajouterOp({collection: 'gos_fin_paiements', recordId: id, type: 'update', patch: p1, baseComplete: sb.f1 || {}});
+    // CONFLITS VALIDATION : hors Direction, retirer une validation, effacer une demande ou un rejet
+    // (ou toucher devisValideDir, lu nulle part) serait refuse par le serveur : l'information passe
+    // par les reperes du dossier. Une tentative de POSER une validation reste envoyee (et signalee).
+    if(p2.length && !m1PeutEcrire('gos_fin_validations')){
+      p2 = p2.filter(function(e){
+        var k = e.p[1];
+        if(k === 'devisValideDir' || k === 'devisValideDirLe' || k === 'revalidationDemandee' || k === 'rejetDir') return false;
+        if((k === 'valideDir' || k === 'valideDirLe') && !e.n) return false;
+        return true;
+      });
+    }
     if(p2.length) ajouterOp({collection: 'gos_fin_validations', recordId: id, type: 'update', patch: p2, baseComplete: sb.f2 || {}});
   }
   function recomposer(){ if(serveur['vehicles'] !== undefined) publierVue('vehicles', 'fin'); }
@@ -38189,6 +38873,10 @@ function gosEchecStock(op, r){
     var cl = v && v.chiffrage && v.chiffrage.lignes ? v.chiffrage.lignes[op.lien.idx] : null;
     if(cl && cl.stockArticleId === op.recordId){
       cl.stockReserve = Math.max(0, (parseInt(cl.stockReserve, 10) || 0) - (op.dRes || 0));
+      if(op.lien.sortie){   // STOCK VALIDATION : sortie refusee par le serveur
+        var resteSortie = Math.max(0, (parseInt(cl.stockSortieQte, 10) || 0) - op.lien.sortie);
+        if(resteSortie > 0) cl.stockSortieQte = resteSortie; else { delete cl.stockSortie; delete cl.stockSortieQte; delete cl.stockSortieArticleId; }
+      }
       saveV();
     }
   }
