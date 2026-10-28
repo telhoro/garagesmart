@@ -37492,6 +37492,20 @@ var GOS_SYNC = (function(){
     transmissionEnCours = true;
     listeQuarantaine(function(ops){
       if(!ops || !ops.length){ transmissionEnCours = false; return; }
+      // CONFLITS SANS OBJET : valeur demandee deja enregistree sur le serveur (lecture fraiche,
+      // jamais le cache local) -> rien a decider, l'operation est retiree sans etre transmise.
+      lectureFraiche(ops.filter(function(op){ return op.type !== 'delta'; }).map(function(op){ return op.collection; }), function(frais){
+      ops = ops.filter(function(op){
+        try{
+          var d = COLL[op.collection];
+          if(!d || op.type === 'delta' || frais[op.collection] === undefined) return true;
+          if(!opDejaAppliquee(enCarte(d, frais[op.collection]), {}, op)) return true;
+          retirerQuarantaine(op.opId); nbQuarantaine = Math.max(0, nbQuarantaine - 1);
+          trace({e: 'quarantaine_sans_objet', opId: op.opId, c: op.collection});
+          return false;
+        }catch(e){ return true; }
+      });
+      if(!ops.length){ transmissionEnCours = false; majIndicateur(); return; }
       var envois = ops.map(function(op){
         var patchJson = op.type === 'update' ? JSON.stringify((op.patch || []).map(function(e){ return {p: e.p, n: e.n === undefined ? null : e.n}; })) : null;
         if(patchJson && patchJson.length > 150000) patchJson = null;   // trop volumineux : decision manuelle
@@ -37513,7 +37527,20 @@ var GOS_SYNC = (function(){
         trace({e: 'quarantaine_transmise', n: ok.length, restantes: ops.length - ok.length});
         transmissionEnCours = false; majIndicateur();
       });
+      });   // CONFLITS SANS OBJET (lectureFraiche)
     });
+  }
+  // CONFLITS SANS OBJET : etat serveur lu a l'instant (le cache local peut contenir des
+  // modifications en memoire). frais[collection] = valeur, absente si illisible.
+  function lectureFraiche(cles, suite){
+    var vues = {}, frais = {};
+    cles.forEach(function(c){ if(COLL[c]) vues[c] = 1; });
+    Promise.all(Object.keys(vues).map(function(c){
+      return db.ref(COLL[c].chemin).once('value').then(function(sn){
+        var lu = lireServeurBrut(COLL[c], sn.val());
+        if(lu !== undefined) frais[c] = lu === null ? (COLL[c].type === 'objet' ? {} : []) : lu;
+      }, function(){});
+    })).then(function(){ suite(frais); }, function(){ suite({}); });
   }
   // Carte d'arbitrage d'une operation non appliquee (ecran Direction)
   function carteOperation(k, c){
@@ -38091,6 +38118,7 @@ var GOS_SYNC = (function(){
     if(!autorisees || estDirectionAuth) ecouter('gos_conflits', function(s){
       var v = s.val() || {}; conflitsOuverts = {};
       Object.keys(v).forEach(function(k){ if(v[k] && v[k].statut === 'ouvert') conflitsOuverts[k] = v[k]; });
+      closConflitsSansObjet();   // CONFLITS SANS OBJET
       majIndicateur();
     }, 'gos_conflits');
     db.ref('.info/serverTimeOffset').on('value', function(s){ gosDecalageServeurMs = s.val() || 0; });
@@ -38285,6 +38313,36 @@ var GOS_SYNC = (function(){
       });
       corps.insertAdjacentHTML('beforeend', q + '</div>');
     });
+  }
+  // CONFLITS SANS OBJET : operation non appliquee dont TOUTES les valeurs demandees sont deja celles
+  // enregistrees -> close automatiquement (poste Direction, serveur joignable).
+  var closEnCours = false;
+  function closConflitsSansObjet(){
+    try{
+      if(closEnCours || !db || !ecritureAutorisee() || typeof currentRole === 'undefined' || currentRole !== 'direction') return;
+      var cand = Object.keys(conflitsOuverts).filter(function(k){
+        var c = conflitsOuverts[k];
+        return c && c.type === 'operation_non_appliquee' && c.patchOpJson && COLL[c.collection];
+      });
+      if(!cand.length) return;
+      closEnCours = true;
+      lectureFraiche(cand.map(function(k){ return conflitsOuverts[k].collection; }), function(frais){
+        closEnCours = false;
+        cand.forEach(function(k){
+          var c = conflitsOuverts[k]; if(!c || frais[c.collection] === undefined) return;
+          var pj = null; try{ pj = JSON.parse(c.patchOpJson); }catch(e){ return; }
+          if(!pj || !pj.length) return;
+          var rec = enCarte(COLL[c.collection], frais[c.collection])[c.recordId];
+          if(!rec) return;
+          if(!pj.every(function(e){ return egal(lire(rec, e.p), e.n); })) return;
+          delete conflitsOuverts[k];
+          db.ref('gos_conflits/' + k).update({statut: 'resolu_sans_objet', resoluPar: 'automatique (valeur deja enregistree)',
+            resoluLe: firebase.database.ServerValue.TIMESTAMP}).catch(function(){});
+          trace({e: 'conflit_sans_objet_clos', k: k});
+        });
+        majIndicateur();
+      });
+    }catch(e){ closEnCours = false; console.error('closConflitsSansObjet', e); }
   }
   function resoudreConflit(k, action){
     var c = conflitsOuverts[k]; if(!c || !db) return;
