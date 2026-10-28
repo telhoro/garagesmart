@@ -5931,13 +5931,25 @@ function marquerJalonsTemps(v, nouveauStatut){
 // deposees" sur la page Facturation. Execute une seule fois par vehicule
 // (ne touche jamais un champ deja renseigne), avec une date de secours
 // (livraison, sinon validation financiere, sinon entree).
+// MIGRATIONS SURES : un dossier modifie depuis moins de 30 min est en cours de traitement (sa date de
+// depot, envoyee a part avec les donnees financieres, peut ne pas etre encore arrivee) : on n'y touche pas.
+var GOS_MIGRATION_DELAI_MS = 30 * 60 * 1000;
+function gosDossierRecent(v){
+  var t = Math.max(parseInt(v.stepStart, 10) || 0, parseInt(v.lastModified, 10) || 0);
+  var maintenant = (typeof heureServeur === 'function' ? heureServeur() : Date.now());
+  return t > 0 && (maintenant - t) < GOS_MIGRATION_DELAI_MS;
+}
 function migrerFactureDeposeeLe(){
   if(!gosPeutMigrer()) return; // C-09 : migration : Direction uniquement
   var nbMigres = 0;
   vehicles.forEach(function(v){
     if(v.status!=='facture_deposee' && v.status!=='dossier_cloture') return;
     if(v.factureDeposeeLe) return;
-    v.factureDeposeeLe = v.livraison || (v.chiffrage && v.chiffrage.valideDirLe) || (v.chiffrage && v.chiffrage.soumisLe) || v.entree || Date.now();
+    if(gosDossierRecent(v)) return;   // MIGRATIONS SURES
+    // MIGRATIONS SURES : valeur identique sur tous les postes (jamais l'heure du poste)
+    var dDepot = v.livraison || (v.chiffrage && v.chiffrage.valideDirLe) || (v.chiffrage && v.chiffrage.soumisLe) || v.entree || v.stepStart;
+    if(!dDepot) return;
+    v.factureDeposeeLe = dDepot;
     nbMigres++;
   });
   if(nbMigres>0) saveV();
@@ -6002,9 +6014,12 @@ function migrerForfaitsLivresBloques(){
   var nbCorrige = 0;
   vehicles.forEach(function(v){
     if(v.status==='livre' && v.typeClient==='forfait' && !estDossierAssurance(v)){
+      if(gosDossierRecent(v)) return;   // MIGRATIONS SURES : en cours de traitement
+      // MIGRATIONS SURES : memes valeurs sur tous les postes Direction (pas l'heure du poste)
+      var tCloture = v.livraison || v.stepStart || v.entree || 0;
       v.status = 'dossier_cloture';
-      v.stepStart = Date.now();
-      if(!v.archiveDate) v.archiveDate = Date.now();
+      if(tCloture) v.stepStart = tCloture;
+      if(!v.archiveDate && tCloture) v.archiveDate = tCloture;
       nbCorrige++;
     }
   });
