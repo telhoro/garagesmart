@@ -225,6 +225,7 @@ tr:hover td{background:#faf9f7}
       </select>
       <select id="techEquipeSelect" onchange="changeTechEquipe(this.value)" style="display:none;margin-top:6px;width:100%">
       </select>
+      <div id="agirCommeTitre" style="display:none;margin-top:8px;font-size:10px;font-weight:700;color:#5a5956;text-transform:uppercase;letter-spacing:.3px">Agir comme un technicien</div>
       <select id="agirCommeSelect" onchange="changeAgirComme(this.value)" style="display:none;margin-top:6px;width:100%">
       </select>
       <div id="agirCommeBanner" style="display:none;margin-top:6px;background:#FAEEDA;border:1px solid #EF9F27;border-radius:6px;padding:5px 8px;font-size:10px;color:#854F0B;line-height:1.4"></div>
@@ -5460,14 +5461,20 @@ function remplirSelectAgirComme(){
   var sel = document.getElementById('agirCommeSelect');
   var banner = document.getElementById('agirCommeBanner');
   if(!sel) return;
+  var titreAC = document.getElementById('agirCommeTitre');   // CHEF EQUIPE (29/10)
   if(!peutAgirComme()){
     sel.style.display='none';
+    if(titreAC) titreAC.style.display='none';
     if(banner) banner.style.display='none';
     return;
   }
   var techs = techniciensAccessibles();
   sel.style.display='block';
+  if(titreAC) titreAC.style.display='block';
   var opts = '<option value="">-- Mon tableau de bord</option>';
+  if(!techs.length) opts += '<option value="" disabled>' + (currentRole==='chef_equipe'
+      ? (currentChefEquipeNom ? 'Aucun technicien dans « ' + currentChefEquipeNom + ' »' : 'Aucune equipe rattachee a votre compte') + ' — voir la Direction'
+      : 'Aucun technicien enregistre') + '</option>';
   // Grouper par equipe pour le chef d'atelier
   if(currentRole==='chef_atelier'){
     var parEq = {};
@@ -33569,6 +33576,31 @@ function _doLoginWithCompte(compte){
   renderNav(); renderPage();
 }
 
+// CHEF EQUIPE (29/10) : equipe d'un compte, retrouvee de facon tolerante dans le personnel
+function gosNormEquipe(t){
+  return String(t == null ? '' : t).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+function gosEquipeDuCompte(compte){
+  if(!compte) return '';
+  var brut = compte.equipe || '', n = gosNormEquipe(brut);
+  if(compte.personnelId){
+    var pl = PERSONNEL.find(function(x){ return x.id === compte.personnelId; });
+    if(pl && pl.equipe) return pl.equipe;
+  }
+  var eqs = (EQUIPES || []).filter(Boolean);
+  if(n){ var ex = eqs.filter(function(e){ return gosNormEquipe(e) === n; }); if(ex.length === 1) return ex[0]; }
+  var nomC = gosNormEquipe(compte.nom).split(' ').filter(Boolean);
+  if(nomC.length){
+    var memes = PERSONNEL.filter(function(p){
+      if(!p || !p.equipe || (p.role !== compte.role && !(compte.role === 'chef_equipe' && p.role === 'chef_equipe'))) return false;
+      var t = gosNormEquipe(p.nom).split(' ').filter(Boolean);
+      return t.length && t.every(function(m){ return nomC.indexOf(m) >= 0; });
+    });
+    if(memes.length === 1) return memes[0].equipe;
+  }
+  if(n){ var deb = eqs.filter(function(e){ var g = gosNormEquipe(e); return g === n || g.indexOf(n + ' ') === 0; }); if(deb.length === 1) return deb[0]; }
+  return brut;
+}
 // Affiche/masque les selecteurs de la sidebar selon le role
 // (appele au login ET au changement de role pour rester coherent)
 function initSelecteursRole(role){
@@ -33583,12 +33615,9 @@ function initSelecteursRole(role){
       var estVraiChef = !!(currentUser && currentUser.role==='chef_equipe');
       if(estVraiChef){
         // Chef connecte avec son compte : equipe imposee, pas de choix possible
-        var monEquipe = currentUser.equipe || currentChefEquipeNom || '';
-        if(!monEquipe && currentUser.personnelId){
-          var pMe = PERSONNEL.find(function(x){ return x.id===currentUser.personnelId; });
-          if(pMe) monEquipe = pMe.equipe || '';
-        }
+        var monEquipe = gosEquipeDuCompte(currentUser) || currentChefEquipeNom || '';   // CHEF EQUIPE (29/10)
         currentChefEquipeNom = monEquipe;
+        if(caFilter && caFilter.equipe && caFilter.equipe !== monEquipe) caFilter = {equipe: monEquipe || null, mode: null};
         selChefEq.style.display = 'none';   // rien a choisir : masque
       } else {
         // Direction qui teste le role : peut choisir l'equipe
@@ -39296,10 +39325,11 @@ var GOS_PERSONNEL = (function(){
     demarrerEcoute();
     var h = '<div class="card" style="margin-bottom:16px"><div class="card-head"><strong>Comptes du personnel (connexion Firebase)</strong></div><div class="card-body" style="padding:12px">';
     if(GOS_AUTH.mode !== 'firebase'){ return h + '<div class="xs muted">Connectez-vous avec votre compte Firebase personnel pour gerer les comptes.</div></div></div>'; }
-    h += '<table class="tbl" style="width:100%;font-size:12px"><thead><tr><th>Nom</th><th>Connexion</th><th>Role</th><th>Etat</th><th>Derniere connexion</th><th>Mot de passe</th><th></th></tr></thead><tbody>';
+    h += '<table class="tbl" style="width:100%;font-size:12px"><thead><tr><th>Nom</th><th>Connexion</th><th>Role</th><th>Equipe</th><th>Etat</th><th>Derniere connexion</th><th>Mot de passe</th><th></th></tr></thead><tbody>';
     Object.keys(liste).sort(function(a, b){ return String(liste[a].nom).localeCompare(String(liste[b].nom)); }).forEach(function(uid){
       var p = liste[uid] || {};
       h += '<tr><td>' + esc(p.nom) + '</td><td>' + esc(p.typeCompte === 'identifiant' ? p.login : p.email) + '</td><td>' + esc(p.role) + '</td>'
+        + '<td>' + celluleEquipe(uid, p) + '</td>'   // CHEF EQUIPE (29/10)
         + '<td>' + (p.actif ? (p.doitChangerMdp ? 'actif (mot de passe a changer)' : 'actif') : '<span style="color:#A32D2D">desactive</span>') + '</td>'
         + '<td>' + (p.derniereConnexion ? new Date(p.derniereConnexion).toLocaleString('fr-FR', GOS_FMT0) : 'jamais') + '</td>'
         + '<td>' + GOS_COFFRE.cellule(uid, 'personnel', p.typeCompte === 'identifiant' ? (p.login ? GOS_AUTH.versAdresse(p.login) : '') : (p.email || '')) + '</td><td>'
@@ -39314,11 +39344,32 @@ var GOS_PERSONNEL = (function(){
       + '<div><label class="fl">Role</label><select class="fi" id="pRole"><option value="technicien">technicien</option><option value="chef_equipe">chef d\'equipe</option><option value="chef_atelier">chef d\'atelier</option><option value="testeur">testeur</option><option value="reception">accueil / reception</option><option value="achats">achats</option><option value="direction">direction</option></select></div>'
       + '<div><label class="fl">Type de connexion</label><select class="fi" id="pType"><option value="identifiant">identifiant simple (atelier)</option><option value="email">adresse e-mail reelle</option></select></div>'
       + '<div><label class="fl">Identifiant (ex. kone.a) ou adresse e-mail</label><input class="fi" id="pConnexion"></div>'
-      + '<div><label class="fl">Equipe (optionnel)</label><input class="fi" id="pEquipe"></div>'
+      + '<div><label class="fl">Equipe (chef d\'equipe / technicien)</label><select class="fi" id="pEquipe">' + optionsEquipes('').html + '</select></div>'
       + '<div><label class="fl">Mot de passe provisoire (identifiant uniquement, 10 caracteres min.)</label><input class="fi" id="pProvisoire" type="password" autocomplete="new-password"></div>'
       + '</div><div id="pMsg" class="xs" style="margin:8px 0;color:#A32D2D"></div><button class="btn btn-primary btn-sm" id="pCreer" onclick="GOS_PERSONNEL.creer()">Creer le compte</button>'
       + '<div class="xs muted" style="margin-top:6px">Adresse e-mail : l\'employe recoit un lien pour choisir son mot de passe. Identifiant : remettez le mot de passe provisoire en main propre ; il devra le changer a la premiere connexion. Les mots de passe connus de GarageOS sont conserves chiffres dans le coffre (visibles par la Direction seulement).</div></div>';
     return h + '</div></div>';
+  }
+  // CHEF EQUIPE (29/10) : equipe d'un compte choisie dans la liste des equipes existantes
+  function optionsEquipes(courante){
+    var eqs = (EQUIPES || []).filter(Boolean), h = '<option value="">— aucune —</option>', trouve = !courante;
+    eqs.forEach(function(e){ if(e === courante) trouve = true; h += '<option value="' + esc(e) + '"' + (e === courante ? ' selected' : '') + '>' + esc(e) + '</option>'; });
+    if(!trouve) h += '<option value="' + esc(courante) + '" selected>' + esc(courante) + ' (introuvable)</option>';
+    return {html: h, trouve: trouve};
+  }
+  function celluleEquipe(uid, p){
+    if(p.role !== 'chef_equipe' && p.role !== 'technicien') return '<span class="xs muted">—</span>';
+    var o = optionsEquipes(p.equipe || ''), alerte = !p.equipe || !o.trouve;
+    return '<select class="fi" data-staff-equipe="' + esc(uid) + '" style="font-size:11px;padding:2px 4px;min-width:130px' + (alerte ? ';border-color:#A32D2D;color:#A32D2D' : '') + '"'
+      + ' title="' + (alerte ? 'Equipe a renseigner : sans equipe valide, le compte ne voit pas ses techniciens' : 'Equipe du compte') + '"'
+      + ' onchange="GOS_PERSONNEL.changerEquipe(\'' + esc(uid) + '\', this.value)">' + o.html + '</select>';
+  }
+  function changerEquipe(uid, equipe){
+    if(!fbDb) return;
+    var maj = {equipe: equipe || '', modifieLe: firebase.database.ServerValue.TIMESTAMP, modifiePar: GOS_AUTH.uid};
+    fbDb.ref('gos_staff/' + uid).update(maj).then(function(){
+      if(typeof afficherToastNotif === 'function') afficherToastNotif('Equipe enregistree', (equipe || 'aucune') + ' — prise en compte a la prochaine connexion du compte.', 'ok');
+    }).catch(function(e){ alert('Echec : ' + (e && e.code ? e.code : e)); });
   }
   function msg(t, ok){ var el = document.getElementById('pMsg'); if(el){ el.style.color = ok ? '#3B6D11' : '#A32D2D'; el.textContent = t; } }
   function creer(){
@@ -39326,6 +39377,7 @@ var GOS_PERSONNEL = (function(){
     var type = document.getElementById('pType').value, cnx = (document.getElementById('pConnexion').value || '').trim().toLowerCase();
     var equipe = (document.getElementById('pEquipe').value || '').trim(), prov = document.getElementById('pProvisoire').value || '';
     if(!nom || !cnx){ msg('Nom et connexion obligatoires.'); return; }
+    if(role === 'chef_equipe' && !equipe){ msg('Chef d\'equipe : choisissez son equipe (sinon il ne verra pas ses techniciens).'); return; }   // CHEF EQUIPE (29/10)
     if(type === 'email' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(cnx)){ msg('Adresse e-mail invalide.'); return; }
     if(type === 'identifiant'){
       if(!/^[a-z0-9._-]{2,40}$/.test(cnx)){ msg('Identifiant : lettres minuscules, chiffres, point, tiret (2 a 40).'); return; }
@@ -39370,7 +39422,7 @@ var GOS_PERSONNEL = (function(){
     if(!actif){ maj.desactiveLe = firebase.database.ServerValue.TIMESTAMP; maj.desactivePar = GOS_AUTH.uid; }
     fbDb.ref('gos_staff/' + uid).update(maj).catch(function(e){ alert('Echec : ' + (e && e.code ? e.code : e)); });
   }
-  return {html: html, creer: creer, changerEtat: changerEtat};
+  return {html: html, creer: creer, changerEtat: changerEtat, changerEquipe: changerEquipe};
 })();
 var GOS_M1_OUTIL = {
   html: function(){
