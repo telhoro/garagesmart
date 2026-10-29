@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diagnostic réseau GarageOS</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;padding:16px;background:#f6f5f2;color:#222;font-size:15px}
+  h1{font-size:19px;margin:0 0 4px}
+  .muted{color:#666;font-size:13px}
+  table{width:100%;border-collapse:collapse;margin-top:14px;background:#fff;border-radius:8px;overflow:hidden}
+  td{padding:10px 8px;border-bottom:1px solid #eee;vertical-align:top}
+  td.e{width:92px;font-weight:700;text-align:right;white-space:nowrap}
+  .ok{color:#3B6D11}.ko{color:#A32D2D}.att{color:#854F0B}
+  button{margin-top:14px;padding:10px 16px;font-size:15px;border-radius:6px;border:1px solid #185FA5;background:#185FA5;color:#fff}
+  #info{margin-top:12px;background:#fff;border-radius:8px;padding:10px;font-size:12px;color:#444;word-break:break-word}
+</style>
+</head>
+<body>
+<h1>Diagnostic réseau GarageOS</h1>
+<div class="muted">Teste, depuis cet appareil et ce réseau, chaque service dont GarageOS a besoin. Aucune connexion à un compte, aucune donnée lue.</div>
+<table id="t"></table>
+<button onclick="lancer()">Relancer le test</button>
+<div id="info"></div>
+<script>
+var BASE = 'https://garage-smart-erp-default-rtdb.firebaseio.com';
+var NS = 'garage-smart-erp-default-rtdb';
+var TESTS = [
+  {nom: 'Site GarageOS (Netlify)', f: function(){ return http(location.origin + '/?diag=' + Date.now(), true); }},
+  {nom: 'Firebase — scripts (gstatic.com)', f: function(){ return http('https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js', false); }},
+  {nom: 'Firebase — connexion des comptes (googleapis.com)', f: function(){ return http('https://identitytoolkit.googleapis.com/v1/projects?diag=' + Date.now(), false); }},
+  {nom: 'Firebase — base de données (HTTPS)', f: function(){ return http(BASE + '/.json?shallow=true&diag=' + Date.now(), true); }},
+  {nom: 'Firebase — base de données temps réel (WebSocket)', f: websocket},
+  {nom: 'Bibliothèques (cdn.jsdelivr.net)', f: function(){ return http('https://cdn.jsdelivr.net/npm/chart.js@4.4.4/package.json', true); }}
+];
+function http(url, lisible){
+  var t0 = performance.now(), ctl = new AbortController(), tm = setTimeout(function(){ ctl.abort(); }, 15000);
+  return fetch(url, {mode: lisible ? 'cors' : 'no-cors', cache: 'no-store', signal: ctl.signal}).then(function(r){
+    clearTimeout(tm);
+    return {ok: true, d: Math.round(performance.now() - t0), detail: lisible ? 'réponse ' + r.status : 'joignable'};
+  }, function(e){
+    clearTimeout(tm);
+    return {ok: false, d: Math.round(performance.now() - t0), detail: e && e.name === 'AbortError' ? 'aucune réponse en 15 s' : 'bloqué ou introuvable (' + (e && e.message || e) + ')'};
+  });
+}
+function websocket(){
+  return new Promise(function(fin){
+    var t0 = performance.now(), fait = false, ws;
+    function stop(r){ if(fait) return; fait = true; try{ ws.close(); }catch(e){} r.d = Math.round(performance.now() - t0); fin(r); }
+    try{ ws = new WebSocket('wss://' + NS + '.firebaseio.com/.ws?v=5&ns=' + NS); }
+    catch(e){ stop({ok: false, detail: 'impossible d\'ouvrir (' + e.message + ')'}); return; }
+    ws.onmessage = function(){ stop({ok: true, detail: 'ouverte, le serveur répond'}); };
+    ws.onerror = function(){ stop({ok: false, detail: 'refusée ou coupée par le réseau'}); };
+    ws.onclose = function(ev){ stop({ok: false, detail: 'fermée avant réponse (code ' + ev.code + ')'}); };
+    setTimeout(function(){ stop({ok: false, detail: 'aucune réponse en 15 s'}); }, 15000);
+  });
+}
+function ligne(i, cls, etat, txt){
+  var t = document.getElementById('t');
+  var tr = t.rows[i] || t.insertRow(i);
+  tr.innerHTML = '<td>' + TESTS[i].nom + '<div class="muted">' + txt + '</div></td><td class="e ' + cls + '">' + etat + '</td>';
+}
+function lancer(){
+  TESTS.forEach(function(x, i){ ligne(i, 'att', 'en cours', '…'); });
+  var c = navigator.connection || {};
+  document.getElementById('info').innerHTML = 'Date : ' + new Date().toLocaleString('fr-FR')
+    + '<br>Réseau : ' + (c.effectiveType || '?') + (c.downlink ? ', ~' + c.downlink + ' Mb/s' : '') + (c.saveData ? ', économiseur de données ACTIVÉ' : '')
+    + '<br>Appareil : ' + navigator.userAgent
+    + (navigator.deviceMemory ? '<br>Mémoire annoncée : ' + navigator.deviceMemory + ' Go' : '');
+  var p = Promise.resolve();
+  TESTS.forEach(function(x, i){
+    p = p.then(function(){ return x.f(); }).then(function(r){
+      ligne(i, r.ok ? 'ok' : 'ko', r.ok ? 'OK' : 'ÉCHEC', r.detail + ' — ' + r.d + ' ms');
+    });
+  });
+}
+lancer();
+</script>
+</body>
+</html>
