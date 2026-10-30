@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Diagnostic réseau GarageOS</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:15px;color:#1a1a1a;background:#f5f4f1;padding:16px}
+.wrap{max-width:720px;margin:0 auto}
+h1{font-size:20px;margin-bottom:4px}
+.sub{color:#6b6a66;font-size:13px;margin-bottom:14px}
+button{font:inherit;font-weight:600;border:0;border-radius:9px;padding:12px 18px;cursor:pointer;background:#185FA5;color:#fff}
+button.sec{background:#fff;color:#185FA5;border:1px solid #185FA5}
+button:disabled{opacity:.5}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.card{background:#fff;border:1px solid #e8e6e1;border-radius:11px;margin-bottom:14px;overflow:hidden}
+.card h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#6b6a66;padding:10px 14px;border-bottom:1px solid #e8e6e1}
+.row{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #f0eee9}
+.row:last-child{border-bottom:0}
+.dot{width:12px;height:12px;border-radius:50%;background:#d0cec9;flex-shrink:0}
+.ok .dot{background:#3B6D11}.ko .dot{background:#A32D2D}.lent .dot{background:#C98A1B}
+.lbl{flex:1;min-width:0}
+.lbl b{display:block;font-size:14px}
+.lbl span{font-size:12px;color:#8a8984;word-break:break-all}
+.res{font-size:13px;font-weight:600;text-align:right;white-space:nowrap}
+.ok .res{color:#3B6D11}.ko .res{color:#A32D2D}.lent .res{color:#854F0B}
+#verdict{padding:14px;line-height:1.5}
+#verdict p{margin-bottom:8px}
+#verdict .alerte{color:#A32D2D;font-weight:600}
+#verdict .bon{color:#3B6D11;font-weight:600}
+#infos{font-size:12px;color:#6b6a66;padding:12px 14px;line-height:1.6;word-break:break-all}
+textarea{position:absolute;left:-9999px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Diagnostic réseau GarageOS</h1>
+  <div class="sub">À lancer sur l'appareil qui pose problème, connecté au Wi-Fi du garage, <b>VPN coupé</b>.</div>
+  <div class="btns">
+    <button id="lancer">Lancer le test</button>
+    <button id="copier" class="sec" disabled>Copier le rapport</button>
+  </div>
+  <div id="groupes"></div>
+  <div class="card"><h2>Verdict</h2><div id="verdict">Appuyez sur « Lancer le test » (environ 15 secondes).</div></div>
+  <div class="card"><h2>Appareil</h2><div id="infos"></div></div>
+</div>
+<textarea id="tampon"></textarea>
+<script>
+var DB = 'garage-smart-erp-default-rtdb.firebaseio.com';
+var DELAI = 10000, LENT = 4000;
+var GROUPES = [
+  {titre:'Adresses de GarageOS', tests:[
+    {id:'netlify', nom:'Netlify', url:'https://garagesmart.netlify.app/'},
+    {id:'domaine', nom:'Domaine Smart Services', url:'https://garage.smartservices.ci/'},
+    {id:'github',  nom:'GitHub Pages', url:'https://telhoro.github.io/garagesmart/'}
+  ]},
+  {titre:'Firebase (indispensable)', tests:[
+    {id:'gstatic',  nom:'Programme Firebase (gstatic)', url:'https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js'},
+    {id:'auth',     nom:'Connexion des comptes', url:'https://identitytoolkit.googleapis.com/'},
+    {id:'jeton',    nom:'Maintien de session', url:'https://securetoken.googleapis.com/'},
+    {id:'base',     nom:'Base de données', url:'https://'+DB+'/.json?shallow=true'},
+    {id:'ws',       nom:'Base de données (temps réel)', ws:'wss://'+DB+'/.ws?v=5&ns=garage-smart-erp-default-rtdb'}
+  ]},
+  {titre:'Bibliothèques (graphiques, PDF, Excel)', tests:[
+    {id:'jsdelivr', nom:'jsDelivr', url:'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/package.json'},
+    {id:'unpkg',    nom:'unpkg', url:'https://unpkg.com/chart.js@4.4.4/package.json'},
+    {id:'cdnjs',    nom:'cdnjs', url:'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js'}
+  ]},
+  {titre:'Réseau', tests:[
+    {id:'ipv4', nom:'Internet en IPv4', url:'https://api.ipify.org?format=json', lire:true},
+    {id:'ipv6', nom:'Internet en IPv6', url:'https://api6.ipify.org?format=json', lire:true, info:true},
+    {id:'doh',  nom:'DNS Google (dns.google)', url:'https://dns.google/resolve?name=garagesmart.netlify.app&type=A', lire:true}
+  ]}
+];
+var R = {};
+
+function el(t, c, h){ var e=document.createElement(t); if(c) e.className=c; if(h!=null) e.innerHTML=h; return e; }
+function hote(u){ try{ return new URL(u).host; }catch(e){ return u; } }
+
+function construire(){
+  var g = document.getElementById('groupes'); g.innerHTML='';
+  GROUPES.forEach(function(gr){
+    var c = el('div','card'); c.appendChild(el('h2',null,gr.titre));
+    gr.tests.forEach(function(t){
+      var r = el('div','row'); r.id='l_'+t.id;
+      r.appendChild(el('div','dot'));
+      var l = el('div','lbl'); l.appendChild(el('b',null,t.nom)); l.appendChild(el('span',null,hote(t.url||t.ws))); r.appendChild(l);
+      r.appendChild(el('div','res','—'));
+      c.appendChild(r);
+    });
+    g.appendChild(c);
+  });
+}
+
+function marquer(t, etat, texte){
+  R[t.id] = {etat:etat, texte:texte, nom:t.nom};
+  var r = document.getElementById('l_'+t.id);
+  r.className = 'row '+etat;
+  r.querySelector('.res').textContent = texte;
+}
+
+function testerHttp(t){
+  return new Promise(function(fin){
+    var d = Date.now(), ctl = ('AbortController' in window) ? new AbortController() : null;
+    var tm = setTimeout(function(){ if(ctl) ctl.abort(); }, DELAI);
+    var opts = {cache:'no-store', mode: t.lire ? 'cors' : 'no-cors'};
+    if(ctl) opts.signal = ctl.signal;
+    fetch(t.url, opts).then(function(rep){
+      var ms = Date.now()-d;
+      return (t.lire ? rep.text() : Promise.resolve('')).then(function(txt){
+        clearTimeout(tm);
+        var extra = '';
+        if(t.id==='ipv4' || t.id==='ipv6'){ try{ extra = ' · '+JSON.parse(txt).ip; }catch(e){} }
+        if(t.id==='doh'){ try{ var a=(JSON.parse(txt).Answer||[]).filter(function(x){return x.type===1;}); extra = a.length ? ' · '+a[0].data : ' · aucune réponse'; }catch(e){} }
+        marquer(t, ms>LENT?'lent':'ok', (ms>LENT?'Lent ':'OK ')+ms+' ms'+extra);
+        fin();
+      });
+    }).catch(function(e){
+      clearTimeout(tm);
+      var ms = Date.now()-d;
+      marquer(t, t.info?'lent':'ko', ms>=DELAI-200 ? 'Délai dépassé' : 'Échec ('+ms+' ms)');
+      fin();
+    });
+  });
+}
+
+function testerWs(t){
+  return new Promise(function(fin){
+    var d = Date.now(), fini = false, s;
+    function stop(etat, txt){ if(fini) return; fini=true; clearTimeout(tm); try{ s.close(); }catch(e){} marquer(t, etat, txt); fin(); }
+    var tm = setTimeout(function(){ stop('ko','Délai dépassé'); }, DELAI);
+    try{ s = new WebSocket(t.ws); }catch(e){ stop('ko','Impossible'); return; }
+    s.onopen = function(){ var ms=Date.now()-d; stop(ms>LENT?'lent':'ok', (ms>LENT?'Lent ':'OK ')+ms+' ms'); };
+    s.onerror = function(){ stop('ko','Échec ('+(Date.now()-d)+' ms)'); };
+  });
+}
+
+function bon(id){ return R[id] && R[id].etat!=='ko'; }
+
+function verdict(){
+  var v = [], hebergs = ['netlify','domaine','github'];
+  var nbHeb = hebergs.filter(bon).length;
+  var fbCritiques = ['gstatic','auth','jeton','base'];
+  var fbKo = fbCritiques.filter(function(i){ return !bon(i); });
+  var dohOk = bon('doh'), v4Ok = bon('ipv4');
+
+  if(!v4Ok && !dohOk && nbHeb===0){
+    v.push('<p class="alerte">Aucun accès Internet depuis ce navigateur.</p><p>Vérifier que l\'appareil est bien connecté au Wi-Fi, puis relancer.</p>');
+  } else {
+    if(nbHeb===0) v.push('<p class="alerte">Aucune des 3 adresses de GarageOS ne répond, alors qu\'Internet fonctionne.</p><p>Cause la plus probable : le DNS de la box. Sur la tablette : <b>Paramètres → Réseau et Internet → DNS privé → Nom d\'hôte du fournisseur : dns.google</b>, puis relancer ce test.</p>');
+    else if(nbHeb<3) v.push('<p>Certaines adresses de GarageOS répondent, d\'autres non : utiliser une adresse marquée OK en attendant.</p>');
+    else v.push('<p class="bon">Les 3 adresses de GarageOS répondent.</p>');
+
+    if(fbKo.length){
+      v.push('<p class="alerte">Firebase injoignable : '+fbKo.map(function(i){return R[i].nom;}).join(', ')+'.</p>');
+      if(!bon('gstatic')) v.push('<p>Sans le programme Firebase (gstatic), GarageOS s\'affiche mais reste bloqué sur « Connexion… ». Essayer le DNS privé <b>dns.google</b> ; si ça ne suffit pas, GarageOS peut être modifié pour charger Firebase depuis un serveur de secours.</p>');
+    } else {
+      v.push('<p class="bon">Tous les services Firebase répondent.</p>');
+    }
+    if(!bon('ws') && bon('base')) v.push('<p>Le temps réel (WebSocket) est bloqué sur ce réseau. Firebase passe alors en mode dégradé : ça fonctionne, mais en plus lent.</p>');
+
+    var lents = Object.keys(R).filter(function(k){ return R[k].etat==='lent' && k!=='ipv6'; });
+    if(lents.length) v.push('<p>Réponses lentes (plus de 4 s) : '+lents.map(function(k){return R[k].nom;}).join(', ')+'. Le réseau est très chargé ou instable.</p>');
+  }
+  v.push('<p style="color:#6b6a66;font-size:13px">Appuyer sur « Copier le rapport » et l\'envoyer pour analyse.</p>');
+  document.getElementById('verdict').innerHTML = v.join('');
+}
+
+function infos(){
+  var c = navigator.connection || {};
+  var lignes = [
+    'Date : '+new Date().toLocaleString('fr-FR'),
+    'Page : '+location.href,
+    'Navigateur : '+navigator.userAgent,
+    'Écran : '+screen.width+'×'+screen.height,
+    'Connexion : '+(c.effectiveType||'?')+(c.downlink?(' · '+c.downlink+' Mb/s'):'')+(c.rtt!=null?(' · rtt '+c.rtt+' ms'):''),
+    'Heure de l\'appareil : '+new Date().toISOString()
+  ];
+  document.getElementById('infos').innerHTML = lignes.map(function(l){ return l.replace(/&/g,'&amp;').replace(/</g,'&lt;'); }).join('<br>');
+  return lignes;
+}
+
+function rapport(){
+  var t = ['DIAGNOSTIC GARAGEOS'].concat(infos(), ['']);
+  GROUPES.forEach(function(gr){
+    t.push('['+gr.titre+']');
+    gr.tests.forEach(function(x){ var r=R[x.id]||{}; t.push('- '+x.nom+' ('+hote(x.url||x.ws)+') : '+(r.texte||'non testé')); });
+  });
+  t.push('', 'Verdict : '+document.getElementById('verdict').innerText.replace(/\s*Appuyer sur.*$/,''));
+  return t.join('\n');
+}
+
+document.getElementById('lancer').onclick = function(){
+  var b = this; b.disabled = true; b.textContent = 'Test en cours…';
+  document.getElementById('copier').disabled = true;
+  R = {}; construire();
+  document.getElementById('verdict').textContent = 'Test en cours…';
+  var tous = [];
+  GROUPES.forEach(function(gr){ gr.tests.forEach(function(t){ tous.push(t.ws ? testerWs(t) : testerHttp(t)); }); });
+  Promise.all(tous).then(function(){
+    verdict();
+    b.disabled = false; b.textContent = 'Relancer le test';
+    document.getElementById('copier').disabled = false;
+  });
+};
+
+document.getElementById('copier').onclick = function(){
+  var txt = rapport(), b = this;
+  function ok(){ b.textContent = 'Rapport copié ✓'; setTimeout(function(){ b.textContent='Copier le rapport'; }, 2500); }
+  function secours(){ var ta=document.getElementById('tampon'); ta.value=txt; ta.select(); try{ document.execCommand('copy'); ok(); }catch(e){ ta.style.left='0'; } }
+  if(navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(txt).then(ok, secours); else secours();
+};
+
+construire(); infos();
+</script>
+</body>
+</html>
