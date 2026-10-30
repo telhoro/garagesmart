@@ -2276,6 +2276,92 @@ function initFournisseurs(){
 
 // PRESENCES TOUS PROFILS (30/10/2026) : module Presences ouvert a tous les profils sauf technicien
 var ROLES_PRESENCES = ['direction','reception','chef_atelier','chef_equipe','achats'];
+// PRESENCES PERIMETRE (30/10/2026) : qui voit quoi dans l'historique des presences
+//  - Direction, Reception : tout le personnel
+//  - Chef d'atelier : le personnel d'atelier (son equipe si son compte en a une)
+//  - Chef d'equipe : les membres de son equipe
+//  - Achats : uniquement ses propres pointages
+// Le rattachement employe -> compte GarageOS (uid, equipe, role) est fait par la
+// Direction dans l'onglet Enrolement. Un employe non rattache n'est visible que
+// de la Direction et de la Reception (aucun affichage par defaut).
+var ROLES_ATELIER_PRESENCES = ['technicien','chef_equipe','chef_atelier'];
+function presencesMoi(){
+  var uid = null, equipe = '';
+  try{ uid = GOS_AUTH.uid || null; equipe = (GOS_AUTH.profil && GOS_AUTH.profil.equipe) || ''; }catch(e){}
+  if(!uid && typeof currentUser !== 'undefined' && currentUser) uid = currentUser.uid || currentUser.id || null;
+  if(!equipe && typeof currentUser !== 'undefined' && currentUser) equipe = currentUser.equipe || '';
+  return {uid: uid, equipe: equipe};
+}
+function presencesEstMoi(e, moi){ return !!(moi.uid && (e.uid === moi.uid || e.id === moi.uid)); }
+function presencesEmployeVisible(e){
+  if(currentRole === 'direction' || currentRole === 'reception') return true;
+  var moi = presencesMoi();
+  if(presencesEstMoi(e, moi)) return true;
+  if(currentRole === 'chef_equipe') return !!(moi.equipe && e.uid && e.equipe === moi.equipe);
+  if(currentRole === 'chef_atelier'){
+    if(!e.uid) return false;
+    if(moi.equipe) return e.equipe === moi.equipe;
+    return ROLES_ATELIER_PRESENCES.indexOf(e.roleCompte) >= 0;
+  }
+  return false; // achats et autres : uniquement soi-meme
+}
+function presencesIdsVisibles(){
+  var ids = {};
+  EMPLOYES_PRESENCE.forEach(function(e){ if(e.actif && presencesEmployeVisible(e)) ids[e.id] = true; });
+  return ids;
+}
+function presencesNormNom(s){
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[.\-_,]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+// Direction : complete/rafraichit le rattachement a partir des comptes du personnel
+// (nom identique et unique uniquement ; sinon rattachement manuel).
+function presencesSynchroRattachements(){
+  if(currentRole !== 'direction' || typeof GOS_PERSONNEL === 'undefined' || !GOS_PERSONNEL.liste) return;
+  var staff = GOS_PERSONNEL.liste() || {}, uids = Object.keys(staff);
+  if(!uids.length) return;
+  var change = false;
+  EMPLOYES_PRESENCE.forEach(function(e){
+    if(!e.uid){
+      var n1 = presencesNormNom((e.nom || '') + ' ' + (e.prenom || '')), n2 = presencesNormNom((e.prenom || '') + ' ' + (e.nom || ''));
+      var trouves = uids.filter(function(u){ var n = presencesNormNom(staff[u].nom); return n && (n === n1 || n === n2); });
+      var dejaPris = trouves.length === 1 && EMPLOYES_PRESENCE.some(function(x){ return x !== e && x.uid === trouves[0]; });
+      if(trouves.length === 1 && !dejaPris){ e.uid = trouves[0]; change = true; }
+    }
+    if(e.uid && staff[e.uid]){
+      var eq = staff[e.uid].equipe || '', ro = staff[e.uid].role || '';
+      if(e.equipe !== eq || e.roleCompte !== ro){ e.equipe = eq; e.roleCompte = ro; change = true; }
+    }
+  });
+  if(change) saveEmployesPresence();
+}
+function presencesRattacherCompte(employeId, uid){
+  if(currentRole !== 'direction') return;
+  var e = EMPLOYES_PRESENCE.find(function(x){ return x.id === employeId; }); if(!e) return;
+  var staff = (GOS_PERSONNEL.liste && GOS_PERSONNEL.liste()) || {};
+  if(!uid){ delete e.uid; delete e.equipe; delete e.roleCompte; }
+  else {
+    var autre = EMPLOYES_PRESENCE.find(function(x){ return x !== e && x.uid === uid; });
+    if(autre){ delete autre.uid; delete autre.equipe; delete autre.roleCompte; }
+    e.uid = uid; e.equipe = (staff[uid] && staff[uid].equipe) || ''; e.roleCompte = (staff[uid] && staff[uid].role) || '';
+  }
+  saveEmployesPresence(); renderPage();
+}
+function presencesCelluleRattachement(e){
+  function esc(t){ return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  if(currentRole !== 'direction'){
+    return e.uid ? '<span class="xs">' + esc(e.equipe || '—') + '</span>' : '<span class="xs muted">non rattache</span>';
+  }
+  var staff = (typeof GOS_PERSONNEL !== 'undefined' && GOS_PERSONNEL.liste && GOS_PERSONNEL.liste()) || {};
+  var uids = Object.keys(staff).sort(function(a, b){ return String(staff[a].nom).localeCompare(String(staff[b].nom)); });
+  if(!uids.length) return e.uid ? '<span class="xs">' + esc(e.equipe || '—') + '</span>' : '<span class="xs muted">comptes non charges</span>';
+  var h = '<select class="inp" style="font-size:11px;max-width:220px' + (e.uid ? '' : ';border-color:#E8A44A') + '" onchange="presencesRattacherCompte(\'' + e.id + '\', this.value)">';
+  h += '<option value="">— non rattache —</option>';
+  uids.forEach(function(u){
+    var p = staff[u] || {};
+    h += '<option value="' + esc(u) + '"' + (e.uid === u ? ' selected' : '') + '>' + esc(p.nom) + ' · ' + esc(p.role || '') + (p.equipe ? ' · ' + esc(p.equipe) : '') + '</option>';
+  });
+  return h + '</select>';
+}
 
 var NAV = {
   direction:[
@@ -2792,7 +2878,7 @@ function syncClientDelaisPaiementFromFirebase(callback){
 // jamais aux employes deja geres — evite d'ecraser une desactivation ou
 // un employe manuel a chaque appel).
 function initialiserEmployesPresence(){
-  if(ROLES_PRESENCES.indexOf(currentRole) < 0) return; // presences : tous les profils sauf technicien (30/10/2026)
+  if(['direction','reception'].indexOf(currentRole) < 0) return; // liste ecrite par Direction et accueil uniquement (regles Firebase)
   var comptes = loadComptes();
   var idsExistants = {};
   EMPLOYES_PRESENCE.forEach(function(e){ idsExistants[e.id] = true; });
@@ -34790,12 +34876,14 @@ function pagePresences(){
 
   html += '<div class="tabs" style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid #e8e6e1;padding-bottom:8px">';
   html += '<button class="btn btn-sm'+(presencesOnglet==='pointage'?' btn-primary':'')+'" onclick="presencesOnglet=\'pointage\';renderPage()">&#x1F4F7; Pointage</button>';
-  html += '<button class="btn btn-sm'+(presencesOnglet==='enrolement'?' btn-primary':'')+'" onclick="presencesOnglet=\'enrolement\';renderPage()">&#x1F464; Enrolement</button>';
+  var peutEnroler = (currentRole==='direction' || currentRole==='reception');   // PRESENCES PERIMETRE : enrolement = Direction / accueil
+  if(!peutEnroler && presencesOnglet==='enrolement') presencesOnglet = 'pointage';
+  if(peutEnroler) html += '<button class="btn btn-sm'+(presencesOnglet==='enrolement'?' btn-primary':'')+'" onclick="presencesOnglet=\'enrolement\';renderPage()">&#x1F464; Enrolement</button>';
   html += '<button class="btn btn-sm'+(presencesOnglet==='historique'?' btn-primary':'')+'" onclick="presencesOnglet=\'historique\';renderPage()">&#x1F4CA; Historique</button>';
   html += '</div>';
 
   if(presencesOnglet==='pointage') html += pagePresencesPointage();
-  else if(presencesOnglet==='enrolement') html += pagePresencesEnrolement();
+  else if(presencesOnglet==='enrolement' && peutEnroler) html += pagePresencesEnrolement();
   else html += pagePresencesHistorique();
 
   return html;
@@ -34856,6 +34944,8 @@ function pagePresencesEnrolement(){
   // les comptes eux-memes — permet de selectionner/desactiver qui doit
   // pointer, et d'ajouter des employes qui n'ont pas de compte GarageOS.
   initialiserEmployesPresence();
+  try{ GOS_PERSONNEL.demarrerEcoute(); }catch(e){}
+  presencesSynchroRattachements();   // PRESENCES PERIMETRE
   var employesTries = EMPLOYES_PRESENCE.slice().sort(function(a,b){
     if(a.actif!==b.actif) return a.actif ? -1 : 1; // actifs en premier
     return (a.nom||'').localeCompare(b.nom||'');
@@ -34878,7 +34968,7 @@ function pagePresencesEnrolement(){
     : 'La selection des employes actifs pour le pointage est reservee a la Direction.')
     +' Enrolez chaque employe avec <strong>3 captures</strong> (angles/expressions legerement differents) pour une reconnaissance plus fiable.</div>';
 
-  html += '<div class="tw"><table><thead><tr><th style="width:40px"></th><th>Nom</th><th>Prenom</th><th>Fonction</th><th>Statut</th><th></th></tr></thead><tbody>';
+  html += '<div class="tw"><table><thead><tr><th style="width:40px"></th><th>Nom</th><th>Prenom</th><th>Fonction</th><th>Compte / equipe</th><th>Statut</th><th></th></tr></thead><tbody>';
   employesTries.forEach(function(e){
     var estEnrole = !!DESCRIPTEURS_FACIAUX[e.id];
     var styleGrise = e.actif ? '' : 'opacity:0.45';
@@ -34891,6 +34981,7 @@ function pagePresencesEnrolement(){
     html += '<td><strong>'+(e.nom||'')+'</strong></td>';
     html += '<td>'+(e.prenom||'—')+'</td>';
     html += '<td class="xs muted">'+(e.fonction||'—')+'</td>';
+    html += '<td>'+presencesCelluleRattachement(e)+'</td>';
     html += '<td>'+(estEnrole?'<span class="badge b-green">&#x2714; Enrole</span>':'<span class="badge b-gray">Non enrole</span>')+'</td>';
     html += '<td><div class="flex gap6">';
     html += '<button class="btn btn-sm" onclick="ouvrirEnrolementFacial(\''+e.id+'\')">'+(estEnrole?'&#x1F504; Refaire':'&#x1F4F7; Enroler')+'</button>';
@@ -35165,8 +35256,7 @@ function renderCalendrierEmploye(employeId, employeNom, journeesEmploye, annee, 
 // les fonctions d'export/impression pour rester coherentes avec les
 // filtres actuellement appliques (employe, periode).
 function presencesDonneesFiltrees(){
-  var idsActifs = {};
-  EMPLOYES_PRESENCE.forEach(function(e){ if(e.actif) idsActifs[e.id] = true; });
+  var idsActifs = presencesIdsVisibles();   // PRESENCES PERIMETRE : exports et impressions
   var liste = PRESENCES.slice().filter(function(p){ return idsActifs[p.employeId]; });
   if(presencesHistoEmploye) liste = liste.filter(function(p){return p.employeId===presencesHistoEmploye;});
   if(presencesHistoDateDebut){
@@ -35420,13 +35510,22 @@ function pagePresencesHistorique(){
   // de l'historique : filtre deroulant, recapitulatif, calendrier, detail
   // — tant qu'il reste desactive. Ses pointages restent en base (aucune
   // donnee perdue), simplement filtres hors de cette vue.
-  var idsActifs = {};
-  EMPLOYES_PRESENCE.forEach(function(e){ if(e.actif) idsActifs[e.id] = true; });
+  try{ GOS_PERSONNEL.demarrerEcoute(); }catch(e){}
+  presencesSynchroRattachements();
+  var idsActifs = presencesIdsVisibles();   // PRESENCES PERIMETRE
+  if(presencesHistoEmploye && !idsActifs[presencesHistoEmploye]) presencesHistoEmploye = '';
 
-  var html = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px">';
+  var html = '';
+  if(currentRole !== 'direction' && currentRole !== 'reception'){
+    var txtPerimetre = currentRole === 'achats' ? 'Vous voyez uniquement vos propres pointages.'
+      : currentRole === 'chef_equipe' ? 'Vous voyez les pointages des membres de votre equipe' + (presencesMoi().equipe ? ' (' + presencesMoi().equipe + ')' : '') + '.'
+      : 'Vous voyez les pointages du personnel d\'atelier.';
+    html += '<div class="info-box" style="margin-bottom:12px">' + txtPerimetre + ' Une personne absente de la liste doit etre rattachee a son compte par la Direction (onglet Enrolement).</div>';
+  }
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px">';
   html += '<select class="inp" style="width:200px" onchange="presencesHistoEmploye=this.value;renderPage()">';
-  html += '<option value="">Tous les employes</option>';
-  EMPLOYES_PRESENCE.filter(function(e){return e.actif;}).forEach(function(e){
+  html += '<option value="">'+(currentRole==='achats'?'Mes pointages':'Tous les employes')+'</option>';
+  EMPLOYES_PRESENCE.filter(function(e){return idsActifs[e.id];}).forEach(function(e){
     html += '<option value="'+e.id+'"'+(presencesHistoEmploye===e.id?' selected':'')+'>'+e.nom+(e.prenom?' '+e.prenom:'')+'</option>';
   });
   html += '</select>';
@@ -39364,7 +39463,7 @@ var GOS_PERSONNEL = (function(){
   function demarrerEcoute(){
     if(ecoute || !fbDb || GOS_AUTH.mode !== 'firebase' || currentRole !== 'direction') return;
     ecoute = true;
-    fbDb.ref('gos_staff').on('value', function(s){ liste = s.val() || {}; if(currentPage === 'comptes' && !(typeof uneModaleEstOuverte === 'function' && uneModaleEstOuverte())) renderPage(); },
+    fbDb.ref('gos_staff').on('value', function(s){ liste = s.val() || {}; if((currentPage === 'comptes' || currentPage === 'presences') && !(typeof uneModaleEstOuverte === 'function' && uneModaleEstOuverte())) renderPage(); },
       function(){ ecoute = false; });
   }
   function html(){
@@ -39468,7 +39567,8 @@ var GOS_PERSONNEL = (function(){
     if(!actif){ maj.desactiveLe = firebase.database.ServerValue.TIMESTAMP; maj.desactivePar = GOS_AUTH.uid; }
     fbDb.ref('gos_staff/' + uid).update(maj).catch(function(e){ alert('Echec : ' + (e && e.code ? e.code : e)); });
   }
-  return {html: html, creer: creer, changerEtat: changerEtat, changerEquipe: changerEquipe};
+  return {html: html, creer: creer, changerEtat: changerEtat, changerEquipe: changerEquipe,
+          liste: function(){ return liste; }, demarrerEcoute: demarrerEcoute};  // PRESENCES PERIMETRE : lecture seule
 })();
 var GOS_M1_OUTIL = {
   html: function(){
