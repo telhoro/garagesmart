@@ -37994,12 +37994,42 @@ var GOS_SYNC = (function(){
     if(op.type === 'create') return egal(sansTechnique(s), sansTechnique(op.record));
     return (op.patch || []).every(function(e){ return egal(lire(s, e.p), e.n); });
   }
+  // CONFLITS ETAPES INTERMEDIAIRES (30/10/2026) : une operation heritee dont TOUS les champs ont ete
+  // reecrits ensuite par une operation plus recente du MEME poste sur le MEME dossier n'est qu'une etape
+  // intermediaire de la meme saisie (ex. lignes de devis ajoutees une par une : 4, 5, 6... 8). Seule la
+  // derniere intention du poste compte : l'etape remplacee n'est plus presentee comme un conflit.
+  // Aucune donnee d'un autre poste n'est concernee, et la derniere operation reste verifiee normalement.
+  function prefixeChemin(a, b){
+    if(!a || !b || a.length > b.length) return false;
+    for(var i = 0; i < a.length; i++){ if(String(a[i]) !== String(b[i])) return false; }
+    return true;
+  }
+  function opRemplaceeParSuivante(op, ops){
+    if(op.type !== 'update' || !op.patch || !op.patch.length || !op.deviceId) return false;
+    return op.patch.every(function(e){
+      return ops.some(function(o){
+        if(o === op || o.collection !== op.collection || o.recordId !== op.recordId || o.deviceId !== op.deviceId) return false;
+        if(!(o.seq > op.seq)) return false;
+        if(o.type === 'delete') return true;
+        if(o.type !== 'update') return false;
+        return (o.patch || []).some(function(f){ return prefixeChemin(f.p, e.p); });
+      });
+    });
+  }
   function verifierHeritees(cle){
     if(!fileChargee || !enLigne) return;
     var ops = file.filter(function(o){ return o.collection === cle && o.heritee; });
     if(!ops.length) return;
     var carte = enCarte(COLL[cle], serveur[cle]), tomb = tombes[cle] || {}, ok = [], ko = [];
     ops.forEach(function(op){ (opDejaAppliquee(carte, tomb, op) ? ok : ko).push(op); });
+    var remplacees = ko.filter(function(op){ return opRemplaceeParSuivante(op, ops); });
+    if(remplacees.length){
+      ko = ko.filter(function(op){ return remplacees.indexOf(op) < 0; });
+      retirerOps(remplacees.map(function(o){ return o.opId; }));
+      remplacees.forEach(function(o){ notifierOp(o.opId, 'ok'); });
+      bilanHeritees.remplacees = (bilanHeritees.remplacees || 0) + remplacees.length;
+      trace({e: 'heritees_remplacees', c: cle, n: remplacees.length, ops: remplacees.map(function(o){ return o.opId; })});
+    }
     if(ok.length){ retirerOps(ok.map(function(o){ return o.opId; })); ok.forEach(function(o){ notifierOp(o.opId, 'ok'); }); bilanHeritees.confirmees += ok.length; }
     if(ko.length){ mettreEnQuarantaine(ko, 'non_confirmee_avant_rechargement'); bilanHeritees.quarantaine += ko.length; setTimeout(avisHeritees, 1500); }
     trace({e: 'verification_heritees', c: cle, confirmees: ok.length, quarantaine: ko.length});
