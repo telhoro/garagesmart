@@ -142,10 +142,8 @@ tr:hover td{background:#faf9f7}
   .g2,.g3,.g4{grid-template-columns:1fr 1fr}
 }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<!-- ALLEGEMENT DEMARRAGE : Excel, PDF et reconnaissance faciale sont charges au premier usage (gosChargerLib) -->
+<!-- CDN SECOURS : graphiques charges en arriere-plan (plus aucun script externe bloquant ici) -->
 </head>
 <body>
 <!-- INDICATEUR DE CHARGEMENT — visible tant que la 1ere synchronisation
@@ -3632,7 +3630,7 @@ function renderNav(){var cfg=NAV[currentRole]||NAV.direction,h='';cfg.forEach(fu
   h += '<button class="btn btn-sm" onclick="doLogout()" style="width:100%;color:#A32D2D;border-color:#A32D2D;font-size:12px">&#x2192; D&#xe9;connexion</button>';
   h += '</div>';
   document.getElementById('nav').innerHTML=h;}
-function navigate(page){if(page==='commandes_speciales_ca'){ouvrirCommandesSpeciales();closeMobileMenu();return;}if(page==='correction_statut_dir'){ouvrirCorrectionStatut();closeMobileMenu();return;}currentPage=page;dashFilter='all';document.getElementById('pageTitle').textContent=TITLES[page]||'Tableau de bord';renderNav();renderPage();closeMobileMenu();}
+function navigate(page){gosVtTout=false;if(page==='commandes_speciales_ca'){ouvrirCommandesSpeciales();closeMobileMenu();return;}if(page==='correction_statut_dir'){ouvrirCorrectionStatut();closeMobileMenu();return;}currentPage=page;dashFilter='all';document.getElementById('pageTitle').textContent=TITLES[page]||'Tableau de bord';renderNav();renderPage();closeMobileMenu();}
 function changeRole(role){
   resetNotifications();
   currentRole=role;currentPage='dashboard';dashFilter='all';caFilter={equipe:null,mode:null};
@@ -6313,8 +6311,19 @@ function supprimerPassageByEl(btn){
 // ============================================================
 // TABLE VEHICULES (sans colonne statut changeable)
 // ============================================================
+// ALLEGEMENT DEMARRAGE : au-dela de 60 lignes, la suite s'affiche a la demande
+var GOS_VT_LIMITE = 60, gosVtTout = false;
+function gosVtAfficherTout(){ gosVtTout = true; renderPage(); }
 function vtableRec(list){
   if(!list||!list.length)return '<div class="empty">Aucun vehicule</div>';
+  if(!gosVtTout && list.length > GOS_VT_LIMITE + 10){
+    var reste = list.length - GOS_VT_LIMITE;
+    return vtableRecComplet(list.slice(0, GOS_VT_LIMITE)).replace(/<\/tbody><\/table><\/div>$/, '<tr><td colspan="7" style="text-align:center;padding:10px">'
+      + '<button class="btn btn-sm" onclick="gosVtAfficherTout()">Afficher les ' + reste + ' autres vehicules</button></td></tr></tbody></table></div>');
+  }
+  return vtableRecComplet(list);
+}
+function vtableRecComplet(list){
   var h='<div class="tw"><table><thead><tr><th>Vehicule</th><th>Client</th><th>Type / Priorite</th><th>Statut</th><th>Equipe / Technicien</th><th>Chronometres</th><th>Actions</th></tr></thead><tbody>';
   list.forEach(function(v){
     var tech=v.technicien?(eqBadgeForTech(v.technicien)+av(v.technicien)+'<span class="xs" style="margin-left:4px">'+v.technicien+'</span>'):(v.equipe_affectee?'<span class="badge b-blue">'+eqLetter(v.equipe_affectee)+'</span> <span class="xs muted">'+v.equipe_affectee+'</span>':'<span class="xs muted">Non attribue</span>');
@@ -40592,5 +40601,79 @@ window.onload=function(){
 </div>
 </div>
 
+<script>
+// ALLEGEMENT DEMARRAGE : bibliotheques lourdes chargees au premier usage (memoire des tablettes Android)
+// CDN SECOURS : 3 serveurs par bibliotheque (jsdelivr, unpkg, cdnjs), le dernier qui a marche en premier
+var GOS_CDN = ['jsdelivr', 'unpkg', 'cdnjs'];
+var GOS_LIBS = {
+  chart: {urls: {jsdelivr: 'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js', unpkg: 'https://unpkg.com/chart.js@4.4.4/dist/chart.umd.min.js',
+                 cdnjs: 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js'}, pret: function(){ return typeof Chart !== 'undefined'; }, nom: 'graphiques'},
+  xlsx: {urls: {jsdelivr: 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js', unpkg: 'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js',
+                 cdnjs: 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'}, pret: function(){ return typeof XLSX !== 'undefined'; }, nom: 'Excel'},
+  pdf:  {urls: {jsdelivr: 'https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js', unpkg: 'https://unpkg.com/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js',
+                 cdnjs: 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js'}, pret: function(){ return typeof html2pdf !== 'undefined'; }, nom: 'PDF'},
+  face: {urls: {jsdelivr: 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js', unpkg: 'https://unpkg.com/face-api.js@0.22.2/dist/face-api.min.js'},
+         pret: function(){ return typeof faceapi !== 'undefined'; }, nom: 'reconnaissance faciale'}
+};
+function gosCdnOrdre(){
+  var pref = null; try{ pref = localStorage.getItem('gos_cdn_ok'); }catch(e){}
+  return pref && GOS_CDN.indexOf(pref) >= 0 ? [pref].concat(GOS_CDN.filter(function(c){ return c !== pref; })) : GOS_CDN.slice();
+}
+function gosEssaiScript(url, L){
+  return new Promise(function(ok, ko){
+    var sc = document.createElement('script'), fini = false; sc.src = url; sc.async = true;
+    var tm = setTimeout(function(){ if(fini) return; fini = true; sc.onload = sc.onerror = null; sc_retirer(url); ko(new Error('delai depasse')); }, 7000);
+    sc.onload = function(){ if(fini) return; fini = true; clearTimeout(tm); L.pret() ? ok() : ko(new Error('bibliotheque ' + L.nom + ' inutilisable')); };
+    sc.onerror = function(){ if(fini) return; fini = true; clearTimeout(tm); sc_retirer(url); ko(new Error('telechargement impossible')); };
+    document.head.appendChild(sc);
+  });
+}
+function gosChargerLib(n){
+  var L = GOS_LIBS[n];
+  if(L.pret()) return Promise.resolve();
+  if(L.promesse) return L.promesse;
+  var ordre = gosCdnOrdre().filter(function(c){ return L.urls[c]; });
+  L.promesse = ordre.reduce(function(p, cdn){
+    return p.catch(function(){
+      if(L.pret()) return;   // un essai precedent a fini par arriver
+      return gosEssaiScript(L.urls[cdn], L).then(function(){ try{ localStorage.setItem('gos_cdn_ok', cdn); }catch(e){} });
+    });
+  }, Promise.reject(new Error('debut'))).then(function(){
+    if(!L.pret()) throw new Error('bibliotheque ' + L.nom + ' indisponible');
+  }).catch(function(e){ L.promesse = null; throw e; });
+  return L.promesse;
+}
+// graphiques : charges en arriere-plan apres l'ouverture, puis l'ecran est redessine
+setTimeout(function(){
+  gosChargerLib('chart').then(function(){
+    try{ if(typeof currentUser !== 'undefined' && currentUser && !(typeof uneModaleEstOuverte === 'function' && uneModaleEstOuverte())) renderPage(); }catch(e){}
+  }, function(){ /* graphiques absents : les ecrans restent utilisables */ });
+}, 300);
+function sc_retirer(url){ try{ document.querySelectorAll('script[src="' + url + '"]').forEach(function(x){ x.remove(); }); }catch(e){} }
+function gosAvecLib(n, f){
+  var enveloppe = function(){
+    var a = arguments, t = this, L = GOS_LIBS[n];
+    if(L.pret()) return f.apply(t, a);
+    try{ afficherToastNotif('Chargement du module ' + L.nom, 'Premiere utilisation : quelques secondes...', 'info'); }catch(e){}
+    gosChargerLib(n).then(function(){ f.apply(t, a); }, function(){
+      try{ afficherToastNotif('Module ' + L.nom + ' indisponible', 'Verifiez la connexion internet, puis reessayez.', 'alerte'); }catch(e){ alert('Module ' + L.nom + ' indisponible : verifiez la connexion internet.'); }
+    });
+  };
+  enveloppe.__gosOrigine = f;
+  return enveloppe;
+}
+(function(){
+  ["exportPerfTableau", "genererRapportExcel", "bilanExcelSynthese", "bilanExcelDetail", "bilanExcelClient", "exporterFacturesClientExcel", "exporterStatutFacturesClientExcel", "histPaieExcelClientsSynthese", "histPaieExcelClientsDetail", "histPaieExcelUnClient", "histPaieExcelAutresSynthese", "histPaieExcelAutresDetail", "histPaieExcelCategorie", "exporterEcheancesExcel", "exporterEngagementsExcel", "exporterEngagementsAvecFacturesExcel", "exporterHistoriqueVuePortailExcel", "vpExporterToutHistoriqueExcel", "vpExporterExcel", "exporterExcel", "exporterFactureForfaitExcel", "analyserFichierImportHisto", "presencesExporterExcelGlobal", "presencesExporterExcelEmploye"].forEach(function(nom){ if(typeof window[nom] === 'function') window[nom] = gosAvecLib('xlsx', window[nom]); });
+  if(typeof window.exporterPDF === 'function') window.exporterPDF = gosAvecLib('pdf', window.exporterPDF);
+  // reconnaissance faciale : la bibliotheque est chargee avant les modeles
+  if(typeof window.chargerModelesFaceApi === 'function'){
+    var orig = window.chargerModelesFaceApi;
+    window.chargerModelesFaceApi = function(callback, onError){
+      if(GOS_LIBS.face.pret()) return orig(callback, onError);
+      gosChargerLib('face').then(function(){ orig(callback, onError); }, function(){ orig(callback, onError); });
+    };
+  }
+})();
+</script>
 </body>
 </html>
