@@ -2274,6 +2274,9 @@ function initFournisseurs(){
   }
 }
 
+// PRESENCES TOUS PROFILS (30/10/2026) : module Presences ouvert a tous les profils sauf technicien
+var ROLES_PRESENCES = ['direction','reception','chef_atelier','chef_equipe','achats'];
+
 var NAV = {
   direction:[
     {l:'Principal',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'clients',e:'Cl',l:'Clients et vehicules'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'temps_morts',e:'TM',l:'Temps morts'},{id:'comptes',e:'U',l:'Acces utilisateurs'},{id:'acces_clients',e:'AC',l:'Acces clients'},{id:'messages_clients',e:'MC',l:'Messages clients'},{id:'import_historique',e:'IH',l:'Import historique'},{id:'presences',e:'Pr',l:'Presences'}]},
@@ -2292,18 +2295,20 @@ var NAV = {
     {l:'Atelier',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'},{id:'testeur',e:'Ts',l:'Testeur'}]},
     {l:'Equipes',items:[{id:'equipes',e:'E',l:'Equipes et techniciens'}]},
     {l:'Stock',items:[{id:'commandes_speciales_ca',e:'CS',l:'Commandes speciales'}]},
-    {l:'Clients',items:[{id:'messages_clients',e:'MC',l:'Messages clients'}]}
+    {l:'Clients',items:[{id:'messages_clients',e:'MC',l:'Messages clients'}]},
+    {l:'RH',items:[{id:'presences',e:'Pr',l:'Presences'}]}
   ],
   chef_equipe:[
     {l:'Mon equipe',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'}]},
-    {l:'Equipe',items:[{id:'equipes',e:'E',l:'Techniciens'}]}
+    {l:'Equipe',items:[{id:'equipes',e:'E',l:'Techniciens'}]},
+    {l:'RH',items:[{id:'presences',e:'Pr',l:'Presences'}]}
   ],
   technicien:[
     {l:'Travail',items:[{id:'dashboard',e:'D',l:'Tableau de bord'}]},
     {l:'Suivi',items:[{id:'stats_tech',e:'S',l:'Statistiques'},{id:'historique',e:'H',l:'Historique'},{id:'performance',e:'Pf',l:'Performance'}]}
   ],
   testeur:[{l:'Test',items:[{id:'dashboard',e:'D',l:'Tableau de bord'}]}],
-  achats:[{l:'Achats',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'historique',e:'H',l:'Historique'}]},{l:'Stock',items:[{id:'stock',e:'St',l:'Gestion du stock'},{id:'forfaits_tkm',e:'FT',l:'Forfaits TKM'}]}]
+  achats:[{l:'Achats',items:[{id:'dashboard',e:'D',l:'Tableau de bord'},{id:'fournisseurs',e:'F',l:'Fournisseurs'},{id:'historique',e:'H',l:'Historique'}]},{l:'Stock',items:[{id:'stock',e:'St',l:'Gestion du stock'},{id:'forfaits_tkm',e:'FT',l:'Forfaits TKM'}]},{l:'RH',items:[{id:'presences',e:'Pr',l:'Presences'}]}]
 };
 
 var TITLES = {
@@ -2787,7 +2792,7 @@ function syncClientDelaisPaiementFromFirebase(callback){
 // jamais aux employes deja geres — evite d'ecraser une desactivation ou
 // un employe manuel a chaque appel).
 function initialiserEmployesPresence(){
-  if(['direction','reception'].indexOf(currentRole) < 0) return; // C-09 : presences : Direction et accueil uniquement
+  if(ROLES_PRESENCES.indexOf(currentRole) < 0) return; // presences : tous les profils sauf technicien (30/10/2026)
   var comptes = loadComptes();
   var idsExistants = {};
   EMPLOYES_PRESENCE.forEach(function(e){ idsExistants[e.id] = true; });
@@ -5902,7 +5907,7 @@ function renderPage(){
   else if(p==='chiffrage') html=pageDashAchats();
   else if(p==='testeur') html=pageDashTesteur();
   else if((r==='direction' || r==='reception' || r==='chef_atelier' || r==='chef_equipe') && p==='messages_clients') html=pageMessagesClients();
-  else if((r==='direction' || r==='reception') && p==='presences') html=pagePresences();
+  else if(ROLES_PRESENCES.indexOf(r) >= 0 && p==='presences') html=pagePresences();
   else if((r==='direction' || r==='reception') && p==='caisse') html=pageCaisse();
   else if(r==='reception') html=pageDashReception();
   else if((r==='chef_atelier'||r==='chef_equipe') && agirCommeTech) html=pageDashTech();
@@ -39074,8 +39079,8 @@ var GOS_AUTH_MATRICE = {
   'gos_treso_releves': ['direction'],
   'gos_exposition_snapshots': ['direction'],
   'gos_personnel': 'tous',
-  'gos_presences': ['direction','reception'], 'gos_employes_presence': ['direction','reception'],
-  'gos_descripteurs_faciaux': ['direction','reception'],
+  'gos_presences': ROLES_PRESENCES, 'gos_employes_presence': ROLES_PRESENCES,
+  'gos_descripteurs_faciaux': ROLES_PRESENCES,
   'gos_comptes': ['direction'],
   'gos_fin_paiements': ['direction','reception'],
   'gos_fin_validations': 'tous'
