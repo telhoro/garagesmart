@@ -144,6 +144,36 @@ tr:hover td{background:#faf9f7}
 </style>
 <!-- ALLEGEMENT DEMARRAGE : Excel, PDF et reconnaissance faciale sont charges au premier usage (gosChargerLib) -->
 <!-- CDN SECOURS : graphiques charges en arriere-plan (plus aucun script externe bloquant ici) -->
+<script>
+// DIAG DEMARRAGE : etapes de l'ouverture, affichees si elle reste bloquee
+(function(){
+  var t0 = Date.now(), E = [], erreurs = [];
+  window.gosEtape = function(nom){ E.push([nom, Date.now() - t0]); };
+  window.addEventListener('error', function(ev){ erreurs.push(String(ev.message || (ev.target && (ev.target.src || ev.target.href)) || 'erreur').slice(0, 160)); }, true);
+  window.addEventListener('unhandledrejection', function(ev){ try{ erreurs.push('promesse : ' + String(ev.reason && (ev.reason.code || ev.reason.message) || ev.reason).slice(0, 160)); }catch(e){} });
+  document.addEventListener('DOMContentLoaded', function(){ gosEtape('page lue'); });
+  function sessionConnue(){ try{ return !!localStorage.getItem('gos_profil_staff'); }catch(e){ return false; } }
+  function ouverte(){ var a = document.querySelector('.app'); return a && getComputedStyle(a).display !== 'none'; }
+  function afficher(){
+    if(ouverte() || !sessionConnue()) return;
+    var ls = document.getElementById('loginScreen'); if(!ls) return;
+    var box = document.getElementById('gosDiagDemarrage');
+    if(!box){ box = document.createElement('div'); box.id = 'gosDiagDemarrage';
+      box.style.cssText = 'position:fixed;left:8px;right:8px;bottom:8px;z-index:100000;background:#fff;border:1px solid #E8A44A;border-radius:8px;padding:10px;font:12px/1.4 system-ui,sans-serif;color:#333;max-height:45vh;overflow:auto';
+      document.body.appendChild(box); }
+    var attendues = ['page lue', 'chargement local termine', 'Firebase : session', 'profil lu', 'session ouverte'];
+    var h = '<strong>Ouverture lente (' + Math.round((Date.now() - t0) / 1000) + ' s)</strong> — photographiez cet encadre pour l\'assistance<br>';
+    E.forEach(function(e){ h += '&#10003; ' + e[0] + ' <span style="color:#888">(' + (e[1] / 1000).toFixed(1) + ' s)</span><br>'; });
+    attendues.forEach(function(a){ if(!E.some(function(e){ return e[0].indexOf(a) === 0; })) h += '<span style="color:#A32D2D">&#9744; ' + a + '</span><br>'; });
+    if(erreurs.length) h += '<span style="color:#A32D2D">Erreurs : ' + erreurs.slice(0, 4).join(' | ').replace(/</g, '&lt;') + '</span><br>';
+    try{ h += '<span style="color:#888">' + (navigator.onLine ? 'en ligne' : 'HORS LIGNE') + ' · ' + location.host + '</span><br>'; }catch(e){}
+    h += '<button class="btn btn-sm" style="margin-top:6px" onclick="location.reload()">Recharger</button>';
+    box.innerHTML = h;
+  }
+  setTimeout(afficher, 12000); setTimeout(afficher, 25000); setTimeout(afficher, 45000);
+  window.gosDiagDemarrageMasquer = function(){ var b = document.getElementById('gosDiagDemarrage'); if(b) b.remove(); };
+})();
+</script>
 </head>
 <body>
 <!-- INDICATEUR DE CHARGEMENT — visible tant que la 1ere synchronisation
@@ -39088,6 +39118,7 @@ var GOS_AUTH = (function(){
     if(!user){ return; }                             // pas de session Firebase : ecran de connexion
     if(etat.uid === user.uid && etat.mode === 'firebase') return;
     lireProfil(user.uid, function(p, source){
+      try{ gosEtape('profil lu (' + source + (p ? '' : ', VIDE') + ')'); }catch(e){}
       try{
       if(!p){ refuser('Ce compte n\'est associe a aucun profil du personnel. Contactez la Direction.'); return; }
       if(p.actif !== true){ bloquer('Ce compte est desactive. Contactez la Direction.'); return; }
@@ -39111,7 +39142,7 @@ var GOS_AUTH = (function(){
       // Chaque etape est nommee : en cas d'echec, le rapport dit laquelle.
       try{ GOS_SYNC.definirRole(p.role, true); }
       catch(e1){ gosRapporterErreur('connexion : definition des droits du role ' + p.role, e1, false); throw e1; }
-      try{ _doLoginWithCompte(compteDepuisProfil(uid, p)); }
+      try{ _doLoginWithCompte(compteDepuisProfil(uid, p)); try{ gosEtape('session ouverte'); gosDiagDemarrageMasquer(); }catch(e){} }
       catch(e2){ gosRapporterErreur('connexion : ouverture de la session (role ' + p.role + ')', e2, false); throw e2; }
       bandeauTransition(false);
       if(source === 'serveur'){ fbDb.ref('gos_staff/' + uid + '/derniereConnexion').set(firebase.database.ServerValue.TIMESTAMP).catch(function(){}); }
@@ -39234,6 +39265,7 @@ var GOS_AUTH = (function(){
   }
   function demarrer(){
     firebase.auth().onAuthStateChanged(function(user){
+      try{ gosEtape('Firebase : session ' + (user ? 'retrouvee' : 'ABSENTE (identifiants a ressaisir)')); }catch(e){}
       if(user) surUtilisateur(user);
       else if(etat.mode === 'firebase'){ etat.mode = null; }
     });
@@ -40122,6 +40154,7 @@ function majBandeauChargementSync(){
 // SYNC EN LIGNE : showSyncStatus est defini avec la pastille de connexion (voir GOS_ETATS_CONNEXION)
 
 window.onload=function(){
+  try{ gosEtape('chargement complet (onload)'); }catch(e){}
   // Détection mobile en JS (plus fiable que CSS media query seul)
   function checkMobileLayout(){
     var w = window.innerWidth;
@@ -40260,6 +40293,7 @@ window.onload=function(){
   loadDescripteursFaciaux(); initialiserBaselineObjet('descripteurs_faciaux', DESCRIPTEURS_FACIAUX);
   GOS_SYNC.localPret(); // NIVEAU 1 : reference des modifications locales = etat charge
   window.__gosChargementLocalTermine = true; // C-09
+  try{ gosEtape('chargement local termine'); }catch(e){}
   migrerPaiementsClients(); // migration retroactive (voir commentaire de la fonction) — necessite vehicles ET FORFAIT_FACTURES deja charges
   // Alimenter le catalogue pièces depuis l'historique existant
   vehicles.forEach(function(v){ if(v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length) indexerPiecesChiffrage(v); });
