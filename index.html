@@ -6067,7 +6067,7 @@ function gosDossierRecent(v){
 }
 function migrerFactureDeposeeLe(){
   if(!gosPeutMigrer()) return; // C-09 : migration : Direction uniquement
-  var nbMigres = 0;
+  var nbMigres = 0, reg = {};
   vehicles.forEach(function(v){
     if(v.status!=='facture_deposee' && v.status!=='dossier_cloture') return;
     if(v.factureDeposeeLe) return;
@@ -6076,9 +6076,10 @@ function migrerFactureDeposeeLe(){
     var dDepot = v.livraison || (v.chiffrage && v.chiffrage.valideDirLe) || (v.chiffrage && v.chiffrage.soumisLe) || v.entree || v.stepStart;
     if(!dDepot) return;
     v.factureDeposeeLe = dDepot;
+    reg[String(v.id) + '|factureDeposeeLe'] = true;   // CONFLITS MIGRATION : remplir seulement si vide sur le serveur
     nbMigres++;
   });
-  if(nbMigres>0) saveV();
+  if(nbMigres>0){ window.GOS_MIGRATION_CHAMPS = reg; try{ saveV(); } finally { window.GOS_MIGRATION_CHAMPS = null; } }
   return nbMigres;
 }
 
@@ -37416,6 +37417,7 @@ var GOS_SYNC = (function(){
       if(!s && op.type !== 'create'){ cible = ecrire(cible, e.p, e.n); return; }
       if(egal(sv, e.a)) cible = ecrire(cible, e.p, e.n);
       else if(egal(sv, e.n)) { /* deja applique */ }
+      else if(e.siAbsent && !(sv === undefined || sv === null || sv === '')) { trace({e: 'migration_valeur_serveur_gardee', id: rid, chemin: e.p}); }
       else r.conflits.push({type: 'modification_concurrente', chemin: e.p, base: e.a, local: e.n, serveur: clone(sv)});
     });
     if(r.conflits.length && r.statut === 'appliquee') r.statut = 'conflit_partiel';
@@ -37476,8 +37478,21 @@ var GOS_SYNC = (function(){
   }
   var compteurSeq = 0;
   function prochainSeq(){ compteurSeq = Math.max(compteurSeq + 1, Date.now() * 1000); return compteurSeq; }
+  // CONFLITS MIGRATION (02/11/2026) : un champ calcule automatiquement par une migration (ex. date de
+  // depot deduite de la livraison) ne sert qu'a REMPLIR un champ vide. Si le serveur a deja une valeur
+  // (saisie par quelqu'un ou enregistree avant), elle est conservee sans conflit : la valeur ecartee
+  // n'etait qu'une estimation, aucune saisie humaine n'est perdue.
+  function valeurVide(v){ return v === undefined || v === null || v === ''; }
+  function marquerSiAbsent(op){
+    var reg = window.GOS_MIGRATION_CHAMPS;
+    if(!reg || op.type !== 'update' || !op.patch) return;
+    op.patch.forEach(function(e){
+      if(e.p && e.p.length === 1 && reg[String(op.recordId) + '|' + e.p[0]] && valeurVide(e.a)) e.siAbsent = true;
+    });
+  }
   function ajouterOp(op){
     op.opId = op.opId || nouvelId('op');
+    marquerSiAbsent(op);
     op.seq = prochainSeq();
     op.createdAt = heureServeur(); op.deviceId = (typeof deviceId !== 'undefined' ? deviceId : '?'); op.auteur = utilisateur();
     op.tentatives = 0;
@@ -37992,7 +38007,7 @@ var GOS_SYNC = (function(){
     if(s._syncOps && s._syncOps.indexOf(op.opId) >= 0) return true;   // trace d'application laissee par la transaction
     if(op.type === 'delta') return false;                              // un mouvement de stock se prouve par sa trace uniquement
     if(op.type === 'create') return egal(sansTechnique(s), sansTechnique(op.record));
-    return (op.patch || []).every(function(e){ return egal(lire(s, e.p), e.n); });
+    return (op.patch || []).every(function(e){ var sv = lire(s, e.p); return egal(sv, e.n) || (e.siAbsent && !valeurVide(sv)); });
   }
   // CONFLITS ETAPES INTERMEDIAIRES (30/10/2026) : une operation heritee dont TOUS les champs ont ete
   // reecrits ensuite par une operation plus recente du MEME poste sur le MEME dossier n'est qu'une etape
