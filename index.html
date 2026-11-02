@@ -6616,14 +6616,7 @@ var K = computeKPIs(vehicleList, allV);
   // Ligne 4 : controle technique a echeance ce mois, sur toute la flotte
   // active (regroupee par immatriculation pour ne pas compter plusieurs
   // fois un meme vehicule s'il a plusieurs dossiers).
-  var immatsVus = {};
-  var vehiculesCtEcheanceFlotte = [];
-  vehicleList.forEach(function(v){
-    if(!v.immat || v.isProspect) return;
-    var key = v.immat.toUpperCase();
-    if(immatsVus[key]) return;
-    if(estEcheanceCeMois(v.ct_echeance)){ immatsVus[key]=true; vehiculesCtEcheanceFlotte.push(v); }
-  });
+  var vehiculesCtEcheanceFlotte = ctVehiculesAEcheance(vehicleList);   // CT ECHEANCE : passage le plus recent
   h += '<div class="kgrid k4">';
   h += htmlKpiCtEcheance(vehiculesCtEcheanceFlotte, 'ouvrirListeCtEcheanceFlotte()');
   h += '</div>';
@@ -21044,14 +21037,7 @@ function pageDashChefAtelier(role){
   // Controle technique a echeance ce mois, dans le perimetre du chef
   // (toute la flotte pour chef_atelier, uniquement son equipe pour
   // chef_equipe — utilise scopedVehicles, deja filtre plus haut).
-  var immatsVusChef = {};
-  var vehiculesCtEcheanceChef = [];
-  scopedVehicles.forEach(function(v){
-    if(!v.immat || v.isProspect) return;
-    var key = v.immat.toUpperCase();
-    if(immatsVusChef[key]) return;
-    if(estEcheanceCeMois(v.ct_echeance)){ immatsVusChef[key]=true; vehiculesCtEcheanceChef.push(v); }
-  });
+  var vehiculesCtEcheanceChef = ctVehiculesAEcheance(scopedVehicles);   // CT ECHEANCE : passage le plus recent
   html += '<div class="kgrid k4">';
   html += htmlKpiCtEcheance(vehiculesCtEcheanceChef, 'ouvrirListeCtEcheanceFlotte(true)');
   html += '</div>';
@@ -26404,14 +26390,7 @@ function pageDashAchats(){
   html += '</div>';
 
   // Ligne KPI 3 : controle technique a echeance ce mois (toute la flotte)
-  var immatsVusAchats = {};
-  var vehiculesCtEcheanceAchats = [];
-  vehiclesActifs().forEach(function(v){
-    if(!v.immat) return;
-    var key = v.immat.toUpperCase();
-    if(immatsVusAchats[key]) return;
-    if(estEcheanceCeMois(v.ct_echeance)){ immatsVusAchats[key]=true; vehiculesCtEcheanceAchats.push(v); }
-  });
+  var vehiculesCtEcheanceAchats = ctVehiculesAEcheance(vehiclesActifs());   // CT ECHEANCE : passage le plus recent
   html += '<div class="kgrid k4">';
   html += htmlKpiCtEcheance(vehiculesCtEcheanceAchats, 'ouvrirListeCtEcheanceFlotte()');
   html += '</div>';
@@ -27163,6 +27142,54 @@ function htmlBadgeEcheanceCT(dateEcheance){
 // immatriculation. onclickFn est le nom de la fonction JS a appeler au
 // clic (les deux compteurs partagent le meme clic, qui ouvre la liste
 // complete triee avec la couleur distinguant chaque cas).
+// CT ECHEANCE (02/11/2026) : l'echeance de visite technique d'un vehicule est celle de son
+// passage le PLUS RECENT (date d'entree) qui en porte une — meme regle que le portail client.
+// Avant, le premier dossier trouve suffisait : une echeance mise a jour sur le dernier dossier
+// etait masquee par un ancien dossier reste a l'ancienne date (vehicule toujours « en retard »).
+function ctCleImmat(v){ return String(v && v.immat || '').toUpperCase().trim(); }
+function ctPassages(cle){
+  return vehicles.filter(function(x){ return x && !x.isProspect && ctCleImmat(x) === cle; })
+                 .sort(function(a,b){ return (b.entree||0) - (a.entree||0); });
+}
+function ctDossierReference(cle){
+  var p = ctPassages(cle);
+  for(var i = 0; i < p.length; i++){ if(p[i].ct_echeance) return p[i]; }
+  return null;
+}
+// Vehicules (un par immatriculation) du perimetre dont l'echeance de reference est ce mois ou depassee.
+function ctVehiculesAEcheance(perimetre){
+  var vus = {}, res = [];
+  perimetre.forEach(function(v){
+    if(!v || !v.immat || v.isProspect) return;
+    var cle = ctCleImmat(v);
+    if(vus[cle]) return; vus[cle] = true;
+    var ref = ctDossierReference(cle);
+    if(ref && estEcheanceCeMois(ref.ct_echeance)) res.push(ref);
+  });
+  return res;
+}
+var ROLES_MODIF_CT = ['direction','reception'];
+var ctDernierPerimetreEquipe = false;
+// Modification directe de l'echeance : enregistree sur le passage le plus recent du vehicule
+// (qui devient la reference), sans passer par la fiche d'entree ni son motif obligatoire.
+function ctModifierEcheance(btn){
+  if(ROLES_MODIF_CT.indexOf(currentRole) < 0) return;
+  var cle = btn.getAttribute('data-immat');
+  var champ = document.getElementById(btn.getAttribute('data-champ'));
+  var val = champ ? champ.value : '';
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(val)){ afficherToastNotif('Date invalide', 'Choisissez la nouvelle date d\'echeance de la visite technique.', 'alerte'); return; }
+  var p = ctPassages(cle);
+  if(!p.length) return;
+  var cible = p[0], ancienne = (ctDossierReference(cle) || {}).ct_echeance || '';
+  if(cible.ct_echeance === val && ancienne === val) return;
+  cible.ct_echeance = val;
+  try{ ajouterCommentaireSysteme(cible, '&#x1F4C5; Echeance de visite technique : ' + (ancienne ? new Date(ancienne).toLocaleDateString('fr-FR') : '—') + ' &rarr; ' + new Date(val).toLocaleDateString('fr-FR'), currentUser ? currentUser.login : currentRole); }catch(e){}
+  saveV();
+  afficherToastNotif('Visite technique', cle + ' : nouvelle echeance au ' + new Date(val).toLocaleDateString('fr-FR') + '.', 'ok');
+  try{ renderPage(); }catch(e){}   // KPI du tableau de bord a jour
+  ouvrirListeCtEcheanceFlotte(ctDernierPerimetreEquipe);
+}
+
 function htmlKpiCtEcheance(vehiculesUniques, onclickAttr){
   var nbCeMois = 0, nbRetard = 0;
   vehiculesUniques.forEach(function(v){
@@ -27184,6 +27211,7 @@ function htmlKpiCtEcheance(vehiculesUniques, onclickAttr){
 // regroupement par immatriculation pour eviter de compter plusieurs fois
 // un meme vehicule s'il a plusieurs dossiers/visites.
 function ouvrirListeCtEcheanceFlotte(perimetreEquipe){
+  ctDernierPerimetreEquipe = !!perimetreEquipe;
   var perimetre = vehiclesActifs();
   // Pour un chef d'equipe, restreint la liste a son propre perimetre —
   // recalcule directement ici (meme logique que pageDashChefAtelier)
@@ -27202,28 +27230,27 @@ function ouvrirListeCtEcheanceFlotte(perimetreEquipe){
       return false;
     });
   }
-  var immatsVus = {};
-  var concernes = [];
-  perimetre.forEach(function(v){
-    if(!v.immat || v.isProspect) return;
-    var key = v.immat.toUpperCase();
-    if(immatsVus[key]) return;
-    if(estEcheanceCeMois(v.ct_echeance)){ immatsVus[key]=true; concernes.push(v); }
-  });
+  var concernes = ctVehiculesAEcheance(perimetre);   // CT ECHEANCE : passage le plus recent
+  var peutModifierCt = ROLES_MODIF_CT.indexOf(currentRole) >= 0;
   concernes.sort(function(a,b){ return new Date(a.ct_echeance) - new Date(b.ct_echeance); });
 
   var html = '';
   if(!concernes.length){
     html = '<div class="empty">Aucun vehicule concerne.</div>';
   } else {
-    html += '<div class="tw"><table><thead><tr><th>Vehicule</th><th>Client</th><th>Echeance CT</th><th>Statut</th><th></th></tr></thead><tbody>';
-    concernes.forEach(function(v){
+    html += '<div class="tw"><table><thead><tr><th>Vehicule</th><th>Client</th><th>Echeance CT</th><th>Statut</th>'+(peutModifierCt?'<th>Nouvelle echeance</th>':'')+'<th></th></tr></thead><tbody>';
+    concernes.forEach(function(v, iCt){
       var statut = statutEcheanceCt(v.ct_echeance);
       var badgeStatut = statut==='retard' ? '<span class="badge b-red">En retard</span>' : '<span class="badge b-amber">Ce mois</span>';
       html += '<tr><td><strong>'+v.immat+'</strong> <span class="xs muted">'+(v.marque||'')+' '+(v.modele||'')+'</span></td>';
       html += '<td>'+(v.client||'—')+'</td>';
       html += '<td'+(statut==='retard'?' style="color:#A32D2D;font-weight:600"':'')+'>'+new Date(v.ct_echeance).toLocaleDateString('fr-FR')+'</td>';
       html += '<td>'+badgeStatut+'</td>';
+      if(peutModifierCt){
+        var idChampCt = 'ctNouv_'+iCt, cleCt = ctCleImmat(v).replace(/"/g,'&quot;');
+        html += '<td style="white-space:nowrap"><input type="date" class="inp" id="'+idChampCt+'" style="width:140px;padding:3px 6px"> '
+              + '<button class="btn btn-sm btn-primary" data-immat="'+cleCt+'" data-champ="'+idChampCt+'" onclick="ctModifierEcheance(this)">Enregistrer</button></td>';
+      }
       html += '<td><button class="btn btn-sm" data-vid="'+v.id+'" onclick="openDetById(this)">&#x1F441;</button></td></tr>';
     });
     html += '</tbody></table></div>';
