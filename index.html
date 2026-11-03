@@ -9767,7 +9767,29 @@ function rentaForfaitClients(dossiersBruts){
 // PAGE ANALYSE PIECES
 // ============================================================
 var analysePiecesFiltre = 'tous';
-var analysePiecesVue = 'pieces'; // 'pieces','fournisseurs','vehicules'
+var analysePiecesVue = 'pieces'; // 'pieces','marques','piece_marques','fournisseurs','vehicules'
+// ANALYSE PIECES MARQUES (03/11/2026) : periode libre, filtres marque / modele, classement par marque,
+// et pour une piece donnee, les marques qui l'ont le plus necessitee.
+var analysePiecesDu = '', analysePiecesAu = '';      // periode personnalisee ('aaaa-mm-jj')
+var analysePiecesMarque = '', analysePiecesModele = ''; // filtres (cles normalisees)
+var analysePiecesPiece = '';                          // piece choisie (cle normalisee)
+var analysePiecesGroupe = 'marque';                   // 'marque' ou 'modele' (marque + modele)
+function apNorm(t){ return String(t == null ? '' : t).replace(/\s+/g, ' ').trim().toUpperCase(); }
+function apEsc(t){ return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+var AP_SANS_MARQUE = '(marque non renseignee)', AP_SANS_MODELE = '(modele non renseigne)';
+function apGroupeLigne(l){ return analysePiecesGroupe === 'modele' ? l.marque + ' ' + (l.modele === AP_SANS_MODELE ? '' : l.modele) : l.marque; }
+function apFmt(n){ return (n || 0).toLocaleString('fr-FR', GOS_FMT0); }
+function apSetPeriode(el){ analysePiecesFiltre = el.getAttribute('data-apf'); if(analysePiecesFiltre !== 'perso'){ analysePiecesDu = ''; analysePiecesAu = ''; } renderPage(); }
+function apSetDate(quel, val){ if(quel === 'du') analysePiecesDu = val; else analysePiecesAu = val; analysePiecesFiltre = (analysePiecesDu || analysePiecesAu) ? 'perso' : 'tous'; renderPage(); }
+function apSetMarque(val){ analysePiecesMarque = val || ''; analysePiecesModele = ''; renderPage(); }
+function apSetModele(val){ analysePiecesModele = val || ''; renderPage(); }
+function apSetGroupe(el){ analysePiecesGroupe = el.getAttribute('data-apg'); renderPage(); }
+function apSetPiece(val){ analysePiecesPiece = val || ''; analysePiecesVue = 'piece_marques'; renderPage(); }
+function apChoisirPieceEl(el){ apSetPiece(decodeURIComponent(el.getAttribute('data-piece'))); }
+function apChoisirMarqueEl(el){
+  var m = decodeURIComponent(el.getAttribute('data-marque')), mo = decodeURIComponent(el.getAttribute('data-modele') || '');
+  analysePiecesMarque = m; analysePiecesModele = mo; analysePiecesVue = 'pieces'; renderPage();
+}
 
 // Recherche contextuelle d'articles dans Analyse pieces : retrouve toutes
 // les lignes d'achat dont le nom de piece contient le texte saisi, avec
@@ -9833,7 +9855,7 @@ function rechercherArticlesAnalysePieces(texte){
     html += '<tr>';
     html += '<td class="xs">'+(l.date?new Date(l.date).toLocaleDateString('fr-FR'):'—')+'</td>';
     html += '<td class="xs">'+l.piece+'</td>';
-    html += '<td class="xs muted">'+(l.immat||'—')+'</td>';
+    html += '<td class="xs muted">'+(l.immat||'—')+(l.marque && l.marque!==AP_SANS_MARQUE ? '<br><span style="color:#5a5956">'+apEsc(l.marque)+(l.modele && l.modele!==AP_SANS_MODELE?' '+apEsc(l.modele):'')+'</span>' : '')+'</td>';
     html += '<td class="xs muted">'+(l.client||'—')+'</td>';
     html += '<td class="xs">'+l.fournisseurNom+'</td>';
     html += '<td style="text-align:center">'+l.qte+'</td>';
@@ -9848,23 +9870,29 @@ function rechercherArticlesAnalysePieces(texte){
 
 function pageAnalysePieces(){
   var today = new Date();
-  var borneDebut = 0;
+  var borneDebut = 0, borneFin = 0;
   if(analysePiecesFiltre==='mois')      borneDebut = new Date(today.getFullYear(), today.getMonth(), 1).getTime();
   else if(analysePiecesFiltre==='trimestre'){ var q=Math.floor(today.getMonth()/3)*3; borneDebut=new Date(today.getFullYear(),q,1).getTime(); }
   else if(analysePiecesFiltre==='annee') borneDebut = new Date(today.getFullYear(), 0, 1).getTime();
+  else if(analysePiecesFiltre==='perso'){
+    if(analysePiecesDu) borneDebut = new Date(analysePiecesDu + 'T00:00:00').getTime();
+    if(analysePiecesAu) borneFin = new Date(analysePiecesAu + 'T23:59:59').getTime();
+  }
 
   var labelsPeriode = {mois:'Ce mois',trimestre:'Ce trimestre',annee:'Cette annee',tous:'Tout'};
 
-  // Collecter toutes les lignes de chiffrage
-  var toutesLignes = [];
+  // Collecter toutes les lignes de chiffrage de la periode (toutes marques)
+  var lignesPeriode = [];
   vehicles.forEach(function(v){
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || 0;
     if(borneDebut>0 && dateRef<borneDebut) return;
+    if(borneFin>0 && (!dateRef || dateRef>borneFin)) return;
+    var marque = apNorm(v.marque) || AP_SANS_MARQUE, modele = apNorm(v.modele) || AP_SANS_MODELE;
     v.chiffrage.lignes.forEach(function(cl){
       if(!(cl.piece||'').trim()) return;
       var ff = cl.fournisseurId ? FOURNISSEURS.find(function(f){return f.id===cl.fournisseurId;}) : null;
-      toutesLignes.push({
+      lignesPeriode.push({
         piece: cl.piece.trim(),
         qte: parseInt(cl.qte)||1,
         prixAchat: parseFloat(cl.prixAchat)||0,
@@ -9876,17 +9904,31 @@ function pageAnalysePieces(){
         fournisseurId: cl.fournisseurId||'',
         fournisseurNom: ff ? ff.nom : '—',
         immat: v.immat, client: v.client,
+        marque: marque, modele: modele,
         typeClient: v.typeClient||'devis',
         date: dateRef, vid: v.id
       });
     });
   });
 
+  // Listes des marques / modeles disponibles sur la periode
+  var marquesDispo = {}, modelesDispo = {};
+  lignesPeriode.forEach(function(l){
+    marquesDispo[l.marque] = (marquesDispo[l.marque] || 0) + l.qte;
+    if(analysePiecesMarque && l.marque === analysePiecesMarque) modelesDispo[l.modele] = (modelesDispo[l.modele] || 0) + l.qte;
+  });
+
+  // Filtres marque / modele (s'appliquent a toute la page sauf la vue « Piece -> marques »)
+  var toutesLignes = lignesPeriode.filter(function(l){
+    if(analysePiecesMarque && l.marque !== analysePiecesMarque) return false;
+    if(analysePiecesModele && l.modele !== analysePiecesModele) return false;
+    return true;
+  });
+
   // KPI globaux
   var totQte    = toutesLignes.reduce(function(s,l){return s+l.qte;},0);
   var totAchat  = toutesLignes.reduce(function(s,l){return s+l.montantAchat;},0);
   var totVente  = toutesLignes.reduce(function(s,l){return s+l.montantVente;},0);
-  var totMarge  = totVente - totAchat;
   var nbDistinct = {};
   toutesLignes.forEach(function(l){nbDistinct[l.piece.toLowerCase()]=1;});
   var nbRef = Object.keys(nbDistinct).length;
@@ -9902,18 +9944,43 @@ function pageAnalysePieces(){
   html += '</div>';
   html += '<div id="analysePiecesRechercheResultats" style="margin-bottom:16px"></div>';
 
-  // Filtres
-  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">';
-  html += '<div class="flex gap6">';
+  // Periode
+  html += '<div class="card" style="padding:10px 14px;margin-bottom:12px">';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
+  html += '<span class="xs muted" style="min-width:58px">Periode</span><div class="flex gap6" style="flex-wrap:wrap">';
   ['mois','trimestre','annee','tous'].forEach(function(f){
-    html += '<button class="btn btn-sm'+(analysePiecesFiltre===f?' btn-primary':'')+'" data-apf="'+f+'" onclick="setAnalysePiecesFiltreByEl(this)">'+labelsPeriode[f]+'</button>';
+    html += '<button class="btn btn-sm'+(analysePiecesFiltre===f?' btn-primary':'')+'" data-apf="'+f+'" onclick="apSetPeriode(this)">'+labelsPeriode[f]+'</button>';
   });
   html += '</div>';
-  html += '<div class="flex gap6" style="margin-left:auto">';
-  [{v:'pieces',l:'Top pieces'},{v:'fournisseurs',l:'Par fournisseur'},{v:'vehicules',l:'Vehicules consommateurs'}].forEach(function(vw){
+  html += '<span class="xs muted" style="margin-left:8px">du</span><input type="date" class="inp" style="width:150px;padding:4px 8px'+(analysePiecesFiltre==='perso'?';border-color:#185FA5':'')+'" value="'+apEsc(analysePiecesDu)+'" onchange="apSetDate(\'du\', this.value)">';
+  html += '<span class="xs muted">au</span><input type="date" class="inp" style="width:150px;padding:4px 8px'+(analysePiecesFiltre==='perso'?';border-color:#185FA5':'')+'" value="'+apEsc(analysePiecesAu)+'" onchange="apSetDate(\'au\', this.value)">';
+  html += '</div>';
+  // Marque / modele
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">';
+  html += '<span class="xs muted" style="min-width:58px">Vehicule</span>';
+  html += '<select class="inp" style="width:220px;padding:4px 8px" onchange="apSetMarque(this.value)"><option value="">Toutes les marques</option>';
+  Object.keys(marquesDispo).sort().forEach(function(m){ html += '<option value="'+apEsc(m)+'"'+(m===analysePiecesMarque?' selected':'')+'>'+apEsc(m)+' ('+marquesDispo[m]+' pieces)</option>'; });
+  if(analysePiecesMarque && !marquesDispo[analysePiecesMarque]) html += '<option value="'+apEsc(analysePiecesMarque)+'" selected>'+apEsc(analysePiecesMarque)+' (0 piece)</option>';
+  html += '</select>';
+  if(analysePiecesMarque){
+    html += '<select class="inp" style="width:220px;padding:4px 8px" onchange="apSetModele(this.value)"><option value="">Tous les modeles</option>';
+    Object.keys(modelesDispo).sort().forEach(function(m){ html += '<option value="'+apEsc(m)+'"'+(m===analysePiecesModele?' selected':'')+'>'+apEsc(m)+' ('+modelesDispo[m]+' pieces)</option>'; });
+    html += '</select>';
+    html += '<button class="btn btn-sm" onclick="apSetMarque(\'\')">&#x2715; Retirer le filtre</button>';
+  }
+  html += '</div></div>';
+
+  // Vues
+  html += '<div class="flex gap6" style="flex-wrap:wrap;margin-bottom:12px">';
+  [{v:'pieces',l:'Top pieces'},{v:'marques',l:'Par marque'},{v:'piece_marques',l:'Piece &rarr; marques'},{v:'fournisseurs',l:'Par fournisseur'},{v:'vehicules',l:'Vehicules consommateurs'}].forEach(function(vw){
     html += '<button class="btn btn-sm'+(analysePiecesVue===vw.v?' btn-primary':'')+'" data-apv="'+vw.v+'" onclick="setAnalysePiecesVueByEl(this)">'+vw.l+'</button>';
   });
-  html += '</div></div>';
+  html += '</div>';
+
+  if(analysePiecesVue==='piece_marques'){
+    html += analysePiecesPieceMarques(lignesPeriode);
+    return html;
+  }
 
   // KPI
   html += '<div class="kgrid k4" style="margin-bottom:16px">';
@@ -9923,10 +9990,103 @@ function pageAnalysePieces(){
   html += kpi('CA previsionnel total', totVente?totVente.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', 'green');
   html += '</div>';
 
-  if(analysePiecesVue==='pieces')       html += analysePiecesTopPieces(toutesLignes);
+  if(analysePiecesVue==='pieces')            html += analysePiecesTopPieces(toutesLignes);
+  else if(analysePiecesVue==='marques')      html += analysePiecesParMarque(toutesLignes);
   else if(analysePiecesVue==='fournisseurs') html += analysePiecesFournisseurs(toutesLignes);
-  else                                   html += analysePiecesVehicules(toutesLignes);
+  else                                       html += analysePiecesVehicules(toutesLignes);
 
+  return html;
+}
+
+// Classement par marque (ou marque + modele) : quantite, cout, vehicules, pieces les plus demandees.
+function analysePiecesParMarque(lignes){
+  var g = {};
+  lignes.forEach(function(l){
+    var k = apGroupeLigne(l);
+    if(!g[k]) g[k] = {nom: k, marque: l.marque, modele: analysePiecesGroupe === 'modele' ? l.modele : '', qte: 0, achat: 0, vente: 0, vehicules: {}, dossiers: {}, pieces: {}, modeles: {}};
+    var x = g[k];
+    x.qte += l.qte; x.achat += l.montantAchat; x.vente += l.montantVente;
+    x.vehicules[apNorm(l.immat)] = 1; x.dossiers[l.vid] = 1;
+    var pk = l.piece.toLowerCase(); if(!x.pieces[pk]) x.pieces[pk] = {nom: l.piece, qte: 0}; x.pieces[pk].qte += l.qte;
+    x.modeles[l.modele] = 1;
+  });
+  var total = lignes.reduce(function(s, l){ return s + l.qte; }, 0) || 1;
+  var liste = Object.keys(g).map(function(k){ return g[k]; }).sort(function(a, b){ return b.qte - a.qte; });
+
+  var html = '<div class="card"><div class="card-head" style="flex-wrap:wrap;gap:8px"><span>Classement par '+(analysePiecesGroupe==='modele'?'marque et modele':'marque')+' ('+liste.length+')</span>';
+  html += '<span class="flex gap6"><button class="btn btn-sm'+(analysePiecesGroupe==='marque'?' btn-primary':'')+'" data-apg="marque" onclick="apSetGroupe(this)">Par marque</button>';
+  html += '<button class="btn btn-sm'+(analysePiecesGroupe==='modele'?' btn-primary':'')+'" data-apg="modele" onclick="apSetGroupe(this)">Par marque + modele</button></span></div>';
+  if(!liste.length){ html += '<div class="empty">Aucune piece sur cette periode</div></div>'; return html; }
+  html += '<div class="xs muted" style="padding:8px 16px 0">Cliquez sur une ligne pour voir le classement des pieces de cette '+(analysePiecesGroupe==='modele'?'marque / ce modele':'marque')+'.</div>';
+  html += '<div class="tw"><table><thead><tr><th>#</th><th>'+(analysePiecesGroupe==='modele'?'Marque / modele':'Marque')+'</th><th style="text-align:center">Qte pieces</th><th style="text-align:center">Part</th><th style="text-align:center">Vehicules</th><th style="text-align:center">Dossiers</th><th style="text-align:right">Cout achat</th><th style="text-align:right">CA prevu</th><th>Pieces les plus demandees</th></tr></thead><tbody>';
+  liste.forEach(function(x, i){
+    var part = Math.round(x.qte / total * 1000) / 10;
+    var top = Object.keys(x.pieces).map(function(k){ return x.pieces[k]; }).sort(function(a, b){ return b.qte - a.qte; }).slice(0, 3)
+               .map(function(p){ return apEsc(p.nom) + ' (x' + p.qte + ')'; }).join(', ');
+    html += '<tr style="cursor:pointer" data-marque="'+encodeURIComponent(x.marque)+'" data-modele="'+encodeURIComponent(x.modele)+'" onclick="apChoisirMarqueEl(this)">';
+    html += '<td style="font-weight:700;color:#aaa;text-align:center">'+(i+1)+'</td>';
+    html += '<td class="fw7" style="color:#185FA5">'+apEsc(x.nom)+(analysePiecesGroupe==='marque'?' <span class="xs muted" style="font-weight:400">'+Object.keys(x.modeles).length+' modele(s)</span>':'')+'</td>';
+    html += '<td style="text-align:center;font-weight:700">'+x.qte+'</td>';
+    html += '<td style="text-align:center"><div style="display:flex;align-items:center;gap:6px;justify-content:center"><div style="width:60px;height:6px;background:#eee;border-radius:3px;overflow:hidden"><div style="width:'+Math.min(100,part)+'%;height:100%;background:#185FA5"></div></div><span class="xs">'+part+'%</span></div></td>';
+    html += '<td style="text-align:center">'+Object.keys(x.vehicules).length+'</td>';
+    html += '<td style="text-align:center">'+Object.keys(x.dossiers).length+'</td>';
+    html += '<td style="text-align:right;font-family:monospace;color:#A32D2D">'+apFmt(x.achat)+'</td>';
+    html += '<td style="text-align:right;font-family:monospace;color:#185FA5">'+apFmt(x.vente)+'</td>';
+    html += '<td class="xs muted">'+top+'</td></tr>';
+  });
+  html += '</tbody></table></div></div>';
+  return html;
+}
+
+// Pour UNE piece : quelles marques (ou marques + modeles) l'ont le plus necessitee sur la periode.
+function analysePiecesPieceMarques(lignes){
+  var pieces = {};
+  lignes.forEach(function(l){ var k = l.piece.toLowerCase(); if(!pieces[k]) pieces[k] = {cle: k, nom: l.piece, qte: 0}; pieces[k].qte += l.qte; });
+  var listePieces = Object.keys(pieces).map(function(k){ return pieces[k]; }).sort(function(a, b){ return b.qte - a.qte || a.nom.localeCompare(b.nom); });
+  if(analysePiecesPiece && !pieces[analysePiecesPiece]) analysePiecesPiece = '';
+  if(!analysePiecesPiece && listePieces.length) analysePiecesPiece = listePieces[0].cle;
+
+  var html = '<div class="card" style="padding:12px 16px;margin-bottom:12px"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
+  html += '<span class="fw7">Piece :</span><select class="inp" style="flex:1;min-width:240px;max-width:460px;padding:4px 8px" onchange="apSetPiece(this.value)">';
+  listePieces.forEach(function(p){ html += '<option value="'+apEsc(p.cle)+'"'+(p.cle===analysePiecesPiece?' selected':'')+'>'+apEsc(p.nom)+' — '+p.qte+' utilisee(s)</option>'; });
+  html += '</select>';
+  html += '<span class="flex gap6"><button class="btn btn-sm'+(analysePiecesGroupe==='marque'?' btn-primary':'')+'" data-apg="marque" onclick="apSetGroupe(this)">Par marque</button>';
+  html += '<button class="btn btn-sm'+(analysePiecesGroupe==='modele'?' btn-primary':'')+'" data-apg="modele" onclick="apSetGroupe(this)">Par marque + modele</button></span>';
+  html += '</div><div class="xs muted" style="margin-top:6px">Toutes marques confondues sur la periode choisie (le filtre marque ne s\'applique pas a cette vue).</div></div>';
+  if(!listePieces.length){ html += '<div class="card"><div class="empty">Aucune piece sur cette periode</div></div>'; return html; }
+
+  var sel = lignes.filter(function(l){ return l.piece.toLowerCase() === analysePiecesPiece; });
+  var g = {}, total = 0;
+  sel.forEach(function(l){
+    var k = apGroupeLigne(l);
+    if(!g[k]) g[k] = {nom: k, qte: 0, achat: 0, vehicules: {}, dossiers: {}, clients: {}};
+    g[k].qte += l.qte; g[k].achat += l.montantAchat; g[k].vehicules[apNorm(l.immat)] = 1; g[k].dossiers[l.vid] = 1; if(l.client) g[k].clients[l.client] = 1;
+    total += l.qte;
+  });
+  var liste = Object.keys(g).map(function(k){ return g[k]; }).sort(function(a, b){ return b.qte - a.qte || Object.keys(b.vehicules).length - Object.keys(a.vehicules).length; });
+  var nomPiece = pieces[analysePiecesPiece].nom;
+
+  html += '<div class="kgrid k3" style="margin-bottom:12px">';
+  html += kpi('Quantite utilisee', total, 'blue');
+  html += kpi((analysePiecesGroupe==='modele'?'Modele':'Marque')+' n&deg;1', liste.length ? apEsc(liste[0].nom) + ' <span style="font-size:13px;font-weight:600">(' + Math.round(liste[0].qte / (total||1) * 100) + '%)</span>' : '—', 'amber');
+  html += kpi((analysePiecesGroupe==='modele'?'Modeles':'Marques')+' concerne(e)s', liste.length, '');
+  html += '</div>';
+
+  html += '<div class="card"><div class="card-head">'+apEsc(nomPiece)+' — classement des '+(analysePiecesGroupe==='modele'?'marques / modeles':'marques')+'</div>';
+  html += '<div class="tw"><table><thead><tr><th>#</th><th>'+(analysePiecesGroupe==='modele'?'Marque / modele':'Marque')+'</th><th style="text-align:center">Qte</th><th style="text-align:center">Part</th><th style="text-align:center">Vehicules</th><th style="text-align:center">Dossiers</th><th style="text-align:right">Prix achat moyen</th><th style="text-align:right">Cout total</th></tr></thead><tbody>';
+  liste.forEach(function(x, i){
+    var part = Math.round(x.qte / (total||1) * 1000) / 10;
+    html += '<tr'+(i===0?' style="background:#EAF3DE"':'')+'>';
+    html += '<td style="font-weight:700;color:#aaa;text-align:center">'+(i+1)+'</td>';
+    html += '<td class="fw7">'+apEsc(x.nom)+'</td>';
+    html += '<td style="text-align:center;font-weight:700">'+x.qte+'</td>';
+    html += '<td style="text-align:center"><div style="display:flex;align-items:center;gap:6px;justify-content:center"><div style="width:80px;height:6px;background:#eee;border-radius:3px;overflow:hidden"><div style="width:'+Math.min(100,part)+'%;height:100%;background:#3B6D11"></div></div><span class="xs">'+part+'%</span></div></td>';
+    html += '<td style="text-align:center">'+Object.keys(x.vehicules).length+'</td>';
+    html += '<td style="text-align:center">'+Object.keys(x.dossiers).length+'</td>';
+    html += '<td style="text-align:right;font-family:monospace">'+(x.qte ? apFmt(Math.round(x.achat / x.qte)) : '—')+'</td>';
+    html += '<td style="text-align:right;font-family:monospace;color:#A32D2D">'+apFmt(x.achat)+'</td></tr>';
+  });
+  html += '</tbody></table></div></div>';
   return html;
 }
 
@@ -9953,8 +10113,10 @@ function analysePiecesTopPieces(lignes){
     return p;
   }).sort(function(a,b){return b.qte-a.qte;});
 
-  var html = '<div class="card"><div class="card-head">Top pieces les plus utilisees ('+liste.length+' references)</div>';
+  var filtreTxt = analysePiecesMarque ? ' — ' + apEsc(analysePiecesMarque) + (analysePiecesModele ? ' ' + apEsc(analysePiecesModele) : '') : '';
+  var html = '<div class="card"><div class="card-head">Top pieces les plus utilisees'+filtreTxt+' ('+liste.length+' references)</div>';
   if(!liste.length){ html+='<div class="empty">Aucune piece sur cette periode</div></div>'; return html; }
+  html += '<div class="xs muted" style="padding:8px 16px 0">Cliquez sur une piece pour voir les marques qui l\'ont le plus necessitee.</div>';
   html += '<div class="tw"><table><thead><tr>';
   html += '<th>#</th><th>Piece</th><th>Qte totale</th><th>Nb dossiers</th><th>Nb vehicules</th><th>Cout achat</th><th>CA prevu</th><th>Marge</th><th>Taux</th><th>Fournisseur(s)</th>';
   html += '</tr></thead><tbody>';
@@ -9962,7 +10124,7 @@ function analysePiecesTopPieces(lignes){
     var mc=p.marge>0?'#3B6D11':p.marge<0?'#A32D2D':'#888';
     html += '<tr>';
     html += '<td style="font-weight:700;color:#aaa;text-align:center">'+(i+1)+'</td>';
-    html += '<td class="fw7">'+p.nom+'</td>';
+    html += '<td class="fw7"><a href="javascript:void(0)" style="color:#185FA5;text-decoration:none" data-piece="'+encodeURIComponent(p.nom.toLowerCase())+'" onclick="apChoisirPieceEl(this)">'+apEsc(p.nom)+'</a></td>';
     html += '<td style="text-align:center;font-weight:700">'+p.qte+'</td>';
     html += '<td style="text-align:center">'+p.nbDossiers+'</td>';
     html += '<td style="text-align:center">'+p.nbVehicules+'</td>';
@@ -10019,7 +10181,7 @@ function analysePiecesVehicules(lignes){
   // Agréger par véhicule
   var vehs = {};
   lignes.forEach(function(l){
-    if(!vehs[l.vid]) vehs[l.vid]={immat:l.immat,client:l.client,typeClient:l.typeClient,qte:0,montantAchat:0,montantVente:0,pieces:{}};
+    if(!vehs[l.vid]) vehs[l.vid]={immat:l.immat,client:l.client,typeClient:l.typeClient,marque:l.marque,modele:l.modele,qte:0,montantAchat:0,montantVente:0,pieces:{}};
     var v=vehs[l.vid];
     v.qte+=l.qte; v.montantAchat+=l.montantAchat; v.montantVente+=l.montantVente;
     var pk=l.piece.toLowerCase(); v.pieces[pk]=(v.pieces[pk]||0)+l.qte;
@@ -10035,13 +10197,14 @@ function analysePiecesVehicules(lignes){
   var html = '<div class="card"><div class="card-head">Vehicules les plus consommateurs ('+liste.length+')</div>';
   if(!liste.length){ html+='<div class="empty">Aucune donnee</div></div>'; return html; }
   html += '<div class="tw"><table><thead><tr>';
-  html += '<th>#</th><th>Vehicule</th><th>Client</th><th>Type</th><th>Nb refs</th><th>Qte totale</th><th>Cout achat</th><th>CA prevu</th><th>Marge</th><th>Pieces frequentes</th>';
+  html += '<th>#</th><th>Vehicule</th><th>Marque / modele</th><th>Client</th><th>Type client</th><th>Nb refs</th><th>Qte totale</th><th>Cout achat</th><th>CA prevu</th><th>Marge</th><th>Pieces frequentes</th>';
   html += '</tr></thead><tbody>';
   liste.forEach(function(v,i){
     var mc=v.marge>0?'#3B6D11':v.marge<0?'#A32D2D':'#888';
     html += '<tr>';
     html += '<td style="font-weight:700;color:#aaa;text-align:center">'+(i+1)+'</td>';
     html += '<td class="fw7">'+v.immat+'</td>';
+    html += '<td>'+(v.marque===AP_SANS_MARQUE?'<span class="xs muted">non renseignee</span>':apEsc(v.marque)+' <span class="xs muted">'+(v.modele===AP_SANS_MODELE?'':apEsc(v.modele))+'</span>')+'</td>';
     html += '<td>'+v.client+'</td>';
     html += '<td>'+tbadge(v.typeClient)+assuranceBadge(v)+'</td>';
     html += '<td style="text-align:center">'+v.nbRef+'</td>';
