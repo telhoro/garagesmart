@@ -1259,6 +1259,7 @@ tr:hover td{background:#faf9f7}
     <div class="fr">
       <label class="fl">Factures liees (optionnel) <span class="xs muted">— pour une avance type ASBC/ASF adossee a des factures precises</span></label>
       <input class="inp" id="engagementFactureRecherche" placeholder="Rechercher une facture par client ou numero..." oninput="rechercherFactureAAjouter(this.value)" autocomplete="off">
+      <label class="xs" style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer"><input type="checkbox" id="engagementFactureInclureSoldees" onchange="rechercherFactureAAjouter(document.getElementById('engagementFactureRecherche').value)"> Inclure les factures deja soldees (rattachement a posteriori)</label>
       <div id="engagementFactureSuggestions" style="max-height:160px;overflow-y:auto;border:1px solid #d0cec9;border-radius:7px;margin-top:4px;display:none"></div>
       <div id="engagementFacturesLieesListe" style="margin-top:8px"></div>
     </div>
@@ -17207,7 +17208,8 @@ function htmlTableauEngagementsHistorique(historique){
     html += '<td><strong>'+h.nom+'</strong></td>';
     html += '<td class="xs muted">'+(h.organisme||'—')+'</td>';
     html += '<td class="xs">'+moisLabels[dtEcheance.getMonth()]+' '+dtEcheance.getFullYear()+'</td>';
-    html += '<td class="xs">'+(engagementRef?htmlResumeFacturesLiees(engagementRef):'<span class="muted">—</span>')+'</td>';
+    html += '<td class="xs">'+(engagementRef?htmlResumeFacturesLiees(engagementRef):'<span class="muted">—</span>')
+         + (engagementRef?'<div style="margin-top:4px"><button class="btn btn-sm" style="font-size:10px;padding:2px 8px" data-egid="'+h.engagementId+'" onclick="ouvrirFacturesEngagementByEl(this)" title="Ajouter ou retirer des factures rattachees a cet engagement">&#x270E; Modifier</button></div>':'')+'</td>';
     html += '<td style="text-align:center;color:'+delaiColor+'">'+delaiTxt+'</td>';
     html += '<td style="text-align:right;font-weight:700;font-family:monospace">'+h.montant.toLocaleString('fr-FR', GOS_FMT0)+' FCFA</td>';
     html += '<td><button class="btn btn-sm" data-egid="'+h.engagementId+'" data-paiement-idx="'+h.paiementIndex+'" onclick="annulerPaiementEngagementByEl(this)" style="color:#A32D2D;border-color:#E0A0A0" title="Annuler ce versement">&#x21BA; Annuler</button></td>';
@@ -18767,7 +18769,9 @@ function collecterRefKeysDejaLiees(engagementIdExclu){
 }
 // Factures ELIGIBLES a etre liees : deposees, pas encore entierement
 // soldees, et pas deja liees a un AUTRE engagement.
-function collecterFacturesEligibles(engagementIdExclu){
+function collecterFacturesEligibles(engagementIdExclu, inclureSoldees){
+  // ENGAGEMENTS FACTURES (04/11/2026) : inclureSoldees = rattacher a posteriori une facture deja payee
+  // (cas de l'historique des paiements). Une facture liee a un AUTRE engagement reste exclue.
   var dejaLiees = collecterRefKeysDejaLiees(engagementIdExclu);
   var resultats = [];
   vehicles.forEach(function(v){
@@ -18775,18 +18779,18 @@ function collecterFacturesEligibles(engagementIdExclu){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
     var total = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     var paye = parseFloat(v.montantPaye)||0;
-    if(total<=0 || paye>=total) return;
+    if(total<=0 || (paye>=total && !inclureSoldees)) return;
     var refKey = refKeyFacture('devis', v.id);
     if(dejaLiees[refKey]) return;
-    resultats.push({refKey:refKey, refType:'devis', vehId:v.id, periodeKey:null, numFacture:v.numeroFactureExterne||'', client:v.client, montant:total, dateDepot:v.factureDeposeeLe||null});
+    resultats.push({refKey:refKey, refType:'devis', vehId:v.id, periodeKey:null, numFacture:v.numeroFactureExterne||'', client:v.client, montant:total, dateDepot:v.factureDeposeeLe||null, soldee: paye>=total});
   });
   FORFAIT_FACTURES.forEach(function(f){
-    if(f.statut!=='deposee' && f.statut!=='emise') return;
+    if(f.statut!=='deposee' && f.statut!=='emise' && !(inclureSoldees && f.statut==='payee')) return;
     var paye = f.statut==='payee' ? f.montant : (f.montantPaye||0);
-    if((f.montant||0)<=0 || paye>=f.montant) return;
+    if((f.montant||0)<=0 || (paye>=f.montant && !inclureSoldees)) return;
     var refKey = refKeyFacture('forfait', f.periodeKey+'::'+f.client);
     if(dejaLiees[refKey]) return;
-    resultats.push({refKey:refKey, refType:'forfait', vehId:null, periodeKey:f.periodeKey, numFacture:f.numeroFactureExterne||'', client:f.client, montant:f.montant, dateDepot:f.deposeeDate||f.emiseDate||null});
+    resultats.push({refKey:refKey, refType:'forfait', vehId:null, periodeKey:f.periodeKey, numFacture:f.numeroFactureExterne||'', client:f.client, montant:f.montant, dateDepot:f.deposeeDate||f.emiseDate||null, soldee: paye>=f.montant});
   });
   return resultats;
 }
@@ -19416,12 +19420,21 @@ function openEngagementForm(id){
   onChangePeriodiciteEngagement();
   engagementFormFacturesLiees = e && e.facturesLiees ? e.facturesLiees.slice() : [];
   document.getElementById('engagementFactureRecherche').value = '';
+  var caseSold = document.getElementById('engagementFactureInclureSoldees'); if(caseSold) caseSold.checked = false;
   document.getElementById('engagementFactureSuggestions').style.display = 'none';
   document.getElementById('engagementFactureSuggestions').innerHTML = '';
   renderEngagementFacturesLieesListe();
   document.getElementById('modalEngagement').style.display = 'flex';
 }
 function closeEngagementForm(){ document.getElementById('modalEngagement').style.display='none'; }
+// ENGAGEMENTS FACTURES : depuis l'historique des paiements, ouvre l'engagement directement sur ses
+// factures liees (case « factures soldees » cochee : on y rattache surtout des factures deja payees).
+function ouvrirFacturesEngagementByEl(btn){
+  openEngagementForm(btn.getAttribute('data-egid'));
+  var caseSold = document.getElementById('engagementFactureInclureSoldees'); if(caseSold) caseSold.checked = true;
+  var champ = document.getElementById('engagementFactureRecherche');
+  if(champ){ try{ champ.scrollIntoView({block:'center'}); }catch(e){} setTimeout(function(){ try{ champ.focus(); }catch(e){} }, 50); }
+}
 
 // ── Factures liees dans le formulaire d'engagement ──
 var engagementFormFacturesLiees = []; // etat temporaire pendant l'edition du formulaire
@@ -19448,7 +19461,8 @@ function rechercherFactureAAjouter(texte){
   var box = document.getElementById('engagementFactureSuggestions');
   var q = texte.trim().toLowerCase();
   if(q.length<2){ box.style.display='none'; box.innerHTML=''; return; }
-  var eligibles = collecterFacturesEligibles(engagementEditId);
+  var caseSoldees = document.getElementById('engagementFactureInclureSoldees');
+  var eligibles = collecterFacturesEligibles(engagementEditId, !!(caseSoldees && caseSoldees.checked));
   var dejaAjoutees = engagementFormFacturesLiees.map(function(f){return f.refKey;});
   var resultats = eligibles.filter(function(f){
     return dejaAjoutees.indexOf(f.refKey)===-1 &&
@@ -19471,6 +19485,7 @@ function ajouterFactureLieeByEl(el){
   var idx = parseInt(el.getAttribute('data-refidx'),10);
   var f = (window._facturesSuggerees||[])[idx];
   if(!f) return;
+  f = Object.assign({}, f); delete f.soldee;
   engagementFormFacturesLiees.push(f);
   renderEngagementFacturesLieesListe();
   // IMPORTANT : ne pas vider/fermer la recherche apres l'ajout — on
