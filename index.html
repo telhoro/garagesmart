@@ -135,6 +135,7 @@ tr:hover td{background:#faf9f7}
 ::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-thumb{background:#d0cec9;border-radius:3px}
 @media(max-width:800px){
+  #gosVersionLabel{display:none}
   .sidebar{width:52px;min-width:52px}
   .logo span,.nav-label,.nav-item span,.role-wrap{display:none}
   .nav-item{padding:11px;justify-content:center}
@@ -145,6 +146,9 @@ tr:hover td{background:#faf9f7}
 <!-- ALLEGEMENT DEMARRAGE : Excel, PDF et reconnaissance faciale sont charges au premier usage (gosChargerLib) -->
 <!-- CDN SECOURS : graphiques charges en arriere-plan (plus aucun script externe bloquant ici) -->
 <script>
+// VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
+// pour savoir quelle version du code tourne sur chaque poste.
+var GOS_VERSION = '2026-11-05';
 // DIAG DEMARRAGE : etapes de l'ouverture, affichees si elle reste bloquee
 (function(){
   var t0 = Date.now(), E = [], erreurs = [];
@@ -261,6 +265,8 @@ tr:hover td{background:#faf9f7}
       </select>
     </div>
     <nav id="nav"></nav>
+    <div id="gosVersionLabel" style="margin-top:auto;padding:8px 18px;font-size:10px;color:#aaa;border-top:1px solid #e8e6e1">GarageOS &middot; version <span id="gosVersionTexte"></span></div>
+    <script>try{ document.getElementById('gosVersionTexte').textContent = GOS_VERSION; }catch(e){}</script>
   </aside>
   <div class="main">
     <header class="topbar">
@@ -14987,6 +14993,7 @@ function pageDettesFournisseursHistorique(){
   html += kpi('Total paye (periode)', totalPaye?totalPaye.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', 'green');
   html += '</div>';
 
+  html += gxBarre('df_historique', ['global','detail']);   // EXPORTS TABLEAUX
   html += '<div id="dettesHistoriqueTableWrap">';
   html += htmlTableauDettesHistorique(historique);
   html += '</div>';
@@ -15061,6 +15068,7 @@ function pageDettesFournisseurs(){
 
   // Tri : retard d'abord, puis echeance la plus proche
   filtres.sort(function(a,b){return a.joursRestantsMin-b.joursRestantsMin;});
+  _dettesFournFiltresExport = filtres;   // EXPORTS TABLEAUX : ce qui est affiche
 
   // KPI
   var totalDu = groupes.reduce(function(s,g){return s+g.total;},0);
@@ -15094,6 +15102,7 @@ function pageDettesFournisseurs(){
     return html;
   }
 
+  html += gxBarre('df_encours', ['global','detail']);   // EXPORTS TABLEAUX
   html += '<div class="card"><div class="tw"><table><thead><tr>';
   html += '<th>Fournisseur</th><th>Achete</th><th>Reste a payer</th><th>Echeance</th><th></th>';
   html += '</tr></thead><tbody>';
@@ -15114,7 +15123,8 @@ function pageDettesFournisseurs(){
 
     html += '<tr style="'+rowBg+';cursor:pointer" data-fexp="'+g.fournisseur.id+'" onclick="toggleDettesFournExpandByEl(this)">';
     html += '<td><strong>'+(expanded?'&#9662; ':'&#9656; ')+g.fournisseur.nom+'</strong> <span class="xs muted">'+g.lignes.length+' achat'+(g.lignes.length>1?'s':'')+' &middot; '+condLabel+'</span></td>';
-    html += '<td style="font-family:monospace">'+g.total.toLocaleString('fr-FR', GOS_FMT0)+'</td>';
+    var gAchete = g.lignes.reduce(function(s,l){return s+(l.montantOriginal||0);},0);   // EXPORTS TABLEAUX : montant achete (et non le reste du)
+    html += '<td style="font-family:monospace">'+gAchete.toLocaleString('fr-FR', GOS_FMT0)+'</td>';
     html += '<td style="font-family:monospace;font-weight:700;color:#A32D2D">'+g.total.toLocaleString('fr-FR', GOS_FMT0)+'</td>';
     html += '<td style="color:'+echColor+';font-weight:600">'+echLabel+nbRetardLabel+'</td>';
     html += '<td></td>';
@@ -17012,6 +17022,7 @@ function pageChargesFixesPaiement(){
   });
 
   html += boutonsPliageCharges('paiement');
+  html += gxBarre('cf_paiement', ['global','detail']);   // EXPORTS TABLEAUX
   html += '<div class="card"><div class="tw"><table><thead><tr><th>Charge</th><th>Mois dus</th><th style="text-align:right">Cumul du</th></tr></thead><tbody>';
 
   parCategorie.forEach(function(g){
@@ -17906,6 +17917,7 @@ function pageChargesFixesHistorique(){
   html += kpi('Total paye (periode)', totalPaye?totalPaye.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', 'green');
   html += '</div>';
 
+  html += gxBarre('cf_historique', ['global','detail']);   // EXPORTS TABLEAUX
   html += '<div id="chargesFixesHistoriqueTableWrap">';
   html += htmlTableauChargesFixesHistorique(historique);
   html += '</div>';
@@ -18029,6 +18041,228 @@ function boutonsPliageCharges(vue){
        + '</div>';
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// EXPORTS TABLEAUX (05/11/2026) : Imprimer / PDF / Excel, en version Globale ou Detaillee,
+// pour les tableaux Charges fixes (liste, paiement, historique) et Dettes fournisseurs
+// (en cours, historique). Les exports reprennent exactement ce qui est affiche a l'ecran
+// (periode, filtre, recherche). Imprimer et PDF passent par l'apercu A4 existant.
+// ══════════════════════════════════════════════════════════════════════════
+var GOS_MOIS_FR = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
+function gxEsc(t){ return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function gxDate(ts){ return ts ? new Date(ts).toLocaleDateString('fr-FR') : ''; }
+function gxMois(ts){ if(!ts) return ''; var d = new Date(ts); return GOS_MOIS_FR[d.getMonth()] + ' ' + d.getFullYear(); }
+function gxPeriodeTexte(periode, debut, fin){
+  if(periode === 'mois') return 'Periode : ce mois';
+  if(periode === 'trimestre') return 'Periode : ce trimestre';
+  if(periode === 'annee') return 'Periode : cette annee';
+  if(periode === 'custom' && debut) return 'Periode : du ' + gxDate(new Date(debut).getTime()) + (fin ? ' au ' + gxDate(new Date(fin).getTime()) : '');
+  return 'Periode : tout';
+}
+function gxRecherche(id){ var el = document.getElementById(id); var q = el ? String(el.value || '').trim().toLowerCase() : ''; return q.length >= 2 ? q : ''; }
+
+// def = {titre, sousTitre, colonnes:[{l, t:'texte'|'montant'|'nombre', w}], lignes:[{section:'..'} | [valeurs]], total:[valeurs]|null}
+function gxHtml(def){
+  var cols = def.colonnes, petit = cols.length > 7;
+  var fs = petit ? '10px' : '11px', pad = petit ? '4px 5px' : '5px 7px';
+  var th = function(c){ return '<th style="border:1px solid #999;padding:' + pad + ';background:#EBF3FB;font-size:' + fs + ';text-align:' + (c.t === 'texte' ? 'left' : 'right') + '">' + gxEsc(c.l) + '</th>'; };
+  var cell = function(c, v, gras){
+    var txt = (c.t === 'montant') ? ((v === '' || v == null) ? '' : Math.round(v).toLocaleString('fr-FR', GOS_FMT0)) : (c.t === 'nombre' ? (v == null ? '' : v) : gxEsc(v));
+    return '<td style="border:1px solid #bbb;padding:' + pad + ';font-size:' + fs + ';text-align:' + (c.t === 'texte' ? 'left' : 'right') + (gras ? ';font-weight:700' : '') + '">' + txt + '</td>';
+  };
+  var h = '<div style="padding:12mm 12mm 0">'
+    + '<div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #185FA5;padding-bottom:6px;margin-bottom:8px">'
+    + '<div><div style="font-size:16px;font-weight:700;color:#185FA5">' + gxEsc(def.titre) + '</div>'
+    + (def.sousTitre ? '<div style="font-size:11px;color:#555;margin-top:2px">' + gxEsc(def.sousTitre) + '</div>' : '') + '</div>'
+    + '<div style="font-size:10px;color:#666;text-align:right">GarageOS — Smart Services<br>Edite le ' + new Date().toLocaleString('fr-FR', GOS_FMT0) + '</div></div>'
+    + '<table style="width:100%;border-collapse:collapse"><thead><tr>' + cols.map(th).join('') + '</tr></thead><tbody>';
+  if(!def.lignes.length) h += '<tr><td colspan="' + cols.length + '" style="border:1px solid #bbb;padding:10px;text-align:center;color:#888;font-size:11px">Aucune donnee.</td></tr>';
+  def.lignes.forEach(function(l){
+    if(l && l.section !== undefined){ h += '<tr><td colspan="' + cols.length + '" style="border:1px solid #bbb;padding:' + pad + ';font-size:' + fs + ';font-weight:700;background:#F2F5F8">' + gxEsc(l.section) + '</td></tr>'; return; }
+    h += '<tr>' + cols.map(function(c, i){ return cell(c, l[i], false); }).join('') + '</tr>';
+  });
+  h += '</tbody>';
+  if(def.total) h += '<tfoot><tr>' + cols.map(function(c, i){ return cell(c, def.total[i], true).replace('border:1px solid #bbb', 'border:1px solid #999;background:#f5f4f1'); }).join('') + '</tr></tfoot>';
+  h += '</table></div><footer>GarageOS — ' + gxEsc(def.titre) + '</footer>';
+  return h;
+}
+function gxExcel(def){
+  var aoa = [[def.titre]];
+  if(def.sousTitre) aoa.push([def.sousTitre]);
+  aoa.push(['Edite le ' + new Date().toLocaleString('fr-FR', GOS_FMT0)]);
+  aoa.push([]);
+  var lHead = aoa.length;
+  aoa.push(def.colonnes.map(function(c){ return c.l; }));
+  def.lignes.forEach(function(l){
+    if(l && l.section !== undefined){ aoa.push([l.section]); return; }
+    aoa.push(def.colonnes.map(function(c, i){ var v = l[i]; return (c.t === 'montant') ? (v === '' || v == null ? '' : Math.round(v)) : (v == null ? '' : v); }));
+  });
+  if(def.total){ aoa.push([]); aoa.push(def.colonnes.map(function(c, i){ var v = def.total[i]; return c.t === 'montant' && v !== '' && v != null ? Math.round(v) : (v == null ? '' : v); })); }
+  var ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = def.colonnes.map(function(c){ return {wch: c.w || (c.t === 'texte' ? 22 : 14)}; });
+  // format monetaire sur les colonnes montant
+  var range = XLSX.utils.decode_range(ws['!ref']);
+  for(var R = lHead + 1; R <= range.e.r; R++){
+    def.colonnes.forEach(function(c, C){ if(c.t !== 'montant') return; var a = XLSX.utils.encode_cell({r: R, c: C}); if(ws[a] && typeof ws[a].v === 'number') ws[a].z = '#,##0'; });
+  }
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, def.titre.replace(/[\\\/\?\*\[\]:]/g, ' ').substring(0, 31));
+  var nom = def.titre.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w\s\-]/g, '').trim().replace(/\s+/g, '_');
+  XLSX.writeFile(wb, nom + '_' + new Date().toISOString().split('T')[0] + '.xlsx');
+}
+var GOS_RAPPORTS = {};
+function gxExporterByEl(btn){ gxExporter(btn.getAttribute('data-gx'), btn.getAttribute('data-niveau'), btn.getAttribute('data-mode')); }
+function gxExporter(cle, niveau, mode){
+  var f = GOS_RAPPORTS[cle]; if(!f) return;
+  var def = f(niveau);
+  if(mode === 'excel'){
+    var lancer = function(){ try{ gxExcel(def); }catch(e){ console.error(e); afficherToastNotif('Export Excel impossible', String(e && e.message || e), 'alerte'); } };
+    if(typeof XLSX !== 'undefined') return lancer();
+    afficherToastNotif('Chargement du module Excel', 'Premiere utilisation : quelques secondes...', 'info');
+    gosChargerLib('xlsx').then(lancer, function(){ afficherToastNotif('Module Excel indisponible', 'Verifiez la connexion internet, puis reessayez.', 'alerte'); });
+    return;
+  }
+  ouvrirModaleImpression(def.titre, gxHtml(def));
+  if(mode === 'imprimer') setTimeout(function(){ try{ imprimerModalContent(); }catch(e){} }, 400);
+  else if(mode === 'pdf') setTimeout(function(){ try{ exporterPDF(); }catch(e){ console.error(e); } }, 400);
+}
+// Barre de boutons : niveaux = ['global','detail'] (ou un seul)
+function gxBarre(cle, niveaux){
+  var lib = {global: 'Global', detail: 'Detaille'};
+  var h = '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;justify-content:flex-end;margin-bottom:8px">';
+  niveaux.forEach(function(n, i){
+    if(i) h += '<span style="width:1px;height:22px;background:#d0cec9;margin:0 4px"></span>';
+    h += '<span class="xs muted" style="font-weight:600">' + lib[n] + ' :</span>';
+    h += '<button class="btn btn-sm" data-gx="' + cle + '" data-niveau="' + n + '" data-mode="imprimer" onclick="gxExporterByEl(this)" title="Imprimer (' + lib[n].toLowerCase() + ')">&#x1F5A8; Imprimer</button>';
+    h += '<button class="btn btn-sm" style="color:#A32D2D;border-color:#E0A0A0" data-gx="' + cle + '" data-niveau="' + n + '" data-mode="pdf" onclick="gxExporterByEl(this)" title="Telecharger en PDF (' + lib[n].toLowerCase() + ')">&#x1F4C4; PDF</button>';
+    h += '<button class="btn btn-sm" style="color:#217346;border-color:#9BC9AE" data-gx="' + cle + '" data-niveau="' + n + '" data-mode="excel" onclick="gxExporterByEl(this)" title="Telecharger en Excel (' + lib[n].toLowerCase() + ')">&#x1F4CA; Excel</button>';
+  });
+  return h + '</div>';
+}
+function gxPeriodicite(c){ return c.periodicite === 'trimestriel' ? 'Trimestriel' : c.periodicite === 'annuel' ? 'Annuel' : 'Mensuel'; }
+
+// ---- Charges fixes : liste
+GOS_RAPPORTS.cf_liste = function(niveau){
+  var groupes = grouperChargesParCategorie(CHARGES_FIXES), lignes = [], totM = 0, totN = 0;
+  if(niveau === 'global'){
+    groupes.forEach(function(g){
+      var act = g.charges.filter(function(c){ return c.actif; }), m = act.reduce(function(s, c){ return s + equivalentMensuelCharge(c); }, 0);
+      totM += m; totN += act.length;
+      lignes.push([g.categorie, act.length, g.charges.length - act.length, m, m * 12]);
+    });
+    return {titre: 'Charges fixes mensuelles — global', sousTitre: 'Equivalent mensuel des charges actives, par categorie',
+      colonnes: [{l: 'Categorie', t: 'texte', w: 28}, {l: 'Charges actives', t: 'nombre'}, {l: 'Inactives', t: 'nombre'}, {l: 'Equivalent mensuel', t: 'montant', w: 18}, {l: 'Equivalent annuel', t: 'montant', w: 18}],
+      lignes: lignes, total: ['Total', totN, '', totM, totM * 12]};
+  }
+  groupes.forEach(function(g){
+    lignes.push({section: g.categorie + ' (' + g.charges.length + ')'});
+    g.charges.forEach(function(c){
+      var m = c.actif ? equivalentMensuelCharge(c) : 0; totM += m;
+      var pr = c.actif ? prochainEcheanceCharge(c) : null;
+      lignes.push([c.nom, g.categorie, parseFloat(c.montant) || 0, gxPeriodicite(c), 'le ' + (c.jourEcheance || 1), m, gxDate(pr), c.actif ? 'Active' : 'Inactive']);
+    });
+  });
+  return {titre: 'Charges fixes mensuelles — detail', sousTitre: CHARGES_FIXES.length + ' charge(s) — equivalent mensuel compte pour les charges actives',
+    colonnes: [{l: 'Charge', t: 'texte', w: 28}, {l: 'Categorie', t: 'texte', w: 18}, {l: 'Montant', t: 'montant'}, {l: 'Periodicite', t: 'texte', w: 12}, {l: 'Echeance', t: 'texte', w: 10}, {l: 'Equiv. mensuel', t: 'montant'}, {l: 'Prochaine echeance', t: 'texte', w: 16}, {l: 'Statut', t: 'texte', w: 10}],
+    lignes: lignes, total: ['Total', '', '', '', '', totM, '', '']};
+};
+// ---- Charges fixes : a payer (mois dus)
+GOS_RAPPORTS.cf_paiement = function(niveau){
+  var debutMois = new Date(); debutMois.setHours(0,0,0,0); debutMois.setDate(1);
+  var d0 = debutMois.getTime(), d1 = new Date(debutMois.getFullYear(), debutMois.getMonth() + 1, 1).getTime(), maintenant = Date.now();
+  var actives = CHARGES_FIXES.filter(function(c){ return c.actif; }), lignes = [], tot = [0, 0, 0];
+  grouperChargesParCategorie(actives).forEach(function(g){
+    if(niveau === 'detail') lignes.push({section: g.categorie});
+    g.charges.forEach(function(c){
+      var imp = echeancesImpayees(c).sort(function(a, b){ return a - b; });
+      if(niveau === 'global'){
+        var cum = function(f){ return imp.filter(f).reduce(function(s, d){ return s + resteDuEcheance(c, d); }, 0); };
+        var mc = cum(function(d){ return d >= d0 && d < d1; }), ar = cum(function(d){ return d < d0; }), t = cum(function(){ return true; });
+        tot[0] += mc; tot[1] += ar; tot[2] += t;
+        lignes.push([c.nom, g.categorie, parseFloat(c.montant) || 0, imp.length, mc, ar, t]);
+      } else {
+        if(!imp.length){ lignes.push([c.nom, '', '', 'A jour', 0]); return; }
+        imp.forEach(function(d){ var r = resteDuEcheance(c, d); tot[2] += r; lignes.push([c.nom, gxMois(d), gxDate(d), d < maintenant ? 'En retard' : 'A payer', r]); });
+      }
+    });
+  });
+  if(niveau === 'global') return {titre: 'Charges fixes a payer — global', sousTitre: 'Situation au ' + gxDate(Date.now()),
+    colonnes: [{l: 'Charge', t: 'texte', w: 26}, {l: 'Categorie', t: 'texte', w: 18}, {l: 'Montant / echeance', t: 'montant', w: 16}, {l: 'Mois dus', t: 'nombre'}, {l: 'Du ce mois', t: 'montant'}, {l: 'Arrieres', t: 'montant'}, {l: 'Cumul du', t: 'montant'}],
+    lignes: lignes, total: ['Total', '', '', '', tot[0], tot[1], tot[2]]};
+  return {titre: 'Charges fixes a payer — detail des mois dus', sousTitre: 'Situation au ' + gxDate(Date.now()),
+    colonnes: [{l: 'Charge', t: 'texte', w: 28}, {l: 'Mois', t: 'texte', w: 16}, {l: 'Echeance', t: 'texte', w: 12}, {l: 'Statut', t: 'texte', w: 12}, {l: 'Reste du', t: 'montant'}],
+    lignes: lignes, total: ['Total', '', '', '', tot[2]]};
+};
+// ---- Charges fixes : historique des paiements
+GOS_RAPPORTS.cf_historique = function(niveau){
+  var q = gxRecherche('chargesFixesHistoriqueRecherche');
+  var hist = (_chargesFixesHistoriquePeriodeFiltree || []).filter(function(h){ return !q || h.nom.toLowerCase().indexOf(q) >= 0; });
+  var cat = function(id){ var c = CHARGES_FIXES.find(function(x){ return x.id === id; }); return c ? categorieCharge(c) : ''; };
+  var st = gxPeriodeTexte(chargesFixesHistoriquePeriode, chargesFixesHistoriqueDebut, chargesFixesHistoriqueFin) + (q ? ' — recherche « ' + q + ' »' : '');
+  var total = hist.reduce(function(s, h){ return s + h.montant; }, 0);
+  if(niveau === 'global'){
+    var g = {};
+    hist.forEach(function(h){ var k = h.chargeId; if(!g[k]) g[k] = {nom: h.nom, cat: cat(h.chargeId), n: 0, t: 0, der: 0}; g[k].n++; g[k].t += h.montant; g[k].der = Math.max(g[k].der, h.datePaiement || 0); });
+    var lignes = Object.keys(g).map(function(k){ return g[k]; }).sort(function(a, b){ return b.t - a.t; }).map(function(x){ return [x.nom, x.cat, x.n, gxDate(x.der), x.t]; });
+    return {titre: 'Historique des paiements — charges fixes (global)', sousTitre: st,
+      colonnes: [{l: 'Charge', t: 'texte', w: 28}, {l: 'Categorie', t: 'texte', w: 18}, {l: 'Versements', t: 'nombre'}, {l: 'Dernier paiement', t: 'texte', w: 16}, {l: 'Total paye', t: 'montant'}],
+      lignes: lignes, total: ['Total', '', hist.length, '', total]};
+  }
+  return {titre: 'Historique des paiements — charges fixes (detail)', sousTitre: st,
+    colonnes: [{l: 'Date de paiement', t: 'texte', w: 14}, {l: 'Charge', t: 'texte', w: 28}, {l: 'Categorie', t: 'texte', w: 18}, {l: 'Mois regle', t: 'texte', w: 16}, {l: 'Delai (j)', t: 'nombre'}, {l: 'Montant', t: 'montant'}],
+    lignes: hist.map(function(h){ return [gxDate(h.datePaiement), h.nom, cat(h.chargeId), gxMois(h.dateEcheance), h.delai, h.montant]; }),
+    total: ['Total', hist.length + ' paiement(s)', '', '', '', total]};
+};
+// ---- Dettes fournisseurs : en cours
+var _dettesFournFiltresExport = [];
+GOS_RAPPORTS.df_encours = function(niveau){
+  var groupes = _dettesFournFiltresExport || [], lignes = [], tA = 0, tR = 0;
+  var stLib = function(s){ return s === 'retard' ? 'En retard' : s === 'a_echoir' ? 'A echoir' : 'Planifie'; };
+  var filtreLib = {toutes: 'toutes les dettes', retard: 'dettes en retard', a_echoir: 'dettes a echoir sous 7 jours', planifie: 'dettes planifiees'}[dettesFournFiltre] || '';
+  if(niveau === 'global'){
+    groupes.forEach(function(g){
+      var ach = g.lignes.reduce(function(s, l){ return s + (l.montantOriginal || 0); }, 0), res = g.lignes.reduce(function(s, l){ return s + (l.montant || 0); }, 0);
+      var ech = g.lignes.reduce(function(m, l){ return l.dateEcheance && (!m || l.dateEcheance < m) ? l.dateEcheance : m; }, 0);
+      tA += ach; tR += res;
+      lignes.push([g.fournisseur.nom, g.lignes.length, ach, ach - res, res, gxDate(ech), g.lignes.filter(function(l){ return l.statut === 'retard'; }).length, stLib(g.statutGlobal)]);
+    });
+    return {titre: 'Dettes fournisseurs — global', sousTitre: 'Situation au ' + gxDate(Date.now()) + ' — ' + filtreLib,
+      colonnes: [{l: 'Fournisseur', t: 'texte', w: 26}, {l: 'Achats', t: 'nombre'}, {l: 'Montant achete', t: 'montant'}, {l: 'Deja paye', t: 'montant'}, {l: 'Reste a payer', t: 'montant'}, {l: 'Echeance la plus proche', t: 'texte', w: 18}, {l: 'Lignes en retard', t: 'nombre'}, {l: 'Statut', t: 'texte', w: 11}],
+      lignes: lignes, total: ['Total', groupes.reduce(function(s, g){ return s + g.lignes.length; }, 0), tA, tA - tR, tR, '', '', '']};
+  }
+  groupes.forEach(function(g){
+    lignes.push({section: g.fournisseur.nom});
+    g.lignes.slice().sort(function(a, b){ return (a.dateAchat || 0) - (b.dateAchat || 0); }).forEach(function(l){
+      tA += l.montantOriginal || 0; tR += l.montant || 0;
+      var veh = l.manuel ? 'Saisie manuelle' : ((l.immat || '') + ' ' + (l.marque || '') + ' ' + (l.modele || '')).replace(/\s+/g, ' ').trim();
+      lignes.push([l.piece || '', veh, l.manuel ? '' : (l.client || ''), gxDate(l.dateAchat), l.qte || 1, l.prixUnitaire || 0, l.montantOriginal || 0, l.montant || 0, gxDate(l.dateEcheance), stLib(l.statut)]);
+    });
+  });
+  return {titre: 'Dettes fournisseurs — detail', sousTitre: 'Situation au ' + gxDate(Date.now()) + ' — ' + filtreLib,
+    colonnes: [{l: 'Piece / article', t: 'texte', w: 24}, {l: 'Vehicule', t: 'texte', w: 22}, {l: 'Client', t: 'texte', w: 18}, {l: 'Date achat', t: 'texte', w: 11}, {l: 'Qte', t: 'nombre'}, {l: 'Prix unit.', t: 'montant'}, {l: 'Prix total', t: 'montant'}, {l: 'Reste du', t: 'montant'}, {l: 'Echeance', t: 'texte', w: 11}, {l: 'Statut', t: 'texte', w: 10}],
+    lignes: lignes, total: ['Total', '', '', '', '', '', tA, tR, '', '']};
+};
+// ---- Dettes fournisseurs : historique des paiements
+GOS_RAPPORTS.df_historique = function(niveau){
+  var q = gxRecherche('dettesHistoriqueRecherche');
+  var hist = (_dettesHistoriquePeriodeFiltree || []).filter(function(h){ return !q || (h.fournisseur || '').toLowerCase().indexOf(q) >= 0 || (h.piece || '').toLowerCase().indexOf(q) >= 0; });
+  var st = gxPeriodeTexte(dettesHistoriquePeriode, dettesHistoriqueDebut, dettesHistoriqueFin) + (q ? ' — recherche « ' + q + ' »' : '');
+  var modeLib = function(m){ return {especes: 'Especes', virement: 'Virement', cheque: 'Cheque', mobile: 'Mobile money', mobile_money: 'Mobile money', autre: 'Autre'}[m] || (m || ''); };
+  var total = hist.reduce(function(s, h){ return s + h.montant; }, 0);
+  if(niveau === 'global'){
+    var g = {};
+    hist.forEach(function(h){ var k = h.fournisseur || '—'; if(!g[k]) g[k] = {nom: k, n: 0, t: 0, der: 0}; g[k].n++; g[k].t += h.montant; g[k].der = Math.max(g[k].der, h.datePaiement || 0); });
+    var lignes = Object.keys(g).map(function(k){ return g[k]; }).sort(function(a, b){ return b.t - a.t; }).map(function(x){ return [x.nom, x.n, gxDate(x.der), x.t]; });
+    return {titre: 'Historique des paiements — dettes fournisseurs (global)', sousTitre: st,
+      colonnes: [{l: 'Fournisseur', t: 'texte', w: 28}, {l: 'Versements', t: 'nombre'}, {l: 'Dernier paiement', t: 'texte', w: 16}, {l: 'Total paye', t: 'montant'}],
+      lignes: lignes, total: ['Total', hist.length, '', total]};
+  }
+  return {titre: 'Historique des paiements — dettes fournisseurs (detail)', sousTitre: st,
+    colonnes: [{l: 'Date', t: 'texte', w: 11}, {l: 'Fournisseur', t: 'texte', w: 22}, {l: 'Piece / article', t: 'texte', w: 24}, {l: 'Vehicule', t: 'texte', w: 12}, {l: 'Mode', t: 'texte', w: 12}, {l: 'Note / reference', t: 'texte', w: 20}, {l: 'Origine', t: 'texte', w: 14}, {l: 'Montant', t: 'montant'}],
+    lignes: hist.map(function(h){ return [gxDate(h.datePaiement), h.fournisseur, h.piece, h.immat || '', modeLib(h.mode), h.note || '', h.type === 'manuel' ? 'Saisie manuelle' : 'Vehicule', h.montant]; }),
+    total: ['Total', hist.length + ' paiement(s)', '', '', '', '', '', total]};
+};
+
 function pageChargesFixes(){
   if(chargesFixesVue==='paiement') return pageChargesFixesPaiement();
   if(chargesFixesVue==='historique') return pageChargesFixesHistorique();
@@ -18050,6 +18284,7 @@ function pageChargesFixes(){
   html += '</div>';
 
   if(groupes.length) html += boutonsPliageCharges('liste');
+  html += gxBarre('cf_liste', ['global','detail']);   // EXPORTS TABLEAUX
 
   html += '<div class="card"><div class="tw"><table><thead><tr>';
   html += '<th>Charge</th><th>Montant</th><th>Periodicite</th><th>Prochaine echeance</th><th>Statut</th><th></th>';
@@ -37709,6 +37944,7 @@ var GOS_SYNC = (function(){
     marquerSiAbsent(op);
     op.seq = prochainSeq();
     op.createdAt = heureServeur(); op.deviceId = (typeof deviceId !== 'undefined' ? deviceId : '?'); op.auteur = utilisateur();
+    op.version = (typeof GOS_VERSION !== 'undefined' ? GOS_VERSION : '');   // VERSION
     op.tentatives = 0;
     file.push(op); persister(op);
     try{ if(typeof gosSurNouvelleOperation === 'function') gosSurNouvelleOperation(op.opId); }catch(e){}   // SYNC CONCURRENCE
@@ -37966,7 +38202,7 @@ var GOS_SYNC = (function(){
       h += '<div style="background:#F7F9FB;border-radius:4px;padding:8px;margin-bottom:8px">' + echapper(c.description || '') + '<br><span class="xs muted">Cette operation ne peut pas etre appliquee automatiquement : refaites-la si necessaire, puis ecartez-la.</span></div>';
     }
     h += '<div class="xs muted" style="margin-bottom:8px">Saisie le ' + (c.operationCreeeLe ? new Date(c.operationCreeeLe).toLocaleString('fr-FR') : '?')
-       + ' par ' + echapper(c.auteur || '?') + ' · poste ' + echapper(c.deviceId || '?') + '</div>';
+       + ' par ' + echapper(c.auteur || '?') + ' · poste ' + echapper(c.deviceId || '?') + ' · version ' + echapper(c.versionPoste || 'anterieure au 04/11/2026') + '</div>';
     h += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
     h += '<button class="btn btn-sm" onclick="GOS_SYNC.resoudreConflit(\'' + k + '\',\'garder\')">Ecarter (garder la valeur enregistree)</button>';
     if(patchOp && patchOp.length) h += '<button class="btn btn-sm btn-primary" onclick="GOS_SYNC.resoudreConflit(\'' + k + '\',\'appliquer\')">Appliquer la demande</button>';
@@ -38437,6 +38673,7 @@ var GOS_SYNC = (function(){
       tombstone: c.tombstone || null,
       libelle: d.libelle ? d.libelle(rec) : String(op.recordId),
       opId: op.opId, deviceId: op.deviceId, auteur: op.auteur, operationCreeeLe: op.createdAt,
+      versionPoste: op.version || 'anterieure au 04/11/2026',
       detecteLe: firebase.database.ServerValue.TIMESTAMP, statut: 'ouvert'
     };
     db.ref('gos_conflits').push().set(entree);
@@ -38701,9 +38938,13 @@ var GOS_SYNC = (function(){
       }
       h += '</table>';
     }
-    h += '<div class="xs muted" style="margin-bottom:8px">Modifie le '
-       + (c.detecteLe ? new Date(c.detecteLe).toLocaleString('fr-FR', GOS_FMT0) : '?')
-       + ' · poste ' + echapper(c.deviceId || '?') + '</div>';
+    // VERSION : heure de SAISIE sur le poste (et non seulement l'heure de detection), et version du code
+    var dSaisie = c.operationCreeeLe ? new Date(c.operationCreeeLe) : null, dDetect = c.detecteLe ? new Date(c.detecteLe) : null;
+    var ecartMin = (dSaisie && dDetect) ? Math.round((dDetect - dSaisie) / 60000) : 0;
+    h += '<div class="xs muted" style="margin-bottom:8px">Saisi le ' + (dSaisie ? dSaisie.toLocaleString('fr-FR', GOS_FMT0) : '?')
+       + ' · recu par le serveur le ' + (dDetect ? dDetect.toLocaleString('fr-FR', GOS_FMT0) : '?')
+       + (ecartMin >= 2 ? ' <span style="color:#854F0B;font-weight:600">(envoi retarde de ' + (ecartMin >= 60 ? Math.floor(ecartMin / 60) + ' h ' + (ecartMin % 60) + ' min' : ecartMin + ' min') + ')</span>' : '')
+       + '<br>poste ' + echapper(c.deviceId || '?') + ' · version ' + echapper(c.versionPoste || 'anterieure au 04/11/2026') + '</div>';
     h += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
     h += '<button class="btn btn-sm" onclick="GOS_SYNC.resoudreConflit(\'' + k + '\',\'garder\')">'
        + (simple ? 'Garder ' + echapper(vServeur) : 'Garder la valeur enregistree') + '</button>';
