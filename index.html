@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-06.4';
+var GOS_VERSION = '2026-11-06.5';
 // DIAG DEMARRAGE : etapes de l'ouverture, affichees si elle reste bloquee
 (function(){
   var t0 = Date.now(), E = [], erreurs = [];
@@ -4268,7 +4268,12 @@ function histComparer(a, b){
 var historiqueTriBloc = {};   // cle de bloc -> 'recent' | 'immo_desc' | 'immo_asc'
 function histCleClient(v){ return String(v.client || '').replace(/\s+/g, ' ').trim().toUpperCase() || '(SANS NOM)'; }
 function setHistTriBlocByEl(btn){ historiqueTriBloc[decodeURIComponent(btn.getAttribute('data-bloc'))] = btn.getAttribute('data-tri'); _refreshHistorique(); }
+var HIST_ST_CLOTURES = ['facture_deposee','dossier_cloture'];   // = groupe « Dossiers clotures » de l'Historique
 function renderHistoriqueParEntreprise(allV){
+  // Les dossiers clotures ne sont pas pris en compte dans cette vue (demande du 06/11/2026)
+  var nbClotures = allV.filter(function(v){ return HIST_ST_CLOTURES.indexOf(v.status) >= 0; }).length;
+  allV = allV.filter(function(v){ return HIST_ST_CLOTURES.indexOf(v.status) < 0; });
+  if(!allV.length) return '<div class="card"><div class="empty">Aucun dossier en cours (' + nbClotures + ' dossier(s) cloture(s) non pris en compte)</div></div>';
   var blocs = {}, particuliers = [];
   allV.forEach(function(v){
     if(histEntite(v) !== 'Entreprise'){ particuliers.push(v); return; }
@@ -4284,7 +4289,7 @@ function renderHistoriqueParEntreprise(allV){
   }).sort(function(a, b){ return a.nom.localeCompare(b.nom, 'fr', {sensitivity: 'base'}); });
   if(particuliers.length) liste.push({cle: '__PARTICULIERS__', nom: 'Particuliers', vehicules: particuliers, particuliers: true});
 
-  var html = '<div class="xs muted" style="margin-bottom:10px">' + (liste.length - (particuliers.length ? 1 : 0)) + ' entreprise(s)' + (particuliers.length ? ' + ' + particuliers.length + ' vehicule(s) de particuliers' : '') + ' — chaque bloc peut etre trie par delai d\'immobilisation.</div>';
+  var html = '<div class="xs muted" style="margin-bottom:10px">' + (liste.length - (particuliers.length ? 1 : 0)) + ' entreprise(s)' + (particuliers.length ? ' + ' + particuliers.length + ' vehicule(s) de particuliers' : '') + ' — dossiers clotures non pris en compte' + (nbClotures ? ' (' + nbClotures + ')' : '') + ' — chaque bloc peut etre trie par delai d\'immobilisation.</div>';
   liste.forEach(function(b){
     var tri = historiqueTriBloc[b.cle] || 'recent';
     var vs = b.vehicules.slice().sort(function(x, y){
