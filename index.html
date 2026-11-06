@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-05';
+var GOS_VERSION = '2026-11-06.3';
 // DIAG DEMARRAGE : etapes de l'ouverture, affichees si elle reste bloquee
 (function(){
   var t0 = Date.now(), E = [], erreurs = [];
@@ -4233,6 +4233,37 @@ function pagePerformance(){
 // ── PAGE HISTORIQUE ─────────────────────────────────────────────────────────
 
 var historiqueSearch = '';
+// HISTORIQUE TRI (06/11/2026) : tri et filtre type de client, en plus de l'affichage existant
+// (groupes par etape). Par defaut : entree la plus recente d'abord, comme avant.
+var historiqueTri = 'recent';   // 'recent' | 'immo_desc' | 'immo_asc' | 'client_az' | 'entite_az'
+var historiqueEntite = '';      // '' (tous) | 'Entreprise' | 'Particulier'
+function histEntite(v){ return (v.entite && String(v.entite).toLowerCase() !== 'particulier') ? 'Entreprise' : 'Particulier'; }
+// Duree d'immobilisation REELLE : entree -> sortie pour un vehicule livre / cloture (meme regle que le
+// KPI « Tps moyen immobilisation »), entree -> maintenant pour un vehicule encore au garage.
+function histDureeImmo(v){
+  if(!v.entree) return 0;
+  if(LIV_ST.indexOf(v.status) >= 0){
+    var fin = (v.archiveDate && v.archiveDate > v.entree) ? v.archiveDate
+            : (v.stepStart && v.stepStart > v.entree) ? v.stepStart
+            : (v.livraison && v.livraison > v.entree) ? v.livraison : null;
+    if(fin) return fin - v.entree;
+  }
+  return Date.now() - v.entree;
+}
+function histFmtDuree(ms){ var h = Math.floor(ms / 3600000); return h >= 24 ? Math.floor(h / 24) + 'j ' + ('0' + (h % 24)).slice(-2) + 'h' : h + 'h'; }
+function histComparer(a, b){
+  var nom = function(v){ return String(v.client || '').trim(); };
+  if(historiqueTri === 'immo_desc') return histDureeImmo(b) - histDureeImmo(a);
+  if(historiqueTri === 'immo_asc')  return histDureeImmo(a) - histDureeImmo(b);
+  if(historiqueTri === 'client_az') return nom(a).localeCompare(nom(b), 'fr', {sensitivity: 'base'}) || (b.entree || 0) - (a.entree || 0);
+  if(historiqueTri === 'entite_az'){
+    var ea = histEntite(a) === 'Entreprise' ? 0 : 1, eb = histEntite(b) === 'Entreprise' ? 0 : 1;
+    return ea - eb || nom(a).localeCompare(nom(b), 'fr', {sensitivity: 'base'}) || (b.entree || 0) - (a.entree || 0);
+  }
+  return (b.entree || 0) - (a.entree || 0);
+}
+function setHistoriqueTri(val){ historiqueTri = val || 'recent'; _refreshHistorique(); }
+function setHistoriqueEntite(val){ historiqueEntite = val || ''; _refreshHistorique(); }
 var historiqueEquipe = '';
 var historiqueTechnicien = '';
 var historiqueDateDebut = '';
@@ -4328,10 +4359,20 @@ function pageHistorique(){
   if(currentRole!=='technicien'){
     html += '<select class="inp" id="hist_sel_tech" style="width:170px" onchange="setHistoriqueTech(this.value)">'+optTechs+'</select>';
   }
+  html += '<select class="inp" style="width:150px" onchange="setHistoriqueEntite(this.value)" title="Type de client">'
+        + '<option value="">Tous les clients</option>'
+        + '<option value="Entreprise"'+(historiqueEntite==='Entreprise'?' selected':'')+'>Entreprises</option>'
+        + '<option value="Particulier"'+(historiqueEntite==='Particulier'?' selected':'')+'>Particuliers</option></select>';
+  html += '<select class="inp" style="width:250px" onchange="setHistoriqueTri(this.value)" title="Ordre d\'affichage dans chaque groupe">'
+        + '<option value="recent"'+(historiqueTri==='recent'?' selected':'')+'>Tri : entree la plus recente</option>'
+        + '<option value="immo_desc"'+(historiqueTri==='immo_desc'?' selected':'')+'>Tri : immobilisation la plus longue</option>'
+        + '<option value="immo_asc"'+(historiqueTri==='immo_asc'?' selected':'')+'>Tri : immobilisation la plus courte</option>'
+        + '<option value="client_az"'+(historiqueTri==='client_az'?' selected':'')+'>Tri : client A &rarr; Z</option>'
+        + '<option value="entite_az"'+(historiqueTri==='entite_az'?' selected':'')+'>Tri : entreprises puis particuliers (A &rarr; Z)</option></select>';
   html += '<input type="date" class="inp" id="hist_date_debut" style="width:135px;font-size:11px" value="'+historiqueDateDebut+'" onchange="setHistoriqueDates(this.value,document.getElementById(\'hist_date_fin\').value)" title="Date debut">';
   html += '<span class="xs muted">au</span>';
   html += '<input type="date" class="inp" id="hist_date_fin" style="width:135px;font-size:11px" value="'+historiqueDateFin+'" onchange="setHistoriqueDates(document.getElementById(\'hist_date_debut\').value||historiqueDateDebut,this.value)" title="Date fin">';
-  html += '<button class="btn btn-sm" onclick="historiqueSearch=\'\';historiqueEquipe=\'\';historiqueTechnicien=\'\';historiqueDateDebut=\'\';historiqueDateFin=\'\';var d=document.getElementById(\'hist_date_debut\');if(d)d.value=\'\';var f=document.getElementById(\'hist_date_fin\');if(f)f.value=\'\';_refreshHistorique()">&#x2715; Effacer filtres</button>';
+  html += '<button class="btn btn-sm" onclick="historiqueSearch=\'\';historiqueEquipe=\'\';historiqueTechnicien=\'\';historiqueDateDebut=\'\';historiqueDateFin=\'\';historiqueTri=\'recent\';historiqueEntite=\'\';var d=document.getElementById(\'hist_date_debut\');if(d)d.value=\'\';var f=document.getElementById(\'hist_date_fin\');if(f)f.value=\'\';renderPage()">&#x2715; Effacer filtres</button>';
   html += '</div>';
 
   html += '<div id="historique_results">'+renderHistoriqueResults()+'</div>';
@@ -4366,6 +4407,9 @@ function renderHistoriqueResults(){
   }
   if(historiqueTechnicien){
     allV = allV.filter(function(v){ return v.technicien===historiqueTechnicien; });
+  }
+  if(historiqueEntite){   // HISTORIQUE TRI
+    allV = allV.filter(function(v){ return histEntite(v)===historiqueEntite; });
   }
   if(historiqueSearch){
     allV = allV.filter(function(v){
@@ -4404,7 +4448,7 @@ function renderHistoriqueResults(){
   GROUPES.forEach(function(groupe){
     var vGroup = allV.filter(function(v){
       return groupe.statuts.indexOf(v.status) >= 0;
-    }).sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+    }).sort(histComparer);   // HISTORIQUE TRI (defaut : entree la plus recente, comme avant)
 
     if(!vGroup.length) return;
 
@@ -4436,11 +4480,11 @@ function renderHistoriqueResults(){
 
       html += '<tr>';
       html += '<td><div class="fw7">'+v.immat+dcBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div>'+dernierCommentaireHtml(v)+'</td>';
-      html += '<td>'+v.client+'<div class="xs muted">'+v.tel+'</div></td>';
+      html += '<td>'+v.client+'<div class="xs muted">'+v.tel+'</div><div class="xs" style="color:'+(histEntite(v)==='Entreprise'?'#185FA5':'#888')+'">'+histEntite(v)+'</div></td>';
       html += '<td>'+tbadge(v.typeClient)+assuranceBadge(v)+' '+pbadge(v.priorite)+'</td>';
       html += '<td><span class="badge '+st.c+'">'+st.l+'</span></td>';
       html += '<td>'+techHtml+'</td>';
-      html += '<td>'+chronoHtml(v)+'</td>';
+      html += '<td>'+chronoHtml(v)+((historiqueTri==='immo_desc'||historiqueTri==='immo_asc')&&v.entree?'<div class="xs" style="margin-top:3px;color:#185FA5;font-weight:600">Immobilisation '+(LIV_ST.indexOf(v.status)>=0?'reelle (entree &rarr; sortie)':'en cours')+' : '+histFmtDuree(histDureeImmo(v))+'</div>':'')+'</td>';
       html += '<td><div class="flex gap6">';
       html += '<button class="btn btn-sm" data-vid="'+v.id+'" onclick="openDetById(this)">&#x1F441;</button>';
       if(currentRole==='direction' && v.status!=='dossier_cloture' && !v.isProspect){
@@ -5462,7 +5506,7 @@ function ouvrirCommentaires(vid){
     sorted.forEach(function(c, i){
       var date = new Date(c.ts).toLocaleDateString('fr-FR')+' '+new Date(c.ts).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
       var realIdx = v.commentaires.indexOf(c);
-      var isAuteur = c.auteur === currentAuteur;
+      var isAuteur = !c.motifVisite && c.auteur === currentAuteur;   // MOTIF EN MESSAGERIE : message lu dans le dossier
       h += '<div style="padding:10px 0;border-bottom:1px solid #f0ede8" id="comm_item_'+realIdx+'">';
       h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">';
       h += '<span class="fw7" style="font-size:12px;color:#185FA5">'+c.auteur+'</span>';
@@ -5471,7 +5515,7 @@ function ouvrirCommentaires(vid){
       if(isAuteur){
         h += '<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" data-vid="'+vid+'" data-idx="'+realIdx+'" onclick="modifierCommentaireById(this)">&#x270F; Modifier</button>';
       }
-      if(currentRole==='direction'){
+      if(currentRole==='direction' && !c.motifVisite && realIdx >= 0){
         h += '<button class="btn btn-sm" style="font-size:10px;padding:2px 6px;color:#A32D2D;border-color:#A32D2D" data-vid="'+vid+'" data-idx="'+realIdx+'" onclick="supprimerCommentaireById(this)">&#x1F5D1;</button>';
       }
       h += '</div></div>';
@@ -5556,6 +5600,10 @@ function dernierCommentaireHtml(v){
   if(!_comm.length) return '';
   var last = _comm.slice().sort(function(a,b){ return b.ts-a.ts; })[0];
   var court = last.texte.length > 60 ? last.texte.substring(0,60)+'...' : last.texte;
+  if(last.motifVisite){   // MOTIF EN MESSAGERIE : couper le texte brut puis le proteger
+    var brut = String(v.motif || '').replace(/\s+/g, ' ').trim();
+    court = (brut.length > 60 ? brut.substring(0,60)+'...' : brut).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; });
+  }
   return '<div style="font-size:10px;color:#854F0B;margin-top:3px;cursor:pointer" data-cid="'+v.id+'" onclick="ouvrirCommentairesById(this)">&#x1F4AC; '+court+'</div>';
 }
 
@@ -5701,8 +5749,20 @@ function ajouterCommentaireSysteme(v, texte, auteur, options){
 // rouverte au premier oubli.
 function commentairesVisibles(v){
   var liste = (v && v.commentaires) || [];
-  if(peutVoirAcompte()) return liste;
-  return liste.filter(function(c){ return c.financier !== true; });
+  if(!peutVoirAcompte()) liste = liste.filter(function(c){ return c.financier !== true; });
+  var m = messageMotifVisite(v);
+  return m ? liste.concat([m]) : liste;
+}
+// MOTIF EN MESSAGERIE (06/11/2026) : le motif de visite est le PREMIER message de chaque vehicule,
+// date de l'entree du vehicule. Message ordinaire : il apparait comme « dernier message » (liste,
+// fiche) tant que personne n'a ecrit, puis les nouveaux messages suivent la logique habituelle.
+// Il est lu dans le dossier (v.motif) : rien n'est recopie dans v.commentaires, donc aucune ecriture
+// en masse, et il suit toute modification du motif. Non modifiable / non supprimable ici.
+function messageMotifVisite(v){
+  var motif = String((v && v.motif) || '').trim();
+  if(!motif) return null;
+  var esc = motif.replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }).replace(/\n/g, '<br>');
+  return {auteur: 'Motif de la visite (accueil)', texte: esc, ts: v.entree || v.stepStart || 0, motifVisite: true};
 }
 
 
