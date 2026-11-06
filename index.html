@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-06.3';
+var GOS_VERSION = '2026-11-06.4';
 // DIAG DEMARRAGE : etapes de l'ouverture, affichees si elle reste bloquee
 (function(){
   var t0 = Date.now(), E = [], erreurs = [];
@@ -4262,6 +4262,57 @@ function histComparer(a, b){
   }
   return (b.entree || 0) - (a.entree || 0);
 }
+// HISTORIQUE PAR ENTREPRISE (06/11/2026) : un bloc par entreprise (ordre alphabetique), puis un bloc
+// « Particuliers ». Chaque bloc a son propre tri : entree la plus recente / immobilisation la plus
+// longue / la plus courte (immobilisation reelle, cf. histDureeImmo).
+var historiqueTriBloc = {};   // cle de bloc -> 'recent' | 'immo_desc' | 'immo_asc'
+function histCleClient(v){ return String(v.client || '').replace(/\s+/g, ' ').trim().toUpperCase() || '(SANS NOM)'; }
+function setHistTriBlocByEl(btn){ historiqueTriBloc[decodeURIComponent(btn.getAttribute('data-bloc'))] = btn.getAttribute('data-tri'); _refreshHistorique(); }
+function renderHistoriqueParEntreprise(allV){
+  var blocs = {}, particuliers = [];
+  allV.forEach(function(v){
+    if(histEntite(v) !== 'Entreprise'){ particuliers.push(v); return; }
+    var k = histCleClient(v);
+    if(!blocs[k]) blocs[k] = {cle: k, noms: {}, vehicules: []};
+    blocs[k].vehicules.push(v);
+    var n = String(v.client || '').trim(); blocs[k].noms[n] = (blocs[k].noms[n] || 0) + 1;
+  });
+  var liste = Object.keys(blocs).map(function(k){
+    var b = blocs[k];
+    b.nom = Object.keys(b.noms).sort(function(x, y){ return b.noms[y] - b.noms[x]; })[0] || k;   // orthographe la plus frequente
+    return b;
+  }).sort(function(a, b){ return a.nom.localeCompare(b.nom, 'fr', {sensitivity: 'base'}); });
+  if(particuliers.length) liste.push({cle: '__PARTICULIERS__', nom: 'Particuliers', vehicules: particuliers, particuliers: true});
+
+  var html = '<div class="xs muted" style="margin-bottom:10px">' + (liste.length - (particuliers.length ? 1 : 0)) + ' entreprise(s)' + (particuliers.length ? ' + ' + particuliers.length + ' vehicule(s) de particuliers' : '') + ' — chaque bloc peut etre trie par delai d\'immobilisation.</div>';
+  liste.forEach(function(b){
+    var tri = historiqueTriBloc[b.cle] || 'recent';
+    var vs = b.vehicules.slice().sort(function(x, y){
+      if(tri === 'immo_desc') return histDureeImmo(y) - histDureeImmo(x);
+      if(tri === 'immo_asc')  return histDureeImmo(x) - histDureeImmo(y);
+      if(b.particuliers){ var c = String(x.client || '').localeCompare(String(y.client || ''), 'fr', {sensitivity: 'base'}); if(c) return c; }
+      return (y.entree || 0) - (x.entree || 0);
+    });
+    var durees = vs.filter(function(v){ return v.entree; }).map(histDureeImmo);
+    var moy = durees.length ? durees.reduce(function(s, d){ return s + d; }, 0) / durees.length : 0;
+    var auGarage = vs.filter(function(v){ return LIV_ST.indexOf(v.status) < 0; }).length;
+    var cleAttr = encodeURIComponent(b.cle);
+    var bouton = function(t, lib){ return '<button class="btn btn-sm' + (tri === t ? ' btn-primary' : '') + '" style="font-size:11px" data-bloc="' + cleAttr + '" data-tri="' + t + '" onclick="setHistTriBlocByEl(this)">' + lib + '</button>'; };
+    html += '<div class="card" style="margin-bottom:16px">';
+    html += '<div class="card-head" style="background:' + (b.particuliers ? '#F5F4F1;color:#5a5956' : '#EBF3FB;color:#185FA5') + ';flex-wrap:wrap;gap:8px">';
+    html += '<span>' + (b.particuliers ? '&#x1F464; ' : '&#x1F3E2; ') + String(b.nom).replace(/</g, '&lt;') + ' <span class="badge" style="background:' + (b.particuliers ? '#888' : '#185FA5') + ';color:#fff">' + vs.length + '</span>'
+          + ' <span class="xs" style="font-weight:400;color:#666">' + auGarage + ' au garage' + (durees.length ? ' · immobilisation moyenne ' + histFmtDuree(moy) : '') + '</span></span>';
+    html += '<span class="flex gap6" style="align-items:center"><span class="xs muted" style="font-weight:400">Trier :</span>' + bouton('recent', 'Entree recente') + bouton('immo_desc', 'Immobilisation la plus longue') + bouton('immo_asc', 'la plus courte') + '</span>';
+    html += '</div>';
+    html += '<div class="tw"><table><thead><tr>';
+    html += '<th>Vehicule</th><th>Client</th><th>Type/Prio</th><th>Statut</th>';
+    html += '<th>Equipe / Technicien</th><th>Chronometres</th><th>Actions</th>';
+    html += '</tr></thead><tbody>';
+    vs.forEach(function(v){ html += histLigneHtml(v, tri); });
+    html += '</tbody></table></div></div>';
+  });
+  return html;
+}
 function setHistoriqueTri(val){ historiqueTri = val || 'recent'; _refreshHistorique(); }
 function setHistoriqueEntite(val){ historiqueEntite = val || ''; _refreshHistorique(); }
 var historiqueEquipe = '';
@@ -4368,7 +4419,7 @@ function pageHistorique(){
         + '<option value="immo_desc"'+(historiqueTri==='immo_desc'?' selected':'')+'>Tri : immobilisation la plus longue</option>'
         + '<option value="immo_asc"'+(historiqueTri==='immo_asc'?' selected':'')+'>Tri : immobilisation la plus courte</option>'
         + '<option value="client_az"'+(historiqueTri==='client_az'?' selected':'')+'>Tri : client A &rarr; Z</option>'
-        + '<option value="entite_az"'+(historiqueTri==='entite_az'?' selected':'')+'>Tri : entreprises puis particuliers (A &rarr; Z)</option></select>';
+        + '<option value="entite_az"'+(historiqueTri==='entite_az'?' selected':'')+'>Regrouper par entreprise (A &rarr; Z)</option></select>';
   html += '<input type="date" class="inp" id="hist_date_debut" style="width:135px;font-size:11px" value="'+historiqueDateDebut+'" onchange="setHistoriqueDates(this.value,document.getElementById(\'hist_date_fin\').value)" title="Date debut">';
   html += '<span class="xs muted">au</span>';
   html += '<input type="date" class="inp" id="hist_date_fin" style="width:135px;font-size:11px" value="'+historiqueDateFin+'" onchange="setHistoriqueDates(document.getElementById(\'hist_date_debut\').value||historiqueDateDebut,this.value)" title="Date fin">';
@@ -4377,6 +4428,47 @@ function pageHistorique(){
 
   html += '<div id="historique_results">'+renderHistoriqueResults()+'</div>';
   html += '</div>';
+  return html;
+}
+
+// HISTORIQUE TRI : une ligne du tableau Historique (commune aux groupes par etape et par entreprise)
+function histLigneHtml(v, triImmo){
+  var html = '';
+      var st = STATUSES[v.status]||{l:v.status,c:'b-gray'};
+      var techHtml = '';
+      if(v.equipe_affectee || v.technicien){
+        if(v.equipe_affectee){
+          var eq = v.equipe_affectee;
+          var letter = eq.replace(/[^A-Z0-9]/gi,'').charAt(0).toUpperCase();
+          techHtml += '<span class="badge" style="background:#E8F4EA;color:#2D6A4F;font-size:10px;margin-right:4px">'+letter+'</span>';
+          techHtml += '<span class="xs" style="color:#5a5956">'+eq+'</span> ';
+        }
+        if(v.technicien){
+          techHtml += '<span class="xs fw7">'+v.technicien+'</span>';
+        }
+      } else {
+        techHtml = '<span class="xs muted">Non attribue</span>';
+      }
+
+      html += '<tr>';
+      html += '<td><div class="fw7">'+v.immat+dcBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div>'+dernierCommentaireHtml(v)+'</td>';
+      html += '<td>'+v.client+'<div class="xs muted">'+v.tel+'</div><div class="xs" style="color:'+(histEntite(v)==='Entreprise'?'#185FA5':'#888')+'">'+histEntite(v)+'</div></td>';
+      html += '<td>'+tbadge(v.typeClient)+assuranceBadge(v)+' '+pbadge(v.priorite)+'</td>';
+      html += '<td><span class="badge '+st.c+'">'+st.l+'</span></td>';
+      html += '<td>'+techHtml+'</td>';
+      var _triImmo = triImmo || historiqueTri;
+      html += '<td>'+chronoHtml(v)+((_triImmo==='immo_desc'||_triImmo==='immo_asc')&&v.entree?'<div class="xs" style="margin-top:3px;color:#185FA5;font-weight:600">Immobilisation '+(LIV_ST.indexOf(v.status)>=0?'reelle (entree &rarr; sortie)':'en cours')+' : '+histFmtDuree(histDureeImmo(v))+'</div>':'')+'</td>';
+      html += '<td><div class="flex gap6">';
+      html += '<button class="btn btn-sm" data-vid="'+v.id+'" onclick="openDetById(this)">&#x1F441;</button>';
+      if(currentRole==='direction' && v.status!=='dossier_cloture' && !v.isProspect){
+        html += '<button class="btn btn-sm" title="Cloturer sans facturer (le devis part en travaux a prevoir)" style="color:#854F0B;border-color:#E8A44A" onclick="ouvrirClotureForceeByEl(this)" data-vid="'+v.id+'">&#x1F512; Cloturer</button>';
+        html += '<button class="btn btn-sm" title="Envoyer directement dans Travaux a prevoir" style="color:#854F0B;border-color:#E8A44A" onclick="envoyerVersTravauxAPrevoirByEl(this)" data-vid="'+v.id+'">&#x1F527; Travaux a prevoir</button>';
+        if(v.status!=='devis_differe'){
+          html += '<button class="btn btn-sm" title="Envoyer directement dans Devis differes" style="color:#185FA5;border-color:#B5D4F4" onclick="envoyerVersDevisDiffereByEl(this)" data-vid="'+v.id+'">&#x23F3; Devis differe</button>';
+        }
+      }
+      html += '</div></td>';
+      html += '</tr>';
   return html;
 }
 
@@ -4443,6 +4535,7 @@ function renderHistoriqueResults(){
   if(!allV.length){
     return '<div class="card"><div class="empty">Aucun dossier trouvé</div></div>';
   }
+  if(historiqueTri === 'entite_az') return renderHistoriqueParEntreprise(allV);   // HISTORIQUE PAR ENTREPRISE
 
   // Afficher par groupes
   GROUPES.forEach(function(groupe){
@@ -4461,42 +4554,7 @@ function renderHistoriqueResults(){
     html += '<th>Equipe / Technicien</th><th>Chronometres</th><th>Actions</th>';
     html += '</tr></thead><tbody>';
 
-    vGroup.forEach(function(v){
-      var st = STATUSES[v.status]||{l:v.status,c:'b-gray'};
-      var techHtml = '';
-      if(v.equipe_affectee || v.technicien){
-        if(v.equipe_affectee){
-          var eq = v.equipe_affectee;
-          var letter = eq.replace(/[^A-Z0-9]/gi,'').charAt(0).toUpperCase();
-          techHtml += '<span class="badge" style="background:#E8F4EA;color:#2D6A4F;font-size:10px;margin-right:4px">'+letter+'</span>';
-          techHtml += '<span class="xs" style="color:#5a5956">'+eq+'</span> ';
-        }
-        if(v.technicien){
-          techHtml += '<span class="xs fw7">'+v.technicien+'</span>';
-        }
-      } else {
-        techHtml = '<span class="xs muted">Non attribue</span>';
-      }
-
-      html += '<tr>';
-      html += '<td><div class="fw7">'+v.immat+dcBadge(v)+'</div><div class="xs muted">'+v.marque+' '+v.modele+'</div>'+dernierCommentaireHtml(v)+'</td>';
-      html += '<td>'+v.client+'<div class="xs muted">'+v.tel+'</div><div class="xs" style="color:'+(histEntite(v)==='Entreprise'?'#185FA5':'#888')+'">'+histEntite(v)+'</div></td>';
-      html += '<td>'+tbadge(v.typeClient)+assuranceBadge(v)+' '+pbadge(v.priorite)+'</td>';
-      html += '<td><span class="badge '+st.c+'">'+st.l+'</span></td>';
-      html += '<td>'+techHtml+'</td>';
-      html += '<td>'+chronoHtml(v)+((historiqueTri==='immo_desc'||historiqueTri==='immo_asc')&&v.entree?'<div class="xs" style="margin-top:3px;color:#185FA5;font-weight:600">Immobilisation '+(LIV_ST.indexOf(v.status)>=0?'reelle (entree &rarr; sortie)':'en cours')+' : '+histFmtDuree(histDureeImmo(v))+'</div>':'')+'</td>';
-      html += '<td><div class="flex gap6">';
-      html += '<button class="btn btn-sm" data-vid="'+v.id+'" onclick="openDetById(this)">&#x1F441;</button>';
-      if(currentRole==='direction' && v.status!=='dossier_cloture' && !v.isProspect){
-        html += '<button class="btn btn-sm" title="Cloturer sans facturer (le devis part en travaux a prevoir)" style="color:#854F0B;border-color:#E8A44A" onclick="ouvrirClotureForceeByEl(this)" data-vid="'+v.id+'">&#x1F512; Cloturer</button>';
-        html += '<button class="btn btn-sm" title="Envoyer directement dans Travaux a prevoir" style="color:#854F0B;border-color:#E8A44A" onclick="envoyerVersTravauxAPrevoirByEl(this)" data-vid="'+v.id+'">&#x1F527; Travaux a prevoir</button>';
-        if(v.status!=='devis_differe'){
-          html += '<button class="btn btn-sm" title="Envoyer directement dans Devis differes" style="color:#185FA5;border-color:#B5D4F4" onclick="envoyerVersDevisDiffereByEl(this)" data-vid="'+v.id+'">&#x23F3; Devis differe</button>';
-        }
-      }
-      html += '</div></td>';
-      html += '</tr>';
-    });
+    vGroup.forEach(function(v){ html += histLigneHtml(v); });   // HISTORIQUE TRI : ligne commune
 
     html += '</tbody></table></div></div>';
   });
