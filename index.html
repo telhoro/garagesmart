@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-09.2';
+var GOS_VERSION = '2026-11-09.3';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -22826,13 +22826,25 @@ function montantChiffrageLigne(cl){
 // Les devisId existants sont consideres comme reserves : un libreId regenere
 // ne peut jamais les heurter. devisId n'est jamais modifie — il relie la ligne
 // a la piece demandee dans le devis.
+// IDS DETERMINISTES (09/11/2026) : l'identifiant genere ne depend plus de l'heure ni du hasard, mais
+// du dossier, de la position et du contenu de la ligne. Deux postes qui affichent le meme dossier au
+// meme moment generent donc EXACTEMENT le meme identifiant : plus de faux conflit « lignes de
+// chiffrage » (cas 204LG01 du 09/11/2026, seul le libreId differait).
+function gosHashCourt(t){
+  var h1 = 5381, h2 = 52711;
+  for(var i = 0; i < t.length; i++){ var c = t.charCodeAt(i); h1 = (h1 * 33) ^ c; h2 = (h2 * 33) ^ c; }
+  return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36).slice(0, 3);
+}
 function garantirIdsLignesChiffrage(v){
   if(!v || !v.chiffrage || !v.chiffrage.lignes) return false;
   var vus = {}, change = false;
   v.chiffrage.lignes.forEach(function(cl){ if(cl.devisId) vus[cl.devisId] = true; });
   v.chiffrage.lignes.forEach(function(cl, idx){
     if(!cl.libreId || vus[cl.libreId]){
-      cl.libreId = 'lg_' + Date.now().toString(36) + '_' + idx + '_' + Math.random().toString(36).slice(2,7);
+      var base = 'lg_' + gosHashCourt(String(v.id) + '|' + idx + '|' + (cl.devisId || '') + '|' + String(cl.piece || '').trim().toLowerCase());
+      var id = base, n = 1;
+      while(vus[id]){ id = base + '_' + (++n); }   // collision (meme contenu) : suffixe deterministe
+      cl.libreId = id;
       change = true;
     }
     vus[cl.libreId] = true;
