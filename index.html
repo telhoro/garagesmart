@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-06.5';
+var GOS_VERSION = '2026-11-09';
 // DIAG DEMARRAGE : etapes de l'ouverture, affichees si elle reste bloquee
 (function(){
   var t0 = Date.now(), E = [], erreurs = [];
@@ -36313,6 +36313,77 @@ function recalculerSoldeOuvertureJournee(journeeId){
   saveCaisseJournees();
 }
 
+// CAISSE JOURS PASSES (09/11/2026)
+// Apres un changement de mouvements sur une journee PASSEE :
+//  - journee fermee : le solde de fermeture est le montant COMPTE en caisse, il ne change pas ;
+//    on recalcule l'ecart (compte - calcule). Cas type : regulariser une operation oubliee.
+//  - journee jamais fermee : son solde calcule change ; on met a jour l'ouverture des journees
+//    suivantes, jusqu'a la premiere journee fermee (dont on recalcule l'ecart, et on s'arrete,
+//    car la suite repart de son montant compte).
+function caisseRecalculerEcart(j){
+  if(j && j.statut === 'fermee' && typeof j.soldeFermeture === 'number') j.ecartCaisse = j.soldeFermeture - calculerSoldeJournee(j).soldeCalcule;
+}
+function caissePropagerDepuis(journeeId){
+  var j = CAISSE_JOURNEES.find(function(x){ return x.id === journeeId; });
+  if(!j) return 0;
+  var modifiees = 0;
+  if(j.statut === 'fermee'){ caisseRecalculerEcart(j); return 0; }
+  var suivantes = CAISSE_JOURNEES.filter(function(x){ return x.date > j.date; }).sort(function(a, b){ return a.date.localeCompare(b.date); });
+  for(var i = 0; i < suivantes.length; i++){
+    var avant = suivantes[i].soldeOuverture;
+    recalculerSoldeOuvertureJournee(suivantes[i].id);
+    if(suivantes[i].soldeOuverture !== avant) modifiees++;
+    if(suivantes[i].statut === 'fermee'){ caisseRecalculerEcart(suivantes[i]); break; }
+  }
+  return modifiees;
+}
+var _caisseJourneeDetail = null;
+function ajouterMouvementJourneePassee(){
+  if(currentRole !== 'direction') return;
+  var j = CAISSE_JOURNEES.find(function(x){ return x.id === _caisseJourneeDetail; });
+  if(!j) return;
+  var type = document.getElementById('dj_type').value;
+  var montant = parseFloat(document.getElementById('dj_montant').value);
+  var categorie = document.getElementById('dj_categorie').value.trim();
+  var motif = document.getElementById('dj_motif').value.trim();
+  var heure = document.getElementById('dj_heure').value || '12:00';
+  var vehiculeId = document.getElementById('dj_vehicule_id').value || null;
+  if(!montant || montant <= 0){ afficherToastNotif('Montant invalide', 'Indiquez un montant superieur a 0.', 'alerte'); return; }
+  if(!categorie){ afficherToastNotif('Categorie manquante', 'Indiquez une categorie.', 'alerte'); return; }
+  var auteur = currentUser ? (currentUser.login || currentUser.nom) : currentRole;
+  CAISSE_MOUVEMENTS.push({
+    id: 'cm_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+    journeeId: j.id, date: new Date(j.date + 'T' + heure + ':00').getTime(), type: type, montant: montant,
+    categorie: categorie, motif: motif, vehiculeId: vehiculeId, auteur: auteur,
+    ajouteApresCoup: true, ajouteLe: Date.now()   // trace : operation saisie apres la journee
+  });
+  saveCaisseMouvements();
+  var nbSuivantes = caissePropagerDepuis(j.id);
+  saveCaisseJournees();
+  afficherToastNotif('Operation ajoutee', new Date(j.date).toLocaleDateString('fr-FR') + ' : ' + (type === 'entree' ? '+' : '-') + montant.toLocaleString('fr-FR', GOS_FMT0) + ' FCFA'
+    + (j.statut === 'fermee' ? ' — ecart de caisse recalcule.' : (nbSuivantes ? ' — ouverture de ' + nbSuivantes + ' journee(s) suivante(s) mise a jour.' : '.')), 'ok');
+  renderPage();
+  ouvrirDetailJourneeCaisse(j.id);
+}
+function supprimerJourneeCaisse(journeeId){
+  if(currentRole !== 'direction') return;
+  var j = CAISSE_JOURNEES.find(function(x){ return x.id === journeeId; });
+  if(!j) return;
+  var stats = calculerSoldeJournee(j);
+  demanderConfirmation('Supprimer la journee du ' + new Date(j.date).toLocaleDateString('fr-FR') + ' ?',
+    'Cette journee et ses ' + stats.mouvements.length + ' mouvement(s) seront supprimes definitivement'
+      + (stats.mouvements.length ? ' (entrees +' + stats.totalEntrees.toLocaleString('fr-FR', GOS_FMT0) + ', sorties -' + stats.totalSorties.toLocaleString('fr-FR', GOS_FMT0) + ' FCFA)' : '') + '.\n'
+      + 'Le solde d\u2019ouverture des journees suivantes n\u2019est pas modifie : utilisez le bouton de recalcul si besoin.',
+    function(){
+      CAISSE_MOUVEMENTS = CAISSE_MOUVEMENTS.filter(function(m){ return m.journeeId !== j.id; });
+      CAISSE_JOURNEES = CAISSE_JOURNEES.filter(function(x){ return x.id !== j.id; });
+      saveCaisseMouvements(); saveCaisseJournees();
+      var modale = document.getElementById('modalDetailJourneeCaisse'); if(modale) modale.style.display = 'none';
+      afficherToastNotif('Journee supprimee', new Date(j.date).toLocaleDateString('fr-FR'), 'ok');
+      renderPage();
+    }, {danger: true, libelleOk: 'Supprimer la journee'});
+}
+
 function ouvrirRecalculSoldeOuverture(journeeId){
   if(!confirm('Recalculer le solde d\'ouverture de cette journee a partir de la journee precedente ? A utiliser si une journee anterieure est restee ouverte par oubli, faussant le solde de depart.')) return;
   recalculerSoldeOuvertureJournee(journeeId);
@@ -36398,8 +36469,10 @@ function ajouterMouvementCaisse(){
 
 function supprimerMouvementCaisse(mid){
   if(!confirm('Supprimer ce mouvement de caisse ?')) return;
+  var mSupp = CAISSE_MOUVEMENTS.find(function(m){ return m.id===mid; });
   CAISSE_MOUVEMENTS = CAISSE_MOUVEMENTS.filter(function(m){ return m.id!==mid; });
   saveCaisseMouvements();
+  if(mSupp){ caissePropagerDepuis(mSupp.journeeId); saveCaisseJournees(); }   // CAISSE JOURS PASSES : ecart / soldes suivants
   renderPage();
 }
 
@@ -36484,6 +36557,7 @@ function confirmerModifMouvementCaisse(){
   }
 
   saveCaisseMouvements();
+  caissePropagerDepuis(m.journeeId); saveCaisseJournees();   // CAISSE JOURS PASSES : ecart / soldes suivants
   document.getElementById('modalModifMouvementCaisse').style.display = 'none';
   _mouvementCaisseEnModification = null;
   renderPage();
@@ -36542,7 +36616,8 @@ function pageCaisseHistorique(){
     html += '<td style="text-align:right">'+(j.statut==='fermee'?j.soldeFermeture.toLocaleString('fr-FR', GOS_FMT0):stats.soldeCalcule.toLocaleString('fr-FR', GOS_FMT0)+' (calcule)')+'</td>';
     html += '<td style="text-align:right">'+ecartTxt+'</td>';
     html += '<td><button class="btn btn-sm" style="font-size:11px" onclick="ouvrirDetailJourneeCaisse(\''+j.id+'\')">Detail</button>'
-      + (currentRole==='direction' ? ' <button class="btn btn-sm" style="font-size:11px;color:#854F0B" title="Recalculer le solde d\'ouverture" onclick="ouvrirRecalculSoldeOuverture(\''+j.id+'\')">&#x1F504;</button>' : '')
+      + (currentRole==='direction' ? ' <button class="btn btn-sm" style="font-size:11px;color:#854F0B" title="Recalculer le solde d\'ouverture" onclick="ouvrirRecalculSoldeOuverture(\''+j.id+'\')">&#x1F504;</button>'
+           + ' <button class="btn btn-sm" style="font-size:11px;color:#A32D2D;border-color:#E0A0A0" title="Supprimer cette journee (Direction)" onclick="supprimerJourneeCaisse(\''+j.id+'\')">&#x1F5D1;</button>' : '')
       + '</td>';
     html += '</tr>';
   });
@@ -36561,6 +36636,7 @@ function ouvrirDetailJourneeCaisse(journeeId){
   var j = CAISSE_JOURNEES.find(function(x){return x.id===journeeId;});
   if(!j) return;
   var stats = calculerSoldeJournee(j);
+  _caisseJourneeDetail = j.id;   // CAISSE JOURS PASSES
   document.getElementById('detailJourneeCaisseTitre').textContent = 'Detail — '+new Date(j.date).toLocaleDateString('fr-FR');
 
   var html = '<div class="kgrid k4" style="margin-bottom:14px">';
@@ -36593,6 +36669,32 @@ function ouvrirDetailJourneeCaisse(journeeId){
       html += '</tr>';
     });
     html += '</tbody></table></div>';
+  }
+
+  // CAISSE JOURS PASSES : ajout d'une operation a cette journee + suppression (Direction)
+  if(currentRole==='direction'){
+    if(j.statut==='fermee' && j.ecartCaisse) html += '<div class="xs" style="margin-top:10px;color:'+(j.ecartCaisse>0?'#185FA5':'#A32D2D')+'">Ecart de caisse : '+(j.ecartCaisse>0?'+':'')+j.ecartCaisse.toLocaleString('fr-FR', GOS_FMT0)+' FCFA (compte '+j.soldeFermeture.toLocaleString('fr-FR', GOS_FMT0)+' / calcule '+stats.soldeCalcule.toLocaleString('fr-FR', GOS_FMT0)+')</div>';
+    html += '<div style="margin-top:16px;padding:12px;border:1px solid #B5D4F4;border-radius:8px;background:#F5F9FD">';
+    html += '<div class="fw7" style="margin-bottom:8px;color:#185FA5">&#x2795; Ajouter une operation a cette journee</div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr 110px;gap:8px">';
+    html += '<div><label class="fl">Type</label><select class="inp" id="dj_type"><option value="sortie">Sortie (depense)</option><option value="entree">Entree</option></select></div>';
+    html += '<div><label class="fl">Montant (FCFA)</label><input class="inp" type="number" id="dj_montant" min="0"></div>';
+    html += '<div><label class="fl">Heure</label><input class="inp" type="time" id="dj_heure" value="12:00"></div>';
+    html += '</div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
+    html += '<div><label class="fl">Categorie</label><input class="inp" id="dj_categorie" list="dj_categorie_list"><datalist id="dj_categorie_list">'+categoriesCaisseConnues().map(function(c){return '<option value="'+c.replace(/"/g,'&quot;')+'">';}).join('')+'</datalist></div>';
+    html += '<div><label class="fl">Motif / description</label><input class="inp" id="dj_motif"></div>';
+    html += '</div>';
+    html += '<div style="margin-top:8px"><label class="fl">Vehicule concerne (optionnel)</label>';
+    html += '<input class="inp" id="dj_vehicule_recherche" placeholder="Rechercher par immatriculation..." oninput="rechercherVehiculeCaisse(this.value,\'dj\')" autocomplete="off">';
+    html += '<input type="hidden" id="dj_vehicule_id" value=""><div id="dj_vehicule_resultats" style="margin-top:4px"></div><div id="dj_vehicule_selectionne" style="margin-top:6px"></div></div>';
+    html += '<div class="xs muted" style="margin-top:8px">'+(j.statut==='fermee'
+      ? 'Journee fermee : le montant compte a la fermeture ne change pas, l\'ecart de caisse sera recalcule.'
+      : 'Journee non fermee : son solde et l\'ouverture des journees suivantes seront mis a jour.')+'</div>';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">';
+    html += '<button class="btn btn-sm" style="color:#A32D2D;border-color:#E0A0A0" onclick="supprimerJourneeCaisse(\''+j.id+'\')">&#x1F5D1; Supprimer la journee</button>';
+    html += '<button class="btn btn-primary" onclick="ajouterMouvementJourneePassee()">&#x2795; Ajouter l\'operation</button>';
+    html += '</div></div>';
   }
 
   document.getElementById('detailJourneeCaisseContenu').innerHTML = html;
