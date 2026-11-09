@@ -148,7 +148,40 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-09';
+var GOS_VERSION = '2026-11-09.2';
+// NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
+// l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
+// un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
+(function(){
+  if(!/^https?:$/.test(location.protocol)) return;
+  var empreinteInitiale = null, bandeauAffiche = false;
+  function lireEmpreinte(){
+    return fetch(location.pathname + '?v=' + Date.now(), {method: 'HEAD', cache: 'no-store'}).then(function(r){
+      if(!r.ok) return null;
+      return r.headers.get('etag') || r.headers.get('last-modified') || null;
+    }).catch(function(){ return null; });
+  }
+  function afficherBandeau(){
+    if(bandeauAffiche) return; bandeauAffiche = true;
+    var b = document.createElement('div');
+    b.id = 'gosBandeauNouvelleVersion';
+    b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:100000;background:#185FA5;color:#fff;font:600 13px sans-serif;padding:9px 14px;display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap;box-shadow:0 2px 6px rgba(0,0,0,.2)';
+    b.innerHTML = '<span>&#x1F504; Une nouvelle version de GarageOS a ete publiee. Rechargez pour l\'utiliser (terminez d\'abord une saisie en cours).</span>'
+      + '<button style="background:#fff;color:#185FA5;border:0;border-radius:6px;padding:5px 14px;font-weight:700;cursor:pointer" onclick="location.reload()">Recharger maintenant</button>'
+      + '<button style="background:transparent;color:#fff;border:1px solid rgba(255,255,255,.6);border-radius:6px;padding:4px 10px;cursor:pointer" onclick="this.parentNode.remove()">Plus tard</button>';
+    document.body.appendChild(b);
+  }
+  function verifier(){
+    lireEmpreinte().then(function(e){
+      if(!e) return;
+      if(empreinteInitiale === null){ empreinteInitiale = e; return; }
+      if(e !== empreinteInitiale) afficherBandeau();
+    });
+  }
+  window.addEventListener('load', function(){ setTimeout(verifier, 5000); });
+  setInterval(verifier, 10 * 60 * 1000);
+  document.addEventListener('visibilitychange', function(){ if(document.visibilityState === 'visible') verifier(); });
+})();
 // DIAG DEMARRAGE : etapes de l'ouverture, affichees si elle reste bloquee
 (function(){
   var t0 = Date.now(), E = [], erreurs = [];
@@ -39122,6 +39155,43 @@ var GOS_SYNC = (function(){
     return String(v);
   }
   function valeurSimpleSync(v){ return v === null || v === undefined || ['number','string','boolean'].indexOf(typeof v) >= 0; }
+  // CONFLITS LISIBLES (09/11/2026) : pour une liste (lignes de devis, paiements...), montre ligne par
+  // ligne ce qui differe entre le serveur et le poste, au lieu de « 7 element(s) / 7 element(s) ».
+  function diffListeSync(serveur, local){
+    if(!Array.isArray(serveur) || !Array.isArray(local)) return '';
+    var nomLigne = function(x){
+      if(!x || typeof x !== 'object') return String(x);
+      var n = x.piece || x.libelle || x.designation || x.nom || x.texte || x.categorie || '';
+      var q = (x.qte != null && x.qte !== '') ? ' x' + x.qte : '';
+      return (String(n).slice(0, 40) || ('ligne ' + (x.id || '?'))) + q;
+    };
+    var carte = function(l){ var m = {}; l.forEach(function(x, i){ m[(x && x.id) ? 'id:' + x.id : 'i:' + i] = x; }); return m; };
+    var S = carte(serveur), L = carte(local), seulS = [], seulL = [], modif = [];
+    var IGNORE = {majLe: 1, modifieLe: 1, ts: 1, _maj: 1};
+    var lisible = function(v){ if(v === null || v === undefined || v === '') return '(vide)'; if(typeof v === 'number') return v.toLocaleString('fr-FR', GOS_FMT0); if(typeof v === 'object') return '{...}'; return String(v).slice(0, 30); };
+    Object.keys(S).forEach(function(k){ if(!(k in L)) seulS.push(S[k]); });
+    Object.keys(L).forEach(function(k){
+      if(!(k in S)){ seulL.push(L[k]); return; }
+      var a = S[k], b = L[k];
+      if(JSON.stringify(a) === JSON.stringify(b) || !a || !b || typeof a !== 'object') return;
+      var champs = [];
+      Object.keys(Object.assign({}, a, b)).forEach(function(f){
+        if(IGNORE[f] || JSON.stringify(a[f]) === JSON.stringify(b[f])) return;
+        champs.push(f + ' : ' + lisible(a[f]) + ' &rarr; ' + lisible(b[f]));
+      });
+      if(champs.length) modif.push({nom: nomLigne(b), champs: champs});
+    });
+    if(!seulS.length && !seulL.length && !modif.length) return '';
+    var MAX = 8, li = function(t){ return '<li style="margin:2px 0">' + t + '</li>'; };
+    var h = '<div style="background:#FAFAF8;border:1px solid #ecebe7;border-radius:4px;padding:6px 10px;margin-bottom:8px;font-size:11px">';
+    h += '<div style="font-weight:700;margin-bottom:3px">Differences ligne par ligne</div><ul style="margin:0;padding-left:16px">';
+    seulS.slice(0, MAX).forEach(function(x){ h += li('<span style="color:#3a3835">Seulement sur le serveur :</span> <strong>' + echapper(nomLigne(x)) + '</strong>'); });
+    seulL.slice(0, MAX).forEach(function(x){ h += li('<span style="color:#185FA5">Seulement sur le poste :</span> <strong>' + echapper(nomLigne(x)) + '</strong>'); });
+    modif.slice(0, MAX).forEach(function(m){ h += li('<span style="color:#854F0B">Modifiee :</span> <strong>' + echapper(m.nom) + '</strong> <span class="muted">(serveur &rarr; poste) ' + m.champs.slice(0, 4).map(echapper).join(' ; ').replace(/&amp;rarr;/g, '&rarr;') + '</span>'); });
+    var reste = Math.max(0, seulS.length - MAX) + Math.max(0, seulL.length - MAX) + Math.max(0, modif.length - MAX);
+    if(reste) h += li('<span class="muted">... et ' + reste + ' autre(s) difference(s)</span>');
+    return h + '</ul></div>';
+  }
   // Nomme le dossier comme au garage : immatriculation et client.
   function dossierConcerneSync(c){
     try{
@@ -39162,6 +39232,7 @@ var GOS_SYNC = (function(){
            + (ecart > 0 ? '+' : '') + ecart.toLocaleString('fr-FR', GOS_FMT0) + ' FCFA</td></tr>';
       }
       h += '</table>';
+      h += diffListeSync(c.serveur, c.local);   // CONFLITS LISIBLES
     }
     // VERSION : heure de SAISIE sur le poste (et non seulement l'heure de detection), et version du code
     var dSaisie = c.operationCreeeLe ? new Date(c.operationCreeeLe) : null, dDetect = c.detecteLe ? new Date(c.detecteLe) : null;
