@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-10.3';
+var GOS_VERSION = '2026-11-10.4';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -10722,71 +10722,109 @@ function bilanLibellePeriode(){
   return 'du ' + d + ' au ' + f;
 }
 
-// ── Collecte : une entree par facture, devis et forfait confondus ────────
+// ── Collecte : une entree par dossier / facture, devis et forfait confondus ──
+// BILAN ALIGNE (10/11/2026) : MEMES REGLES QUE LE TABLEAU DE BORD FINANCES, pour que les deux
+// ecrans donnent le meme CA et la meme marge sur une meme periode :
+//  - dossier devis (et dossier assurance) : compte des que la Direction valide le chiffrage
+//    (date valideDirLe), sur les lignes validees, livre ou non ;
+//  - dossier forfait pur : aucun CA (couvert par l'abonnement), ses pieces sont un cout ;
+//  - facture forfait (abonnement) : compte dans le mois qu'elle couvre, une fois deposee ou payee.
+// Chaque ligne porte un ETAT : en cours / livre / facture / impaye (delai depasse) / partiel / solde.
+var BILAN_ETATS = {
+  en_cours: {l: 'En cours', c: 'b-blue', t: 'Vehicule pas encore livre'},
+  livre:    {l: 'Livre', c: 'b-purple', t: 'Livre, facture pas encore deposee'},
+  facture:  {l: 'Facture', c: 'b-amber', t: 'Facture deposee, dans le delai de paiement'},
+  partiel:  {l: 'Partiel', c: 'b-amber', t: 'Facture deposee, paiement partiel, dans le delai'},
+  impaye:   {l: 'Impaye', c: 'b-red', t: 'Delai de paiement depasse'},
+  solde:    {l: 'Solde', c: 'b-green', t: 'Entierement paye'}
+};
+var BILAN_ORDRE_ETATS = {impaye: 0, partiel: 1, facture: 2, livre: 3, en_cours: 4, solde: 5};
+function bilanEcheanceDevis(v){
+  if(!v.factureDeposeeLe) return 0;
+  var r = delaiEcheanceClient(v), d = v.factureDeposeeLe;
+  if(r.mode === 'delai') return d + r.jours * 86400000;
+  if(r.mode === 'fin_mois'){ var x = new Date(d); return new Date(x.getFullYear(), x.getMonth() + 1, 0, 23, 59, 59).getTime(); }
+  return d;   // particulier : paiement a la livraison -> du des le depot
+}
+function bilanEcheanceForfait(f){
+  var d = f.deposeeDate || f.emiseDate || 0; if(!d) return 0;
+  if(typeof f.delaiPaiementPersonnalise === 'number') return d + f.delaiPaiementPersonnalise * 86400000;
+  if(typeof CLIENT_DELAIS_PAIEMENT[f.client] === 'number') return d + CLIENT_DELAIS_PAIEMENT[f.client] * 86400000;
+  var x = new Date(d); return new Date(x.getFullYear(), x.getMonth() + 1, 0, 23, 59, 59).getTime();
+}
+function bilanEtat(livre, deposee, ca, paye, echeance){
+  var reste = ca - paye;
+  if(ca > 0 && reste <= 0) return 'solde';
+  if(!livre) return 'en_cours';
+  if(!deposee) return 'livre';
+  if(echeance && echeance < Date.now()) return 'impaye';
+  return paye > 0 ? 'partiel' : 'facture';
+}
 function bilanCollecterFactures(){
   var b = bilanBornes();
   var maintenant = Date.now();
   var factures = [];
+  var dansPeriode = function(ts){ return bilanPeriode === 'tout' || bilanDansPeriode(ts, b); };
 
-  // DEVIS : un dossier livre = une facture.
-  vehicles.filter(function(v){
-    return v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length
-           && LIV_ST.indexOf(v.status) >= 0;
-  }).forEach(function(v){
-    var avecPiece = v.chiffrage.lignes.filter(function(cl){ return (cl.piece||'').trim(); });
-    // montantChiffrageLigne rend 0 pour une ligne mise de cote : les travaux
-    // a prevoir ne sont ni factures ni comptes.
-    var ca = avecPiece.reduce(function(s, cl){ return s + montantChiffrageLigne(cl); }, 0);
-    if(!ca) return;
-    var dateRef = v.factureDeposeeLe || v.livraison || v.archiveDate || 0;
-    if(!bilanDansPeriode(dateRef, b) && bilanPeriode !== 'tout') return;
-    var cout = avecPiece.filter(function(cl){ return cl.valideDir === true && !cl.differe; })
-                        .reduce(function(s, cl){ return s + (parseFloat(cl.prixAchat)||0) * (parseInt(cl.qte)||1); }, 0);
+  vehicles.forEach(function(v){
+    if(!v.chiffrage || !v.chiffrage.lignes || v.isProspect) return;
+    var dateVal = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;   // = tableau de bord
+    if(!dansPeriode(dateVal)) return;
+    var lignes = v.chiffrage.lignes.filter(function(cl){ return (cl.piece||'').trim() && cl.valideDir === true; });
+    var ca = lignes.reduce(function(s, cl){ return s + montantChiffrageLigne(cl); }, 0);
+    var cout = lignes.reduce(function(s, cl){ return s + (parseFloat(cl.prixAchat)||0) * (parseInt(cl.qte)||1); }, 0);
+    var forfaitPur = (v.typeClient === 'forfait' && chiffrageSurPrixAchat(v));
+    if(forfaitPur){
+      // Couvert par l'abonnement : pas de CA, mais son cout pese sur la marge du client
+      if(cout) factures.push({type: 'cout_forfait', client: v.client || 'Client non renseigne', ca: 0, paye: 0, reste: 0, cout: cout, enCours: false, dateRef: dateVal});
+      return;
+    }
+    if(!ca && !cout) return;
     var paye = parseFloat(v.montantPaye) || 0;
+    var livre = LIV_ST.indexOf(v.status) >= 0, deposee = !!v.factureDeposeeLe;
+    var echeance = bilanEcheanceDevis(v);
+    var etat = bilanEtat(livre, deposee, ca, paye, echeance);
+    var resteTotal = Math.max(0, ca - paye);
     factures.push({
       type: 'devis', client: v.client || 'Client non renseigne',
       libelle: (v.immat || '') + ' ' + (v.marque || '') + ' ' + (v.modele || '') + (estHorsForfait(v) ? ' — hors forfait' : ''),
-      ca: ca, paye: paye, reste: Math.max(0, ca - paye), cout: cout,
-      dateRef: dateRef, deposee: !!v.factureDeposeeLe,
+      ca: ca, paye: paye, cout: cout,
+      reste: deposee ? resteTotal : 0,            // du = facture deposee non soldee
+      aFacturer: deposee ? 0 : resteTotal,        // en cours / livre : pas encore facture
+      impaye: etat === 'impaye' ? resteTotal : 0,
+      etat: etat, echeance: echeance,
+      dateRef: dateVal, dateDepot: v.factureDeposeeLe || 0, deposee: deposee,
       numero: v.numeroFactureExterne || '',
       jours: v.factureDeposeeLe ? Math.floor((maintenant - v.factureDeposeeLe) / 86400000) : null
     });
   });
 
-  // FORFAIT : une facture mensuelle par client.
   if(typeof FORFAIT_FACTURES !== 'undefined'){
     FORFAIT_FACTURES.forEach(function(f){
+      if(f.statut !== 'deposee' && f.statut !== 'payee') return;   // = tableau de bord
+      if(!f.periodeKey) return;
+      var parts = f.periodeKey.split('-');
+      var dateRep = new Date(parseInt(parts[0],10), parseInt(parts[1],10)-1, 15).getTime();   // mois couvert
+      if(!dansPeriode(dateRep)) return;
       var ca = parseFloat(f.montant) || 0;
       if(!ca) return;
-      var dateRef = f.deposeeDate || f.emiseDate || 0;
-      if(!bilanDansPeriode(dateRef, b) && bilanPeriode !== 'tout') return;
       var paye = (f.statut === 'payee') ? ca : (parseFloat(f.montantPaye) || 0);
+      var echeance = bilanEcheanceForfait(f);
+      var etat = bilanEtat(true, true, ca, paye, echeance);
+      var dDepot = f.deposeeDate || f.emiseDate || 0;
       factures.push({
         type: 'forfait', client: f.client || 'Client non renseigne',
         libelle: (typeof libelleMoisForfait === 'function' ? libelleMoisForfait(f.periodeKey) : (f.periodeKey || '')),
-        ca: ca, paye: paye, reste: Math.max(0, ca - paye), cout: 0,
-        dateRef: dateRef, deposee: (f.statut === 'deposee' || f.statut === 'payee'),
+        ca: ca, paye: paye, cout: 0, reste: Math.max(0, ca - paye), aFacturer: 0,
+        impaye: etat === 'impaye' ? Math.max(0, ca - paye) : 0,
+        etat: etat, echeance: echeance,
+        dateRef: dateRep, dateDepot: dDepot, deposee: true,
         numero: f.numeroFactureExterne || '',
-        jours: f.deposeeDate ? Math.floor((maintenant - f.deposeeDate) / 86400000) : null
+        jours: dDepot ? Math.floor((maintenant - dDepot) / 86400000) : null
       });
     });
   }
   return factures;
-}
-
-// Le cout des dossiers d'un client FORFAIT n'est porte par aucune facture :
-// l'abonnement est factures a part. On le reprend sur les vehicules livres du
-// client dans la periode, pour que sa marge ait un sens.
-function bilanCoutForfaitClient(client, b){
-  return vehicles.filter(function(v){
-    return v.client === client && v.typeClient === 'forfait'
-           && v.chiffrage && v.chiffrage.lignes && LIV_ST.indexOf(v.status) >= 0
-           && (bilanPeriode === 'tout' || bilanDansPeriode(v.factureDeposeeLe || v.livraison || v.archiveDate || 0, b));
-  }).reduce(function(s, v){
-    return s + v.chiffrage.lignes.filter(function(cl){
-      return (cl.piece||'').trim() && cl.valideDir === true && !cl.differe;
-    }).reduce(function(t, cl){ return t + (parseFloat(cl.prixAchat)||0) * (parseInt(cl.qte)||1); }, 0);
-  }, 0);
 }
 
 // ── Agregation par client ────────────────────────────────────────────────
@@ -10809,32 +10847,33 @@ function bilanParClient(){
   var clients = {};
   factures.forEach(function(f){
     if(!clients[f.client]){
-      clients[f.client] = {client: f.client, ca: 0, paye: 0, reste: 0, cout: 0,
+      clients[f.client] = {client: f.client, ca: 0, paye: 0, reste: 0, cout: 0, aFacturer: 0, impaye: 0,
                            factures: [], types: {}};
     }
     var c = clients[f.client];
-    c.ca += f.ca; c.paye += f.paye; c.reste += f.reste; c.cout += f.cout;
+    c.cout += f.cout;
+    if(f.type === 'cout_forfait'){ c.types.forfait = true; return; }   // BILAN ALIGNE : cout seul, pas une facture
+    c.ca += f.ca; c.paye += f.paye; c.reste += f.reste; c.aFacturer += (f.aFacturer || 0); c.impaye += (f.impaye || 0);
     c.types[f.type] = true;
     c.factures.push(f);
   });
 
   var liste = Object.keys(clients).map(function(k){
     var c = clients[k];
-    if(c.types.forfait) c.cout += bilanCoutForfaitClient(c.client, b);
-    c.marge = c.ca - c.cout;
+    c.marge = c.ca - c.cout;   // BILAN ALIGNE : cout des dossiers forfait deja compte (meme date que le tableau de bord)
     c.taux = c.ca > 0 ? (c.marge / c.ca * 100) : null;   // marge / CA, jamais / cout
     c.pctEncaisse = c.ca > 0 ? (c.paye / c.ca * 100) : null;
     c.delaiMoyen = (typeof delaiMoyenReglementClient === 'function') ? delaiMoyenReglementClient(c.client) : null;
     c.expose = expo[c.client] || 0;
     c.nature = (c.types.devis && c.types.forfait) ? 'mixte' : (c.types.forfait ? 'forfait' : 'devis');
-    // Detail : les impayees d'abord, puis de la plus recente a la plus ancienne.
+    // Detail : impayes, partiels, factures, livres, en cours, soldes ; puis du plus recent au plus ancien.
     c.factures.sort(function(x, y){
-      var ix = x.reste > 0 ? 0 : 1, iy = y.reste > 0 ? 0 : 1;
+      var ix = BILAN_ORDRE_ETATS[x.etat], iy = BILAN_ORDRE_ETATS[y.etat];
       if(ix !== iy) return ix - iy;
       return (y.dateRef || 0) - (x.dateRef || 0);
     });
     return c;
-  });
+  }).filter(function(c){ return c.factures.length || c.cout; });
 
   // BILAN TRI : toute colonne, dans les deux sens ; valeur inconnue toujours en fin de liste ;
   // a valeur egale, ordre alphabetique des clients
@@ -11053,8 +11092,9 @@ var BILAN_EXP_COLS_DETAIL = ['Client', 'Facture', 'Type', 'Depot', 'Depuis (j)',
 var BILAN_EXP_ALIGN_DETAIL = [0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0];
 var BILAN_EXP_LARG_DETAIL = [26, 28, 10, 12, 11, 13, 13, 13, 13, 13, 15, 13];
 
-var BILAN_EXP_PIED = 'Un dossier devis entre dans le bilan une fois livre, a sa date de depot de facture ; '
-  + 'une facture forfait des son emission. '
+var BILAN_EXP_PIED = 'Memes regles que le tableau de bord Finances : un dossier entre dans le bilan des que la Direction valide son chiffrage ; '
+  + 'une facture forfait (abonnement) dans le mois qu\'elle couvre, une fois deposee ; les pieces des dossiers forfait sont un cout. '
+  + 'Le montant du ne porte que sur les factures deposees. Etats : en cours, livre (non facture), facture, partiel, impaye (delai depasse), solde. '
   + 'Le taux de rentabilite est la marge rapportee au chiffre d\'affaires. '
   + 'Le montant expose est un etat a ce jour : il ne varie pas avec la periode choisie. '
   + 'Une facture forfait ne porte ni cout ni exposition propres (ils vivent sur les dossiers du client) : '
@@ -11065,9 +11105,9 @@ function bilanExpNature(c){
   return c.nature === 'mixte' ? 'Devis + Forfait' : (c.nature === 'forfait' ? 'Forfait' : 'Devis');
 }
 function bilanExpEtat(f){
-  if(f.reste <= 0) return 'Solde';
-  if(f.paye > 0) return 'Partiel';
-  return f.deposee ? 'Impaye' : 'Non deposee';
+  var et = BILAN_ETATS[f.etat]; var l = et ? et.l : '';
+  if(f.etat === 'impaye' && f.echeance) l += ' (echue le ' + new Date(f.echeance).toLocaleDateString('fr-FR') + ')';
+  return l;
 }
 function bilanExpLigneSynthese(c){
   return [c.client, bilanExpNature(c), Math.round(c.ca), Math.round(c.reste),
@@ -11077,10 +11117,10 @@ function bilanExpLigneSynthese(c){
 function bilanExpLigneDetail(client, f){
   return [client,
           (f.libelle || '').trim() + (f.numero ? ' (' + f.numero + ')' : ''),
-          f.type === 'forfait' ? 'Forfait' : 'Devis',
-          f.dateRef ? new Date(f.dateRef).toLocaleDateString('fr-FR') : 'non deposee',
+          f.type === 'forfait' ? 'Abonnement' : 'Devis',
+          f.dateDepot ? new Date(f.dateDepot).toLocaleDateString('fr-FR') : 'non deposee',
           (f.jours === null || f.jours === undefined) ? '' : f.jours,
-          Math.round(f.ca), Math.round(f.paye), Math.round(f.reste),
+          Math.round(f.ca), Math.round(f.paye), Math.round(Math.max(0, f.ca - f.paye)),
           gosExpNombre(f.expose), gosExpNombre(f.marge), gosExpPct(f.taux),
           bilanExpEtat(f)];
 }
@@ -11230,6 +11270,8 @@ function pageBilanGlobal(){
   var totExpose = liste.reduce(function(s,c){return s+c.expose;},0);
   var tauxGlobal = totCA > 0 ? (totMarge / totCA * 100) : null;
   var pctGlobal = totCA > 0 ? (totPaye / totCA * 100) : null;
+  var totImpaye = liste.reduce(function(s,c){return s+(c.impaye||0);},0);       // BILAN ALIGNE
+  var totAFacturer = liste.reduce(function(s,c){return s+(c.aFacturer||0);},0);
 
   var h = '';
 
@@ -11261,16 +11303,21 @@ function pageBilanGlobal(){
      + (bilanTri === 'client' ? (bilanSens === 'asc' ? 'A &#x2192; Z' : 'Z &#x2192; A') : (bilanSens === 'desc' ? '&#x25BC; plus grand d\'abord' : '&#x25B2; plus petit d\'abord')) + '</button>';
   h += '</div></div>';
 
-  h += '<div class="kgrid k4" style="margin-bottom:14px">';
-  h += kpi('CA genere', totCA ? Math.round(totCA).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA' : '—', 'blue');
-  h += kpi('Reste du', totDu ? Math.round(totDu).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA' : '—', totDu > 0 ? 'red' : 'green');
+  var fm = function(x){ return x ? Math.round(x).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA' : '—'; };
+  h += '<div class="kgrid k3" style="margin-bottom:10px">';
+  h += kpi('CA genere', fm(totCA), 'blue');
+  h += kpi('Marge brute', fm(totMarge), totMarge >= 0 ? 'green' : 'red');
   h += kpi('Part encaissee', bilanPct(pctGlobal), pctGlobal === null ? '' : (pctGlobal >= 80 ? 'green' : 'amber'));
-  h += kpi('Marge brute', totMarge ? Math.round(totMarge).toLocaleString('fr-FR', GOS_FMT0) + ' FCFA' : '—', totMarge >= 0 ? 'green' : 'red');
+  h += '</div><div class="kgrid k3" style="margin-bottom:14px">';
+  h += kpi('Reste du (factures deposees)', fm(totDu), totDu > 0 ? 'red' : 'green');
+  h += kpi('dont impaye (delai depasse)', fm(totImpaye), totImpaye > 0 ? 'red' : 'green');
+  h += kpi('A facturer (en cours + livre)', fm(totAFacturer), totAFacturer > 0 ? 'amber' : '');
   h += '</div>';
 
   h += '<div class="xs muted" style="margin-bottom:12px;line-height:1.5">'
      + '<strong>' + liste.length + ' client(s)</strong> sur la periode (' + bilanLibellePeriode() + '), clients devis et forfait reunis. '
-     + 'Un dossier devis entre dans le bilan une fois livre, a sa date de depot de facture. '
+     + 'Memes regles que le tableau de bord Finances : un dossier entre dans le bilan des que la Direction valide son chiffrage ; un client forfait est compte pour ses abonnements (mois couvert), les pieces de ses dossiers forfait sont un cout. '
+     + 'Le « reste du » ne porte que sur les factures deposees ; un dossier en cours ou livre non facture est « a facturer ». '
      + 'Le taux de rentabilite est la marge rapportee au chiffre d\'affaires. '
      + 'Le montant expose est un etat a ce jour : il ne varie pas avec la periode.'
      + '</div>';
@@ -11308,27 +11355,30 @@ function pageBilanGlobal(){
       h += '<tr><td colspan="9" style="background:#fafbfc;padding:0">';
       h += '<div style="padding:10px 14px">';
       h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:10px">';
-      h += '<span class="xs muted">Factures impayees en premier, puis de la plus recente a la plus ancienne.</span>';
+      h += '<span class="xs muted">Impayes en premier, puis factures, livres, en cours et soldes.</span>';
       h += '<span class="flex gap6">'
          + '<button class="btn btn-sm" data-bex="' + bilanEchapper(c.client) + '" onclick="event.stopPropagation();bilanImprimerClientByEl(this)" title="Imprimer / PDF le detail de ce client">&#x1F5A8; Imprimer</button>'
          + '<button class="btn btn-sm" data-bex="' + bilanEchapper(c.client) + '" onclick="event.stopPropagation();bilanExcelClientByEl(this)" title="Exporter en Excel le detail de ce client">&#128202; Excel</button>'
          + '</span>';
       h += '</div>';
-      h += '<div class="tw"><table><thead><tr><th>Facture</th><th>Type</th><th>Depot</th><th class="xs">Depuis</th>'
+      h += '<div class="tw"><table><thead><tr><th>Dossier / facture</th><th>Type</th><th>Valide / periode</th><th>Depot</th><th class="xs">Depuis</th>'
          + '<th style="text-align:right">Montant</th><th style="text-align:right">Encaisse</th><th style="text-align:right">Reste</th><th>Etat</th></tr></thead><tbody>';
       c.factures.forEach(function(f){
-        var solde = (f.reste <= 0);
+        var solde = (f.etat === 'solde');
         h += '<tr>';
         h += '<td class="xs"><strong>' + bilanEchapper(f.libelle || '—') + '</strong>' + (f.numero ? '<div class="muted" style="font-family:monospace">' + bilanEchapper(f.numero) + '</div>' : '') + '</td>';
-        h += '<td class="xs">' + (f.type === 'forfait' ? 'Forfait' : 'Devis') + '</td>';
-        h += '<td class="xs">' + (f.dateRef ? new Date(f.dateRef).toLocaleDateString('fr-FR') : '<span class="muted">non deposee</span>') + '</td>';
+        h += '<td class="xs">' + (f.type === 'forfait' ? 'Abonnement' : 'Devis') + '</td>';
+        h += '<td class="xs">' + (f.type === 'forfait' ? bilanEchapper(f.libelle || '') : (f.dateRef ? new Date(f.dateRef).toLocaleDateString('fr-FR') : '—')) + '</td>';
+        h += '<td class="xs">' + (f.dateDepot ? new Date(f.dateDepot).toLocaleDateString('fr-FR') : '<span class="muted">non deposee</span>') + '</td>';
         h += '<td class="xs' + (f.jours !== null && f.jours > 60 && !solde ? '" style="color:#A32D2D;font-weight:700' : '') + '">' + (f.jours === null ? '—' : f.jours + ' j') + '</td>';
         h += '<td style="text-align:right;font-family:monospace">' + Math.round(f.ca).toLocaleString('fr-FR', GOS_FMT0) + '</td>';
         h += '<td style="text-align:right;font-family:monospace;color:#3B6D11">' + (f.paye ? Math.round(f.paye).toLocaleString('fr-FR', GOS_FMT0) : '—') + '</td>';
-        h += '<td style="text-align:right;font-family:monospace;color:' + (solde ? '#888' : '#A32D2D') + ';font-weight:700">' + (solde ? '—' : Math.round(f.reste).toLocaleString('fr-FR', GOS_FMT0)) + '</td>';
-        h += '<td>' + (solde ? '<span class="badge b-green">Solde</span>'
-             : (f.paye > 0 ? '<span class="badge b-amber">Partiel</span>'
-             : (f.deposee ? '<span class="badge b-red">Impaye</span>' : '<span class="badge b-gray">Non deposee</span>'))) + '</td>';
+        var resteLigne = Math.max(0, f.ca - f.paye), et = BILAN_ETATS[f.etat] || BILAN_ETATS.facture;
+        h += '<td style="text-align:right;font-family:monospace;color:' + (resteLigne <= 0 ? '#888' : (f.deposee ? '#A32D2D' : '#854F0B')) + ';font-weight:700">' + (resteLigne <= 0 ? '—' : Math.round(resteLigne).toLocaleString('fr-FR', GOS_FMT0)) + '</td>';
+        h += '<td><span class="badge ' + et.c + '" title="' + et.t + '">' + et.l + '</span>'
+           + (f.etat === 'impaye' && f.echeance ? '<div class="xs" style="color:#A32D2D;margin-top:2px">echue le ' + new Date(f.echeance).toLocaleDateString('fr-FR') + '</div>'
+              : ((f.etat === 'facture' || f.etat === 'partiel') && f.echeance ? '<div class="xs muted" style="margin-top:2px">echeance ' + new Date(f.echeance).toLocaleDateString('fr-FR') + '</div>' : ''))
+           + '</td>';
         h += '</tr>';
       });
       h += '</tbody></table></div></div></td></tr>';
@@ -14824,11 +14874,8 @@ function pageFinancesDashboard(){
   html += '<div class="kgrid k4" style="margin-bottom:20px">';
   html += bloc('CA de la periode', caTotal?caTotal.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', '#185FA5', [
     {label:'CA Devis', value:caDevis?caDevis.toLocaleString('fr-FR', GOS_FMT0):'—'},
-  ].concat(K.caHorsForfait ? [{label:'<span style="padding-left:10px">dont hors forfait</span>', value:'<span style="color:#854F0B">'+K.caHorsForfait.toLocaleString('fr-FR', GOS_FMT0)+'</span>'}] : []).concat([
-    {label:'CA Forfaits (abonnements)', value:caForfait?caForfait.toLocaleString('fr-FR', GOS_FMT0):'—'}
-  ]).concat((K.caForfaitAncienCalcul||0) !== caForfait ? [
-    {label:'<span style="color:#999">Ancien calcul forfaits</span>', value:'<span style="color:#999;text-decoration:line-through" title="Avant le 10/11/2026 : pieces des dossiers forfait comptees en CA">'+(K.caForfaitAncienCalcul||0).toLocaleString('fr-FR', GOS_FMT0)+'</span>'}
-  ] : []));
+    {label:'CA Forfaits', value:caForfait?caForfait.toLocaleString('fr-FR', GOS_FMT0):'—'}
+  ]);
   html += bloc('Depenses liees', achatTotal?achatTotal.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', '#A32D2D', [
     {label:'Devis', value:achatDevis?achatDevis.toLocaleString('fr-FR', GOS_FMT0):'—'},
     {label:'Forfaits', value:achatForfait?achatForfait.toLocaleString('fr-FR', GOS_FMT0):'—'}
