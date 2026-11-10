@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-10.4';
+var GOS_VERSION = '2026-11-10.6';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -3564,6 +3564,67 @@ function clientEstForfait(nom){
   if(vehicles.some(function(x){ return x && !x.isProspect && x.typeClient === 'forfait' && !estDossierAssurance(x) && hfNorm(x.proprietaireVehicule || x.client) === k; })) return true;
   return typeof FORFAIT_FACTURES !== 'undefined' && FORFAIT_FACTURES.some(function(f){ return hfNorm(f.client) === k; });
 }
+// PAYEUR (10/11/2026) : un dossier ASSURANCE est facture a l'ASSUREUR (champ « assureur »), meme
+// quand le vehicule appartient a un client forfait. Il est donc range chez l'assureur (facturation,
+// creances, bilan, exposition, tresorerie), jamais dans le forfait du client.
+function payeurDossier(v){
+  if(v && estDossierAssurance(v)){
+    var a = String(v.assureur || '').trim();
+    return a || ('Assureur a renseigner (' + (v.client || '?') + ')');
+  }
+  return v ? v.client : '';
+}
+// Nom EXACT du client forfait correspondant (« Kaydan (Hors forfait) » -> « Kaydan »)
+function nomClientForfait(nom){
+  var k = hfNorm(nom); if(!k) return '';
+  var x = vehicles.find(function(y){ return y && !y.isProspect && y.typeClient==='forfait' && !estDossierAssurance(y) && hfNorm(y.client)===k; });
+  if(x) return x.client;
+  var f = (typeof FORFAIT_FACTURES!=='undefined') ? FORFAIT_FACTURES.find(function(z){ return hfNorm(z.client)===k; }) : null;
+  return f ? f.client : '';
+}
+// HORS FORFAIT (10/11/2026, v.6) : bascule directe depuis la fiche (Direction), sans repasser par
+// tout le formulaire. sens = 'hf' (devis hors forfait, rattache au client forfait) ou 'forfait'.
+function basculerHorsForfaitById(btn){
+  if(currentRole!=='direction') return;
+  var v = vehicles.find(function(x){ return x.id===btn.getAttribute('data-vid'); }); if(!v) return;
+  var sens = btn.getAttribute('data-sens');
+  var base = nomClientForfait(v.client) || v.client;
+  var titre = sens==='hf' ? 'Classer '+v.immat+' en HORS FORFAIT ?' : 'Remettre '+v.immat+' dans le forfait ?';
+  var texte = sens==='hf'
+    ? 'Le dossier sera rattache au client « '+base+' » et facture en devis (prix de vente), en plus de l\'abonnement. Il apparaitra dans les echeances, creances et le CA Devis.'
+    : 'Le dossier sera couvert par l\'abonnement de « '+base+' » : plus de facture separee, il sort des echeances, creances et du CA Devis.';
+  demanderConfirmation(titre, texte, function(){
+    var avant = v.client+' / '+(v.typeClient||'-')+(v.horsForfait?' (hors forfait)':'');
+    v.client = base;
+    if(sens==='hf'){ v.typeClient='devis'; v.horsForfait=true; } else { v.typeClient='forfait'; v.horsForfait=false; }
+    ajouterCommentaireSysteme(v, '&#x270F; Reclassement (direction) : '+avant+' -> '+v.client+' / '+(sens==='hf'?'devis hors forfait':'forfait'), currentUser ? currentUser.login : 'Direction');
+    marquerVehiculeModifie(v.id); saveV();
+    afficherToastNotif('Dossier reclasse', v.immat+(sens==='hf'?' est maintenant hors forfait.':' est maintenant dans le forfait.'), 'ok');
+    if(typeof closeDet==='function') closeDet(); renderPage();
+  }, { icone:'&#x270F;', libelleOk: sens==='hf'?'Classer hors forfait':'Remettre au forfait' });
+}
+// Dossiers a regulariser : facture deposee/payee sur un dossier classe forfait (impossible : le
+// client forfait ne paie que l'abonnement), ou encore sous l'ancien nom « ... (Hors forfait) ».
+function dossiersHorsForfaitARegulariser(){
+  return vehicles.filter(function(v){
+    if(!v || v.isProspect || estDossierAssurance(v)) return false;
+    if(v.typeClient==='forfait') return !!(v.factureDeposeeLe || (parseFloat(v.montantPaye)||0)>0 || v.numeroFactureExterne);
+    return /\(\s*hors\s*forfait\s*\)/i.test(String(v.client||'')) && !!nomClientForfait(v.client);
+  });
+}
+function htmlHorsForfaitARegulariser(){
+  if(currentRole!=='direction') return '';
+  var l = dossiersHorsForfaitARegulariser(); if(!l.length) return '';
+  var h = '<div class="card" style="margin-bottom:16px;border:1px solid #E8A44A"><div class="card-head" style="background:#FDF3E3;color:#854F0B">&#x26A0; Hors forfait a regulariser <span class="badge" style="background:#854F0B;color:#fff">'+l.length+'</span></div>';
+  h += '<div class="xs muted" style="padding:8px 14px">Ces dossiers ont une facture mais sont classes « forfait », ou portent encore l\'ancien nom « (Hors forfait) ». Tant qu\'ils ne sont pas reclasses, leurs factures n\'apparaissent pas correctement chez le client.</div>';
+  h += '<div class="tw"><table><thead><tr><th>Vehicule</th><th>Client actuel</th><th>Type</th><th>Statut</th><th></th></tr></thead><tbody>';
+  l.forEach(function(v){
+    h += '<tr><td><strong>'+v.immat+'</strong> <span class="xs muted">'+(v.marque||'')+' '+(v.modele||'')+'</span></td><td class="xs">'+v.client+'</td><td class="xs">'+(v.typeClient||'-')+'</td><td class="xs">'+((STATUSES[v.status]||{l:v.status}).l)+'</td>'
+      + '<td style="white-space:nowrap"><button class="btn btn-sm" data-vid="'+v.id+'" onclick="openDetById(this)">&#x1F441;</button> '
+      + '<button class="btn btn-sm" style="color:#854F0B;border-color:#E8A44A" data-vid="'+v.id+'" data-sens="hf" onclick="basculerHorsForfaitById(this)">Classer hors forfait chez '+(nomClientForfait(v.client)||v.client)+'</button></td></tr>';
+  });
+  return h + '</tbody></table></div></div>';
+}
 function estHorsForfait(v){
   if(!v || v.typeClient === 'forfait' || estDossierAssurance(v)) return false;
   return v.horsForfait === true || /\(\s*hors\s*forfait\s*\)/i.test(String(v.client || ''));
@@ -5242,10 +5303,13 @@ function validerModifClient(){
       if((v.tel||'')!==newTel) changes.push('tel: '+(v.tel||'-')+' -> '+newTel);
       if((v.typeClient||'')!==newType && v.typeClient!=='assurance') changes.push('type: '+(v.typeClient||'-')+' -> '+newType);
       if((v.tkm===true)!==newTkm) changes.push('TKM: '+(v.tkm===true?'oui':'non')+' -> '+(newTkm?'oui':'non'));
+      var etaitDevisMC = v.typeClient!=='forfait' && !estDossierAssurance(v);
       v.client = newNom;
       v.tel = newTel;
       v.email = newEmail;
       if(v.typeClient!=='assurance') v.typeClient = newType; // ne pas ecraser ancien dossier assurance pur
+      // HORS FORFAIT v.6 : dossier devis renomme vers un client forfait = hors forfait
+      if(etaitDevisMC && newType==='devis' && clientEstForfait(newNom)) v.horsForfait = true;
       v.entite = newEntite;
       v.responsableParc = (newEntite==='Entreprise') ? newResponsableParc : '';
       v.tkm = newTkm;
@@ -5454,6 +5518,13 @@ function ouvrirModifAttribution(btn){
   document.getElementById('modalModifAttrib').style.display = 'flex';
 }
 
+function majModifHorsForfait(visible, coche){
+  var w = document.getElementById('modif_hf_wrap'), cb = document.getElementById('modif_horsForfait');
+  if(!w || !cb) return;
+  w.style.display = visible ? 'flex' : 'none';
+  if(!visible){ cb.checked = false; return; }
+  if(typeof coche==='boolean') cb.checked = coche;
+}
 function modifClientAutoFill(){
   var nom = (document.getElementById('modif_client').value||'').trim();
   var hint = document.getElementById('modif_client_hint');
@@ -5463,6 +5534,7 @@ function modifClientAutoFill(){
     hint.textContent='';
     champTypeClient.disabled = false;
     champEntite.disabled = false;
+    majModifHorsForfait(false);
     return;
   }
   // Chercher un client existant avec ce nom exact (vrai proprietaire en priorite)
@@ -5480,11 +5552,20 @@ function modifClientAutoFill(){
     champEntite.value = (match.entite && match.entite.toLowerCase()!=='particulier') ? 'Entreprise' : 'Particulier';
     champTypeClient.disabled = true;
     champEntite.disabled = true;
+    // HORS FORFAIT v.6 : client forfait -> type Forfait + option hors forfait pour les dossiers devis
+    if(clientEstForfait(nom)){
+      var nomF = nomClientForfait(nom); if(nomF) document.getElementById('modif_client').value = nomF;
+      champTypeClient.value = 'forfait';
+      var immN = (_modifAttribImmat||'').replace(/[-\s]/g,'').toUpperCase();
+      var aDesDevis = vehicles.some(function(x){ return (x.immat||'').replace(/[-\s]/g,'').toUpperCase()===immN && x.typeClient!=='forfait' && !estDossierAssurance(x); });
+      majModifHorsForfait(true, aDesDevis);
+    } else majModifHorsForfait(false);
     hint.textContent = '\u2713 Client existant : le vehicule sera rattache a ce client (type et statut verrouilles sur ceux du client)';
     hint.style.color = '#3B6D11';
   } else {
     champTypeClient.disabled = false;
     champEntite.disabled = false;
+    majModifHorsForfait(false);
     hint.textContent = '\u2295 Nouveau client (n\'existe pas encore)';
     hint.style.color = '#854F0B';
   }
@@ -5503,6 +5584,8 @@ function validerModifAttribution(){
   var newType = document.getElementById('modif_typeClient').value;
   var newEntite = document.getElementById('modif_entite').value;
   if(!newClient){ alert('Le nom du client est obligatoire.'); return; }
+  var hfCb = document.getElementById('modif_horsForfait'), hfW = document.getElementById('modif_hf_wrap');
+  var garderHF = !!(hfCb && hfCb.checked && hfW && hfW.style.display!=='none');   // HORS FORFAIT v.6
 
   // Appliquer sur TOUS les dossiers de ce vehicule (meme immat)
   var immatNorm = _modifAttribImmat.replace(/[-\s]/g,'').toUpperCase();
@@ -5512,10 +5595,14 @@ function validerModifAttribution(){
   vehicles.forEach(function(v){
     if((v.immat||'').replace(/[-\s]/g,'').toUpperCase() === immatNorm){
       if(oldClient===null){ oldClient = v.client; oldType = v.typeClient; }
+      var etaitDevis = v.typeClient!=='forfait' && !estDossierAssurance(v);
       v.client = newClient;
       v.tel = newTel;
       v.email = newEmail;
-      v.typeClient = newType;
+      // HORS FORFAIT v.6 : un dossier devis rattache a un client forfait reste devis (hors forfait)
+      if(garderHF && etaitDevis){ v.typeClient = 'devis'; v.horsForfait = true; }
+      else if(estDossierAssurance(v) && newType==='forfait'){ /* dossier assurance : garde son circuit */ v.typeClient = 'forfait'; }
+      else { v.typeClient = newType; if(newType==='forfait') v.horsForfait = false; }
       v.entite = newEntite;
       count++;
       // Tracer la correction dans les commentaires
@@ -7672,7 +7759,7 @@ function calculerMetriquesFinancieres(borneDebut, borneFin){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     var vente = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     var achat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
-    if(v.typeClient==='forfait'){
+    if(v.typeClient==='forfait' && !estDossierAssurance(v)){   // PAYEUR : assurance -> CA devis
       if(chiffrageSurPrixAchat(v)) vente = 0;   // CA FORFAIT = ABONNEMENTS (meme regle que le tableau de bord)
       caForfait+=vente; achatForfait+=achat;
     }
@@ -8959,7 +9046,7 @@ function pageRentabiliteForfait(){
   // retrouve divise a tort par son nombre de visites au lieu de son
   // nombre de vehicules.
   var immatsParClient = {};
-  vehicles.filter(function(v){return v.typeClient==='forfait';}).forEach(function(v){
+  vehicles.filter(function(v){return v.typeClient==='forfait' && !estDossierAssurance(v);}).forEach(function(v){   // PAYEUR : un dossier assurance n'est pas du forfait
     if(!immatsParClient[v.client]) immatsParClient[v.client] = {};
     immatsParClient[v.client][v.immat] = true;
   });
@@ -9104,7 +9191,7 @@ function forfaitMensuelEffectifClient(client){
   // chaque dossier supplementaire du meme vehicule multipliait a tort le
   // total (ex: 2 dossiers pour le meme vehicule = total double).
   var parImmat = {};
-  vehicles.filter(function(v){return v.client===client && v.typeClient==='forfait';}).forEach(function(v){
+  vehicles.filter(function(v){return v.client===client && v.typeClient==='forfait' && !estDossierAssurance(v);}).forEach(function(v){   // PAYEUR : un dossier assurance n'est pas du forfait
     var immatKey = (v.immat||'').toUpperCase().replace(/[\s\-]/g,'');
     if(!immatKey) return;
     if(!parImmat[immatKey] || (v.entree||0) > (parImmat[immatKey].entree||0)){
@@ -9122,7 +9209,7 @@ function forfaitAnnuelEffectifClient(client){
 function rentaForfaitSuiviClient(){
   var moisLabel = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
   var clientsForfait = {};
-  vehicles.filter(function(v){return v.typeClient==='forfait';}).forEach(function(v){
+  vehicles.filter(function(v){return v.typeClient==='forfait' && !estDossierAssurance(v);}).forEach(function(v){   // PAYEUR : un dossier assurance n'est pas du forfait
     if(!clientsForfait[v.client]) clientsForfait[v.client] = {client:v.client, tel:v.tel, entite:v.entite||'Particulier'};
   });
   var listeClients = Object.keys(clientsForfait).map(function(k){return clientsForfait[k];});
@@ -9198,7 +9285,7 @@ function rentaForfaitSuiviClient(){
 
   function depensesClientSurPeriode(client, deb, fin){
     var total = 0;
-    vehicles.filter(function(v){return v.client===client && v.typeClient==='forfait' && v.chiffrage && v.chiffrage.lignes;}).forEach(function(v){
+    vehicles.filter(function(v){return v.client===client && v.typeClient==='forfait' && !estDossierAssurance(v) && v.chiffrage && v.chiffrage.lignes;}).forEach(function(v){   // PAYEUR : un dossier assurance n'est pas du forfait
       var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
       if(dateRef<deb || dateRef>fin) return;
       // Seules les pieces dont l'achat a ete valide par Direction comptent.
@@ -9403,7 +9490,7 @@ function rentaForfaitVehicules(dossiersBruts){
 // client — pour reperer une derive de consommation.
 function collecterDepensesParClientMoisForfait(){
   var data = {};
-  vehicles.filter(function(v){return v.typeClient==='forfait';}).forEach(function(v){
+  vehicles.filter(function(v){return v.typeClient==='forfait' && !estDossierAssurance(v);}).forEach(function(v){   // PAYEUR : un dossier assurance n'est pas du forfait
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     // Seules les pieces dont l'achat a ete valide par Direction comptent.
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
@@ -9642,7 +9729,7 @@ function initGraphiquesForfaitEvolution(depensesParClientMois){
 // Forfait).
 function collecterLignesForfaitPourAnalyse(){
   var lignes = [];
-  vehicles.filter(function(v){return v.typeClient==='forfait';}).forEach(function(v){
+  vehicles.filter(function(v){return v.typeClient==='forfait' && !estDossierAssurance(v);}).forEach(function(v){   // PAYEUR : un dossier assurance n'est pas du forfait
     if(!v.chiffrage || !v.chiffrage.lignes) return;
     // Respecte la periode selectionnee en haut de page (Ce mois/Trimestre/
     // Annee/Tout/Personnalise) — sans ca, la liste des pieces restait
@@ -10448,13 +10535,14 @@ function collecterFacturesNonDeposees(){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
     var montantFacture = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     if(!montantFacture) return;
+    if(chiffrageSurPrixAchat(v)) return;   // forfait pur : couvert par l'abonnement, aucune facture
     var estDeposee = v.status==='facture_deposee' || v.status==='dossier_cloture';
     if(estDeposee) return;
     if(LIV_ST.indexOf(v.status)<0) return; // pas encore arrive au stade facturation : pas pertinent ici
     var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     var jours = dateRef ? Math.floor((maintenant-dateRef)/86400000) : 0;
     items.push({
-      type:'devis', nom:v.client, label:v.immat+' '+(v.marque||'')+' '+(v.modele||''),
+      type:'devis', nom:payeurDossier(v), label:v.immat+' '+(v.marque||'')+' '+(v.modele||''),   // PAYEUR
       montant:montantFacture, depuis:jours+' jour'+(jours>1?'s':''), vid:v.id, periodeKey:null,
       numeroFactureExterne:v.numeroFactureExterne||'', entite:v.entite||'Particulier'
     });
@@ -10612,6 +10700,7 @@ function pageFacturationEcheances(){
   html += kpi('Non echues', totalNonEchues?totalNonEchues.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', 'blue');
   html += '</div>';
 
+  html += htmlHorsForfaitARegulariser();   // HORS FORFAIT v.6
   html += rendreQuatreTableauxParClient(dossiersUnifies, 'echeances');
   html += htmlModalStatutFacturesClient();
   return html;
@@ -10786,8 +10875,8 @@ function bilanCollecterFactures(){
     var etat = bilanEtat(livre, deposee, ca, paye, echeance);
     var resteTotal = Math.max(0, ca - paye);
     factures.push({
-      type: 'devis', client: v.client || 'Client non renseigne',
-      libelle: (v.immat || '') + ' ' + (v.marque || '') + ' ' + (v.modele || '') + (estHorsForfait(v) ? ' — hors forfait' : ''),
+      type: 'devis', client: payeurDossier(v) || 'Client non renseigne',   // PAYEUR
+      libelle: (v.immat || '') + ' ' + (v.marque || '') + ' ' + (v.modele || '') + (estHorsForfait(v) ? ' — hors forfait' : '') + (estDossierAssurance(v) ? ' — sinistre, vehicule de ' + (v.client || '?') : ''),
       ca: ca, paye: paye, cout: cout,
       reste: deposee ? resteTotal : 0,            // du = facture deposee non soldee
       aFacturer: deposee ? 0 : resteTotal,        // en cours / livre : pas encore facture
@@ -11526,7 +11615,7 @@ function pageCreances(){
     // validation client, travaux en cours... n'ont rien a voir ici).
     // Exclut aussi explicitement les vehicules forfait : cet onglet
     // n'affiche QUE les clients en devis, les forfaits ont leur propre onglet.
-    return v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length && LIV_ST.indexOf(v.status)>=0 && v.typeClient!=='forfait';
+    return v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length && LIV_ST.indexOf(v.status)>=0 && (v.typeClient!=='forfait' || estDossierAssurance(v));   // PAYEUR
   }).map(function(v){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
     var montantFacture = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
@@ -11565,8 +11654,8 @@ function pageCreances(){
     return {
       acompte: acomptesRecus(v),
       id:v.id, immat:v.immat, marque:v.marque, modele:v.modele,
-      client:v.client, tel:v.tel, entite:v.entite||'Particulier',
-      typeClient:v.typeClient||'devis',
+      client:payeurDossier(v), clientVehicule:v.client, tel:v.tel, entite:estDossierAssurance(v)?'Entreprise':(v.entite||'Particulier'),   // PAYEUR
+      typeClient:estDossierAssurance(v)?'devis':(v.typeClient||'devis'),
       status:v.status,
       montantFacture:montantFacture,
       montantPaye:montantPaye,
@@ -11592,7 +11681,7 @@ function pageCreances(){
   dossiers.forEach(function(d){ if(!d.isForfaitFacture) idsDejaComptes[d.id]=true; });
   var enCoursNonFactures = vehicles.filter(function(v){
     if(idsDejaComptes[v.id]) return false;
-    if(v.typeClient==='forfait') return false; // cet onglet ne montre que les clients devis
+    if(v.typeClient==='forfait' && !estDossierAssurance(v)) return false; // cet onglet ne montre que les clients devis (et les dossiers assurance : PAYEUR)
     if(!v.chiffrage || !v.chiffrage.lignes || !v.chiffrage.lignes.length) return false;
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
     var engage = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
@@ -11602,8 +11691,8 @@ function pageCreances(){
     var engage = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
     return {
       id:v.id, immat:v.immat, marque:v.marque, modele:v.modele,
-      client:v.client, tel:v.tel, entite:v.entite||'Particulier',
-      typeClient:v.typeClient||'devis', status:v.status,
+      client:payeurDossier(v), clientVehicule:v.client, tel:v.tel, entite:estDossierAssurance(v)?'Entreprise':(v.entite||'Particulier'),   // PAYEUR
+      typeClient:estDossierAssurance(v)?'devis':(v.typeClient||'devis'), status:v.status,
       montantEngage:engage, dateEntree:v.entree||0,
       isEnCoursNonFacture:true
     };
@@ -12076,7 +12165,7 @@ function validerNumerosFacture(){
       v.delaiPaiementPersonnalise = delaiSaisi;
       // Retenu comme nouveau defaut pour TOUS les futurs dossiers de ce
       // meme client, pas seulement celui-ci.
-      CLIENT_DELAIS_PAIEMENT[v.client] = delaiSaisi;
+      CLIENT_DELAIS_PAIEMENT[payeurDossier(v)] = delaiSaisi;   // PAYEUR
       saveClientDelaisPaiement();
     }
     saveV();
@@ -12727,7 +12816,9 @@ function rechercherClientFacturation(texte){
   var q = texte.trim().toLowerCase();
   if(q.length<2){ zone.innerHTML=''; return; }
   var noms = {};
-  vehicles.forEach(function(v){ if(v.client && v.client.toLowerCase().indexOf(q)>=0) noms[v.client]=true; });
+  vehicles.forEach(function(v){ var n = chiffrageSurPrixAchat(v) ? v.client : payeurDossier(v);   // PAYEUR
+    if(n && n.toLowerCase().indexOf(q)>=0) noms[n]=true;
+    if(v.client && v.client.toLowerCase().indexOf(q)>=0 && !estDossierAssurance(v)) noms[v.client]=true; });
   FORFAIT_FACTURES.forEach(function(f){ if(f.client && f.client.toLowerCase().indexOf(q)>=0) noms[f.client]=true; });
   var resultats = Object.keys(noms).sort().slice(0,8);
   if(!resultats.length){ zone.innerHTML = '<div class="card xs muted" style="padding:8px 12px">Aucun client trouve.</div>'; return; }
@@ -12751,7 +12842,8 @@ function collecterToutesFacturesClient(client){
     // facturation qu'une fois LIVRE (LIV_ST : livre / facture deposee /
     // dossier cloture). Avant cela il n'y a rien a encaisser, meme si le
     // chiffrage est deja complet et valide.
-    return v.client===client && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length
+    // PAYEUR v.6 : dossier assurance -> chez l'assureur ; dossier forfait pur -> pas de facture
+    return payeurDossier(v)===client && !chiffrageSurPrixAchat(v) && v.chiffrage && v.chiffrage.lignes && v.chiffrage.lignes.length
            && LIV_ST.indexOf(v.status)>=0;
   })
     .forEach(function(v){
@@ -12777,7 +12869,7 @@ function collecterToutesFacturesClient(client){
       }
       var statut = !deposee ? 'attente_depot' : (enRetard ? 'retard' : ((dateEcheance-maintenant)<=TROIS_JOURS_MS ? 'proche_echeance' : 'non_echue'));
       factures.push({
-        type:'devis', id:v.id, immat:v.immat, marque:v.marque, modele:v.modele,
+        type:'devis', id:v.id, immat:v.immat, marque:v.marque, modele:(v.modele||'')+(estHorsForfait(v)?' (hors forfait)':'')+(estDossierAssurance(v)?' — sinistre, vehicule de '+v.client:''),
         montant:montant, montantPaye:montantPaye, reste:reste,
         deposee:deposee, dateDepot:v.factureDeposeeLe||0, dateEcheance:dateEcheance, statut:statut,
         numeroFactureExterne:v.numeroFactureExterne||'', numeroSecondaire:v.numeroSecondaire||''
@@ -13169,7 +13261,7 @@ function traiterClientForfaitExposition(client){
   var maintenant = Date.now();
   var engageParMois = {}, dossiersParMois = {};
 
-  vehicles.filter(function(v){return v.client===client && v.typeClient==='forfait';})   // EXPOSITION COHERENTE : aussi sans piece (depenses Caisse)
+  vehicles.filter(function(v){return v.client===client && v.typeClient==='forfait' && !estDossierAssurance(v);})   // EXPOSITION COHERENTE + PAYEUR (assurance : chez l'assureur) : aussi sans piece (depenses Caisse)
     .forEach(function(v){
       // Meme regle que pour les devis : seules les pieces dont l'achat a
       // ete valide (cl.valideDir) representent un engagement financier
@@ -13247,7 +13339,7 @@ function collecterExpositionFinanciere(){
   var totalEngageGlobal = 0;
 
   // ── DEVIS : inchange, par dossier ──
-  vehicles.filter(function(v){return v.typeClient!=='forfait';}).forEach(function(v){   // EXPOSITION COHERENTE : aussi sans piece (depenses Caisse)
+  vehicles.filter(function(v){return v.typeClient!=='forfait' || estDossierAssurance(v);}).forEach(function(v){   // EXPOSITION COHERENTE + PAYEUR : aussi sans piece (depenses Caisse)
     // Seules les pieces dont l'ACHAT A ETE VALIDE par Direction (cl.valideDir)
     // representent un vrai engagement financier reel — une piece juste
     // presente dans le chiffrage mais jamais validee n'a pas encore ete
@@ -13281,16 +13373,17 @@ function collecterExpositionFinanciere(){
     var montantFacture = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     var margePrevisionnelle = montantFacture - montantEngage;
 
-    if(!buckets[v.client]) buckets[v.client] = {client:v.client, type:'devis', dossiers:[], totalExpose:0, totalFacture:0, totalMarge:0};
-    buckets[v.client].dossiers.push({
+    var cleP = payeurDossier(v);   // PAYEUR
+    if(!buckets[cleP]) buckets[cleP] = {client:cleP, type:'devis', dossiers:[], totalExpose:0, totalFacture:0, totalMarge:0};
+    buckets[cleP].dossiers.push({
       id:v.id, immat:v.immat, marque:v.marque, modele:v.modele, entite:v.entite,
       dateOuverture:dateOuverture, dateEngagement:dateEngagement, montantFacture:montantFacture, montantEngage:montantEngage,   // TRESORERIE PAR TYPE
       montantPaye:montantPaye, montantExpose:montantExpose, margePrevisionnelle:margePrevisionnelle,
       joursExposition:joursExposition
     });
-    buckets[v.client].totalExpose += montantExpose;
-    buckets[v.client].totalFacture += montantFacture;
-    buckets[v.client].totalMarge += margePrevisionnelle;
+    buckets[cleP].totalExpose += montantExpose;
+    buckets[cleP].totalFacture += montantFacture;
+    buckets[cleP].totalMarge += margePrevisionnelle;
   });
 
   Object.keys(buckets).forEach(function(client){
@@ -14645,7 +14738,7 @@ function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     var vente = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     var achat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
-    if(v.typeClient==='forfait'){
+    if(v.typeClient==='forfait' && !estDossierAssurance(v)){   // PAYEUR : assurance -> CA devis
       caForfaitAncienCalcul += vente;
       if(chiffrageSurPrixAchat(v)) vente = 0;   // CA FORFAIT = ABONNEMENTS : forfait pur -> pas de CA
       caForfait+=vente; achatForfait+=achat;
@@ -16013,9 +16106,11 @@ function delaiEcheanceClient(v){
   if(typeof v.delaiPaiementPersonnalise==='number'){
     return {mode:'delai', jours:v.delaiPaiementPersonnalise};
   }
-  if(typeof CLIENT_DELAIS_PAIEMENT[v.client]==='number'){
-    return {mode:'delai', jours:CLIENT_DELAIS_PAIEMENT[v.client]};
+  var payeur = payeurDossier(v);   // PAYEUR : pour un dossier assurance, le delai de l'assureur
+  if(typeof CLIENT_DELAIS_PAIEMENT[payeur]==='number'){
+    return {mode:'delai', jours:CLIENT_DELAIS_PAIEMENT[payeur]};
   }
+  if(estDossierAssurance(v)) return {mode:'delai', jours:30};   // assureur : 30 jours par defaut
   var typeClient = v.typeClient || 'devis';
   var estEntreprise = !!(v.entite && v.entite.toLowerCase()!=='particulier');
   if(typeClient==='forfait') return {mode:'fin_mois'};
@@ -16035,6 +16130,7 @@ function collecterEncaissementsAttendus(){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();});
     var montantFacture = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     if(!montantFacture) return;
+    if(chiffrageSurPrixAchat(v)) return;   // forfait pur : couvert par l'abonnement, aucune facture
     // Un dossier n'est vraiment "en attente de paiement" qu'une fois
     // livre (LIV_ST : livre/facture_deposee/dossier_cloture) — avant
     // cela (diagnostic, attente validation client, travaux...), il n'y
@@ -16062,7 +16158,7 @@ function collecterEncaissementsAttendus(){
       }
     }
     items.push({
-      nom:v.client, immat:v.immat, marque:v.marque, modele:v.modele,
+      nom:payeurDossier(v), immat:v.immat, marque:v.marque, modele:v.modele,   // PAYEUR
       montant:reste, dateEcheance:dateEcheance,
       enRetard:(factureDeposee && dateEcheance>0 && dateEcheance<maintenant),
       factureDeposee:factureDeposee, dateDepot:dateFacture||null,
@@ -30293,6 +30389,16 @@ function openDet(id){
         b += '<button class="btn btn-sm" style="color:#854F0B;border-color:#E8A44A" onclick="basculerDossierAssuranceById(this)" data-vid="'+v.id+'">Retirer le statut assurance</button>';
       } else {
         b += '<button class="btn btn-sm" style="color:#1B6E7A;border-color:#7ECBD6" onclick="basculerDossierAssuranceById(this)" data-vid="'+v.id+'">&#x1F6E1; Convertir en dossier assurance</button>';
+        // HORS FORFAIT v.6 : bascule directe forfait <-> hors forfait (client forfait uniquement)
+        if(clientEstForfait(v.client)){
+          if(v.typeClient!=='forfait'){
+            var suffixeHF = /\(\s*hors\s*forfait\s*\)/i.test(String(v.client||''));
+            if(suffixeHF || v.horsForfait!==true) b += '<button class="btn btn-sm" style="color:#854F0B;border-color:#E8A44A" onclick="basculerHorsForfaitById(this)" data-sens="hf" data-vid="'+v.id+'">'+(suffixeHF?'Rattacher a '+nomClientForfait(v.client)+' (hors forfait)':'Classer hors forfait')+'</button>';
+            b += '<button class="btn btn-sm" style="color:#534AB7;border-color:#B8B2E8" onclick="basculerHorsForfaitById(this)" data-sens="forfait" data-vid="'+v.id+'">Remettre dans le forfait</button>';
+          } else {
+            b += '<button class="btn btn-sm" style="color:#854F0B;border-color:#E8A44A" onclick="basculerHorsForfaitById(this)" data-sens="hf" data-vid="'+v.id+'">Classer hors forfait</button>';
+          }
+        }
       }
     }
     b += '</div></div>';
@@ -41399,6 +41505,8 @@ window.onload=function(){
       <div class="fr"><label class="fl">Statut</label>
         <select class="inp" id="modif_entite"><option>Particulier</option><option>Entreprise</option></select></div>
     </div>
+    <label id="modif_hf_wrap" style="display:none;margin-bottom:10px;padding:8px 10px;background:#FDF3E3;border-radius:8px;font-size:12px;color:#854F0B;cursor:pointer;align-items:center;gap:8px">
+      <input type="checkbox" id="modif_horsForfait" style="width:16px;height:16px"> Les dossiers <b>devis</b> de ce vehicule restent <b>HORS FORFAIT</b> (factures en plus de l'abonnement)</label>
 
     <div style="font-size:11px;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:.03em;margin:16px 0 6px;border-top:1px solid #e8e6e1;padding-top:12px">Vehicule</div>
     <div class="g2" style="margin-bottom:10px">
