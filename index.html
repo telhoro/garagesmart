@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-09.3';
+var GOS_VERSION = '2026-11-10.3';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -344,6 +344,11 @@ var GOS_VERSION = '2026-11-09.3';
           <select class="inp" id="f_typeClient" onchange="toggleEntite()">
             <option value="devis">Devis</option><option value="forfait">Forfait</option>
           </select></div>
+        <div class="fr" id="f_hf_wrap" style="display:none"><label class="fl">&nbsp;</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:8px 0;font-size:13px;color:#854F0B" title="Client forfait : travaux factures en plus de son abonnement, sous le meme nom de client">
+            <input type="checkbox" id="f_horsForfait" style="width:18px;height:18px;cursor:pointer" onchange="toggleHorsForfait()">
+            <span>Travaux hors forfait (factures en devis)</span>
+          </label></div>
         <div class="fr"><label class="fl">&nbsp;</label>
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:8px 0;font-size:13px">
             <input type="checkbox" id="f_dossierAssurance" style="width:18px;height:18px;cursor:pointer" onchange="toggleSectionSinistre()">
@@ -3550,7 +3555,23 @@ function dcBadge(v){
   return '<span style="'+info.c+';font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:4px">'+info.l+'</span>';
 }
 function tbadge(t){var m={forfait:'b-purple',assurance:'b-teal',devis:'b-blue'};return '<span class="badge '+(m[t]||'b-gray')+'">'+t+'</span>';}
-function assuranceBadge(v){ return estDossierAssurance(v) ? ' <span class="badge b-teal" title="Dossier assurance">&#x1F6E1; Assurance</span>' : ''; }
+// HORS FORFAIT (10/11/2026) : un client forfait peut avoir des travaux factures EN PLUS de son
+// abonnement. Le dossier est alors de type « devis » (facture separee, prix de vente) sous le MEME
+// nom de client, et porte horsForfait:true. Les anciens noms « ... (Hors forfait) » sont reconnus.
+function hfNorm(n){ return String(n || '').replace(/\(\s*hors\s*forfait\s*\)/i, '').replace(/\s+/g, ' ').trim().toLowerCase(); }
+function clientEstForfait(nom){
+  var k = hfNorm(nom); if(!k) return false;
+  if(vehicles.some(function(x){ return x && !x.isProspect && x.typeClient === 'forfait' && !estDossierAssurance(x) && hfNorm(x.proprietaireVehicule || x.client) === k; })) return true;
+  return typeof FORFAIT_FACTURES !== 'undefined' && FORFAIT_FACTURES.some(function(f){ return hfNorm(f.client) === k; });
+}
+function estHorsForfait(v){
+  if(!v || v.typeClient === 'forfait' || estDossierAssurance(v)) return false;
+  return v.horsForfait === true || /\(\s*hors\s*forfait\s*\)/i.test(String(v.client || ''));
+}
+function assuranceBadge(v){
+  return (estDossierAssurance(v) ? ' <span class="badge b-teal" title="Dossier assurance">&#x1F6E1; Assurance</span>' : '')
+       + (estHorsForfait(v) ? ' <span class="badge" style="background:#FAEEDA;color:#854F0B" title="Travaux factures en plus de l\'abonnement forfait">Hors forfait</span>' : '');
+}
 function av(n){var i=n?n.split(' ').map(function(x){return x[0];}).join('').toUpperCase().slice(0,2):'?';return '<div class="av">'+i+'</div>';}
 // Extrait la lettre identifiant une equipe (ex: "Equipe A" -> "A")
 function eqLetter(nomEquipe){
@@ -7651,7 +7672,10 @@ function calculerMetriquesFinancieres(borneDebut, borneFin){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     var vente = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     var achat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
-    if(v.typeClient==='forfait'){ caForfait+=vente; achatForfait+=achat; }
+    if(v.typeClient==='forfait'){
+      if(chiffrageSurPrixAchat(v)) vente = 0;   // CA FORFAIT = ABONNEMENTS (meme regle que le tableau de bord)
+      caForfait+=vente; achatForfait+=achat;
+    }
     else { caDevis+=vente; achatDevis+=achat; }
   });
   // CHARGES REELLES : meme regle que le tableau de bord — une facture forfait compte dans le
@@ -10654,6 +10678,8 @@ var bilanClientsOuverts = {};
 
 function bilanSetPeriode(p){ bilanPeriode = p; renderPage(); }
 function bilanSetDateByEl(el){
+  var zone = el.parentNode, dEl = zone && zone.querySelector('[data-bd="debut"]'), fEl = zone && zone.querySelector('[data-bd="fin"]');
+  if(dEl) bilanDebut = dEl.value; if(fEl) bilanFin = fEl.value;   // BILAN DATES : les deux bornes affichees
   if(el.getAttribute('data-bd') === 'debut') bilanDebut = el.value; else bilanFin = el.value;
   bilanPeriode = 'custom';
   renderPage();
@@ -10719,7 +10745,7 @@ function bilanCollecterFactures(){
     var paye = parseFloat(v.montantPaye) || 0;
     factures.push({
       type: 'devis', client: v.client || 'Client non renseigne',
-      libelle: (v.immat || '') + ' ' + (v.marque || '') + ' ' + (v.modele || ''),
+      libelle: (v.immat || '') + ' ' + (v.marque || '') + ' ' + (v.modele || '') + (estHorsForfait(v) ? ' — hors forfait' : ''),
       ca: ca, paye: paye, reste: Math.max(0, ca - paye), cout: cout,
       dateRef: dateRef, deposee: !!v.factureDeposeeLe,
       numero: v.numeroFactureExterne || '',
@@ -11215,9 +11241,14 @@ function pageBilanGlobal(){
   });
   h += '</div>';
   h += '<div class="flex gap6" style="align-items:center"><span class="xs muted">Du</span>';
-  h += '<input type="date" class="inp" style="width:auto;font-size:11px" data-bd="debut" value="' + bilanEchapper(bilanDebut) + '" onchange="bilanSetDateByEl(this)">';
+  // BILAN DATES (10/11/2026) : hors periode personnalisee, les champs affichent les VRAIES bornes
+  // calculees (ex. « Ce mois » -> 01/11 au jour), et non d'anciennes dates saisies.
+  var _bb = bilanBornes(), _iso = function(ts){ var d = new Date(ts); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); };
+  var _bdAff = bilanPeriode === 'custom' ? bilanDebut : (bilanPeriode === 'tout' ? '' : (_bb.debut ? _iso(_bb.debut) : ''));
+  var _bfAff = bilanPeriode === 'custom' ? bilanFin : (bilanPeriode === 'tout' ? '' : _iso(Date.now()));
+  h += '<input type="date" class="inp" style="width:auto;font-size:11px" data-bd="debut" value="' + bilanEchapper(_bdAff) + '" onchange="bilanSetDateByEl(this)">';
   h += '<span class="xs muted">au</span>';
-  h += '<input type="date" class="inp" style="width:auto;font-size:11px" data-bd="fin" value="' + bilanEchapper(bilanFin) + '" onchange="bilanSetDateByEl(this)">';
+  h += '<input type="date" class="inp" style="width:auto;font-size:11px" data-bd="fin" value="' + bilanEchapper(_bfAff) + '" onchange="bilanSetDateByEl(this)">';
   h += '</div>';
   h += '<div class="flex gap6" style="align-items:center"><span class="xs muted">Trier par</span>';
   h += '<select class="inp" style="width:auto;font-size:11px" onchange="bilanSetTriByEl(this)">';
@@ -14549,6 +14580,11 @@ function categorieCAClientForfait(client){
 
 function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
   var caDevis=0, achatDevis=0, caForfait=0, achatForfait=0;
+  // CA FORFAIT = ABONNEMENTS (10/11/2026) : un client forfait ne paie QUE son abonnement. Les pieces
+  // d'un dossier forfait pur (chiffrageSurPrixAchat) sont une depense au prix d'achat, jamais du CA.
+  // Un dossier assurance d'un client forfait reste facture a l'assureur au prix de vente (CA).
+  var caForfaitAncienCalcul = 0;   // pour comparaison a l'ecran (transitoire)
+  var caHorsForfait = 0;           // HORS FORFAIT : CA devis des clients forfait (deja compte dans CA Devis)
   // REPARTITION CA : memes dossiers et memes montants que le CA de la periode
   var repartitionCA = {}, vehiculesTraites = {};
   REPARTITION_CA_CATEGORIES.forEach(function(c){ repartitionCA[c.cle] = {ca: 0, vehicules: 0}; });
@@ -14559,8 +14595,12 @@ function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
     var lignes = v.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true;});
     var vente = lignes.reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
     var achat = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0);
-    if(v.typeClient==='forfait'){ caForfait+=vente; achatForfait+=achat; }
-    else { caDevis+=vente; achatDevis+=achat; }
+    if(v.typeClient==='forfait'){
+      caForfaitAncienCalcul += vente;
+      if(chiffrageSurPrixAchat(v)) vente = 0;   // CA FORFAIT = ABONNEMENTS : forfait pur -> pas de CA
+      caForfait+=vente; achatForfait+=achat;
+    }
+    else { caDevis+=vente; achatDevis+=achat; if(estHorsForfait(v)) caHorsForfait+=vente; }
     // REPARTITION CA
     var catCA = categorieCADossier(v);
     repartitionCA[catCA].ca += vente;
@@ -14577,6 +14617,7 @@ function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
     var dateRepresentative = new Date(parseInt(parts[0],10), parseInt(parts[1],10)-1, 15).getTime();
     if(dateRepresentative<bornesActivite.deb || dateRepresentative>bornesActivite.fin) return;
     caForfait += f.montant||0;
+    caForfaitAncienCalcul += f.montant||0;
     repartitionCA[categorieCAClientForfait(f.client)].ca += f.montant||0;   // REPARTITION CA
   });
 
@@ -14726,7 +14767,7 @@ function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
   return {
     tresoParType:tresoParType, totalExposePeriode:totalExposePeriode,   // TRESORERIE PAR TYPE
     repartitionCA:repartitionCA, nbVehiculesTraites:Object.keys(vehiculesTraites).length,   // REPARTITION CA
-    caDevis:caDevis, achatDevis:achatDevis, caForfait:caForfait, achatForfait:achatForfait,
+    caDevis:caDevis, achatDevis:achatDevis, caForfait:caForfait, achatForfait:achatForfait, caForfaitAncienCalcul:caForfaitAncienCalcul, caHorsForfait:caHorsForfait,
     caTotal:caTotal, achatTotal:achatTotal, margeDevis:margeDevis, margeForfait:margeForfait, margeTotal:margeTotal,
     tauxDevis:tauxDevis, tauxForfait:tauxForfait, tauxTotal:tauxTotal,
     chargesVariablesCaisse:chargesVariablesCaisse, chargesFixesPeriode:chargesFixesPeriode, dettesManuellesPeriode:dettesManuellesPeriode,
@@ -14783,8 +14824,11 @@ function pageFinancesDashboard(){
   html += '<div class="kgrid k4" style="margin-bottom:20px">';
   html += bloc('CA de la periode', caTotal?caTotal.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', '#185FA5', [
     {label:'CA Devis', value:caDevis?caDevis.toLocaleString('fr-FR', GOS_FMT0):'—'},
-    {label:'CA Forfaits', value:caForfait?caForfait.toLocaleString('fr-FR', GOS_FMT0):'—'}
-  ]);
+  ].concat(K.caHorsForfait ? [{label:'<span style="padding-left:10px">dont hors forfait</span>', value:'<span style="color:#854F0B">'+K.caHorsForfait.toLocaleString('fr-FR', GOS_FMT0)+'</span>'}] : []).concat([
+    {label:'CA Forfaits (abonnements)', value:caForfait?caForfait.toLocaleString('fr-FR', GOS_FMT0):'—'}
+  ]).concat((K.caForfaitAncienCalcul||0) !== caForfait ? [
+    {label:'<span style="color:#999">Ancien calcul forfaits</span>', value:'<span style="color:#999;text-decoration:line-through" title="Avant le 10/11/2026 : pieces des dossiers forfait comptees en CA">'+(K.caForfaitAncienCalcul||0).toLocaleString('fr-FR', GOS_FMT0)+'</span>'}
+  ] : []));
   html += bloc('Depenses liees', achatTotal?achatTotal.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', '#A32D2D', [
     {label:'Devis', value:achatDevis?achatDevis.toLocaleString('fr-FR', GOS_FMT0):'—'},
     {label:'Forfaits', value:achatForfait?achatForfait.toLocaleString('fr-FR', GOS_FMT0):'—'}
@@ -29166,6 +29210,7 @@ function verifierClientExistant(){
     // Nouveau client : deverrouiller le type, laisser le choix
     typeEl.disabled = false;
     if(hintEl){ hintEl.textContent = ''; }
+    majOptionHorsForfait('');   // HORS FORFAIT
     return;
   }
   // Client existant reconnu : remplir AUTOMATIQUEMENT les infos + verrouiller le type
@@ -29185,6 +29230,29 @@ function verifierClientExistant(){
   if(hintEl){
     hintEl.textContent = '\u2713 Client existant : type '+typeLabel+' applique automatiquement (verrouille)';
     hintEl.style.color = '#3B6D11';
+  }
+  // HORS FORFAIT : client forfait -> le type repart sur Forfait, avec l'option hors forfait
+  if(clientEstForfait(nom)){ typeEl.value = 'forfait'; majOptionHorsForfait(nom); }
+  else majOptionHorsForfait('');
+}
+
+// HORS FORFAIT : affiche l'option pour un client forfait, et l'applique au type (qui reste verrouille)
+function majOptionHorsForfait(nomClient){
+  var wrap = document.getElementById('f_hf_wrap'), cb = document.getElementById('f_horsForfait'), typeEl = document.getElementById('f_typeClient');
+  if(!wrap || !cb || !typeEl) return;
+  var forfait = clientEstForfait(nomClient);
+  wrap.style.display = forfait ? '' : 'none';
+  if(!forfait){ cb.checked = false; return; }
+  cb.checked = (typeEl.value === 'devis');
+  toggleHorsForfait();
+}
+function toggleHorsForfait(){
+  var cb = document.getElementById('f_horsForfait'), typeEl = document.getElementById('f_typeClient'), hint = document.getElementById('f_client_type_hint');
+  if(!cb || !typeEl) return;
+  typeEl.value = cb.checked ? 'devis' : 'forfait';
+  if(hint){
+    hint.textContent = cb.checked ? '\u2713 Client forfait : ce dossier est HORS FORFAIT, facture en devis (meme client)' : '\u2713 Client existant : type Forfait applique automatiquement (verrouille)';
+    hint.style.color = cb.checked ? '#854F0B' : '#3B6D11';
   }
 }
 
@@ -29405,6 +29473,8 @@ function rechercherVehiculeParImmat(immat){
     var tcEl=document.getElementById('f_typeClient');
     if(tcEl){tcEl.value=v.typeClient;tcEl.disabled=true;}
   };
+  // HORS FORFAIT : vehicule d'un client forfait -> Forfait par defaut, option hors forfait disponible
+  if(clientEstForfait(v.client)){ var tcHF=document.getElementById('f_typeClient'); if(tcHF) tcHF.value='forfait'; majOptionHorsForfait(v.client); }
   // Afficher les travaux a prevoir de ce vehicule
   afficherTapReception(immat);
 }
@@ -29557,7 +29627,9 @@ function openEdit(id, prefill){
   var tkmEl2=document.getElementById('f_tkm');if(tkmEl2){ tkmEl2.checked = (v.tkm===true); }
   var mk=document.getElementById('f_marque');if(mk){ if(mk.options) { for(var i=0;i<mk.options.length;i++){if(mk.options[i].text===v.marque){mk.selectedIndex=i;break;}} } else { mk.value=v.marque||''; } }
   var sv=function(id,val){var el=document.getElementById(id);if(el)el.value=val;};
-  sv('f_typeClient',v.typeClient);sv('f_type',v.typeClient);sv('f_entite',v.entite||'Particulier');sv('f_prio',v.priorite);sv('f_nature',v.nature||'Nouvelle panne');sv('f_bpc',v.bpc||'En attente');
+  sv('f_typeClient',v.typeClient);sv('f_type',v.typeClient);
+  (function(){ var w=document.getElementById('f_hf_wrap'), cb=document.getElementById('f_horsForfait');   // HORS FORFAIT
+    if(w && cb){ var f=clientEstForfait(v.client); w.style.display=f?'':'none'; cb.checked=f && v.typeClient==='devis' && !estDossierAssurance(v); } })();sv('f_entite',v.entite||'Particulier');sv('f_prio',v.priorite);sv('f_nature',v.nature||'Nouvelle panne');sv('f_bpc',v.bpc||'En attente');
   toggleEntite();
   var ar2=document.getElementById('f_arecup');
   if(ar2){ ar2.checked=!!v.aRecuperer; toggleRecup(); }
@@ -29637,6 +29709,7 @@ function resetForm(){
   ['f_recup_date','f_recup_heure','f_recup_adresse','f_recup_contact','f_recup_note'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
   // Réinitialiser l'équipe
   var ftc=document.getElementById('f_typeClient'); if(ftc){ftc.value='devis';ftc.disabled=false;}
+  var fhf=document.getElementById('f_horsForfait'); if(fhf) fhf.checked=false; var fhw=document.getElementById('f_hf_wrap'); if(fhw) fhw.style.display='none';   // HORS FORFAIT
   var fcth=document.getElementById('f_client_type_hint');if(fcth)fcth.textContent='';
   var fda=document.getElementById('f_dossierAssurance');if(fda){fda.checked=false;fda.disabled=false;}
   var ftkm=document.getElementById('f_tkm');if(ftkm){ftkm.checked=false;}
@@ -29851,7 +29924,7 @@ function submitRec(){
     }
   }
 
-  var data={inventaire:inv,aRecuperer:!!aRecup,recuperation:recupData,immat:immat,marque:marque,modele:modele,vin:(document.getElementById('f_vin').value||'').trim(),km:parseInt(document.getElementById('f_km').value)||0,mec:document.getElementById('f_mec').value,ct_echeance:(document.getElementById('f_ct_echeance')||{value:''}).value,annee:(document.getElementById('f_mec').value?(new Date(document.getElementById('f_mec').value).getFullYear()+''):''),client:clientEffectif,proprietaireVehicule:proprietaireVehicule,tel:tel,email:emailVal,typeClient:(document.getElementById('f_typeClient')||document.getElementById('f_type')||{value:'devis'}).value,dossierAssurance:dossierAssuranceCoche,tkm:tkmCoche,expertPasse:expertPasseFinal,expertPasseLe:expertPasseLeFinal,expertValidationTravaux:expertValidationTravauxFinal,expertValidationTravauxLe:expertValidationTravauxLeFinal,expertRapportRecu:expertRapportRecuFinal,expertRapportRecuLe:expertRapportRecuLeFinal,bonSortieAssurance:bonSortieAssuranceFinal,bonSortieAssuranceLe:bonSortieAssuranceLeFinal,entite:document.getElementById('f_entite').value,priorite:document.getElementById('f_prio').value,nature:document.getElementById('f_nature').value,motif:motif,symptomes:(document.getElementById('f_symp').value||'').trim(),livraison:livDate?new Date(livDate).getTime():null,sinistre:(document.getElementById('f_sin').value||'').trim()||null,assureur:nomAssureurSaisi||null,contactAssurance:(document.getElementById('f_contact_ass').value||'').trim()||null,expert:(document.getElementById('f_expert').value||'').trim()||null,contactExpert:(document.getElementById('f_contact_exp').value||'').trim()||null,dateSinistre:document.getElementById('f_date_sin').value||null,bpc:document.getElementById('f_bpc').value,photos:getRecPhotosData(),zonesEndommagees:(zonesEndommagees||[]).slice(),energie:(document.getElementById('f_energie')||{value:''}).value||null,vignette:(document.getElementById('f_vignette')||{value:''}).value||null};
+  var data={inventaire:inv,aRecuperer:!!aRecup,recuperation:recupData,immat:immat,marque:marque,modele:modele,vin:(document.getElementById('f_vin').value||'').trim(),km:parseInt(document.getElementById('f_km').value)||0,mec:document.getElementById('f_mec').value,ct_echeance:(document.getElementById('f_ct_echeance')||{value:''}).value,annee:(document.getElementById('f_mec').value?(new Date(document.getElementById('f_mec').value).getFullYear()+''):''),client:clientEffectif,proprietaireVehicule:proprietaireVehicule,tel:tel,email:emailVal,typeClient:(document.getElementById('f_typeClient')||document.getElementById('f_type')||{value:'devis'}).value,dossierAssurance:dossierAssuranceCoche,horsForfait:!!(document.getElementById('f_horsForfait')&&document.getElementById('f_horsForfait').checked&&document.getElementById('f_hf_wrap').style.display!=='none'&&(document.getElementById('f_typeClient')||{}).value==='devis'&&!dossierAssuranceCoche),tkm:tkmCoche,expertPasse:expertPasseFinal,expertPasseLe:expertPasseLeFinal,expertValidationTravaux:expertValidationTravauxFinal,expertValidationTravauxLe:expertValidationTravauxLeFinal,expertRapportRecu:expertRapportRecuFinal,expertRapportRecuLe:expertRapportRecuLeFinal,bonSortieAssurance:bonSortieAssuranceFinal,bonSortieAssuranceLe:bonSortieAssuranceLeFinal,entite:document.getElementById('f_entite').value,priorite:document.getElementById('f_prio').value,nature:document.getElementById('f_nature').value,motif:motif,symptomes:(document.getElementById('f_symp').value||'').trim(),livraison:livDate?new Date(livDate).getTime():null,sinistre:(document.getElementById('f_sin').value||'').trim()||null,assureur:nomAssureurSaisi||null,contactAssurance:(document.getElementById('f_contact_ass').value||'').trim()||null,expert:(document.getElementById('f_expert').value||'').trim()||null,contactExpert:(document.getElementById('f_contact_exp').value||'').trim()||null,dateSinistre:document.getElementById('f_date_sin').value||null,bpc:document.getElementById('f_bpc').value,photos:getRecPhotosData(),zonesEndommagees:(zonesEndommagees||[]).slice(),energie:(document.getElementById('f_energie')||{value:''}).value||null,vignette:(document.getElementById('f_vignette')||{value:''}).value||null};
   // Lire l'équipe sélectionnée
   var equipeChoisie = (document.getElementById('f_equipe')||{value:''}).value;
   if(editingId){
@@ -29896,9 +29969,11 @@ function submitRec(){
     }
     _tapRepris = null;
     // Coherence type client : si le client existe deja, forcer le meme type sur TOUS ses vehicules
-    if(nv.client){
+    // HORS FORFAIT : un dossier hors forfait reste « devis » ; et les dossiers hors forfait existants
+    // ne servent pas de reference pour le type du client.
+    if(nv.client && !nv.horsForfait){
       var nomCli = nv.client.toLowerCase().trim();
-      var clientExist = vehicles.find(function(x){ return x.client && x.client.toLowerCase().trim()===nomCli && x.isProspect!==true; });
+      var clientExist = vehicles.find(function(x){ return x.client && x.client.toLowerCase().trim()===nomCli && x.isProspect!==true && !estHorsForfait(x); });
       if(clientExist && clientExist.typeClient){
         nv.typeClient = clientExist.typeClient; // le nouveau vehicule herite du type du client
       } else {
