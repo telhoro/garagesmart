@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-10.6';
+var GOS_VERSION = '2026-11-10.8';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -3558,7 +3558,9 @@ function tbadge(t){var m={forfait:'b-purple',assurance:'b-teal',devis:'b-blue'};
 // HORS FORFAIT (10/11/2026) : un client forfait peut avoir des travaux factures EN PLUS de son
 // abonnement. Le dossier est alors de type « devis » (facture separee, prix de vente) sous le MEME
 // nom de client, et porte horsForfait:true. Les anciens noms « ... (Hors forfait) » sont reconnus.
-function hfNorm(n){ return String(n || '').replace(/\(\s*hors\s*forfait\s*\)/i, '').replace(/\s+/g, ' ').trim().toLowerCase(); }
+// v.8 : reconnait aussi « KAYDAN Hors forfait », « Kaydan - hors forfait » (sans parentheses)
+var HF_RE = /[\s\-\u2013_]*\(?\s*hors[\s\-_]*forfait\s*\)?/i;
+function hfNorm(n){ return String(n || '').replace(HF_RE, '').replace(/\s+/g, ' ').trim().toLowerCase(); }
 function clientEstForfait(nom){
   var k = hfNorm(nom); if(!k) return false;
   if(vehicles.some(function(x){ return x && !x.isProspect && x.typeClient === 'forfait' && !estDossierAssurance(x) && hfNorm(x.proprietaireVehicule || x.client) === k; })) return true;
@@ -3609,8 +3611,84 @@ function dossiersHorsForfaitARegulariser(){
   return vehicles.filter(function(v){
     if(!v || v.isProspect || estDossierAssurance(v)) return false;
     if(v.typeClient==='forfait') return !!(v.factureDeposeeLe || (parseFloat(v.montantPaye)||0)>0 || v.numeroFactureExterne);
-    return /\(\s*hors\s*forfait\s*\)/i.test(String(v.client||'')) && !!nomClientForfait(v.client);
+    return HF_RE.test(String(v.client||'')) && !!nomClientForfait(v.client);
   });
+}
+// ══ NOMS DE CLIENT EN DOUBLE (10/11/2026, v.8) ══════════════════════════════
+// « KAYDAN », « Kaydan » et « KAYDAN Hors forfait » sont un seul client (la page Clients les
+// regroupe deja), mais la facturation les separait. Regrouper = renommer vers UN seul nom.
+// Le nom retenu est celui qui porte les factures forfait (aucune cle de mois a reecrire).
+function groupesNomsClientDoublons(){
+  var g = {};
+  function ajout(nom, champ){
+    nom = String(nom||'').trim(); if(!nom || /^assureur a renseigner/i.test(nom)) return;
+    var k = hfNorm(nom); if(!k) return;
+    if(!g[k]) g[k] = {cle:k, variantes:{}};
+    if(!g[k].variantes[nom]) g[k].variantes[nom] = {nom:nom, vehicules:0, forfaits:0, hf:HF_RE.test(nom)};
+    g[k].variantes[nom][champ]++;
+  }
+  vehicles.forEach(function(v){ if(v && !estDossierAssurance(v)) ajout(v.client, 'vehicules'); });
+  FORFAIT_FACTURES.forEach(function(f){ ajout(f.client, 'forfaits'); });
+  return Object.keys(g).map(function(k){ return g[k]; }).filter(function(x){ return Object.keys(x.variantes).length > 1; }).map(function(x){
+    var vs = Object.keys(x.variantes).map(function(n){ return x.variantes[n]; });
+    vs.sort(function(a,b){ return (b.forfaits-a.forfaits) || ((a.hf?1:0)-(b.hf?1:0)) || (b.vehicules-a.vehicules); });
+    x.liste = vs; x.retenu = vs[0].nom; return x;
+  });
+}
+function htmlNomsClientDoublons(){
+  if(currentRole!=='direction') return '';
+  var gs = groupesNomsClientDoublons(); if(!gs.length) return '';
+  var h = '<div class="card" style="margin-bottom:12px;padding:10px 14px;border:1px solid #E8A44A;background:#FFFBF4">';
+  h += '<div style="font-size:12px;font-weight:700;color:#854F0B;margin-bottom:6px">&#x26A0; Meme client ecrit de plusieurs facons : ses factures sont eparpillees</div>';
+  gs.forEach(function(x){
+    h += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;padding:4px 0;border-top:1px solid #f3e6cf">';
+    h += '<span>'+x.liste.map(function(v){ return '<b>'+v.nom+'</b> <span class="xs muted">('+v.vehicules+' dossier'+(v.vehicules>1?'s':'')+(v.forfaits?', '+v.forfaits+' fact. forfait':'')+')</span>'; }).join(' &middot; ')+'</span>';
+    h += '<button class="btn btn-sm" style="color:#854F0B;border-color:#E8A44A;margin-left:auto" data-cle="'+encodeURIComponent(x.cle)+'" onclick="regrouperNomsClientByEl(this)">Regrouper sous « '+x.retenu+' »</button>';
+    h += '</div>';
+  });
+  return h + '</div>';
+}
+function regrouperNomsClientByEl(btn){
+  if(currentRole!=='direction') return;
+  var cle = decodeURIComponent(btn.getAttribute('data-cle'));
+  var x = groupesNomsClientDoublons().find(function(g){ return g.cle===cle; }); if(!x) return;
+  var canon = x.retenu, autres = x.liste.filter(function(v){ return v.nom!==canon; }).map(function(v){ return v.nom; });
+  demanderConfirmation('Regrouper sous « '+canon+' » ?',
+    'Les dossiers de '+autres.map(function(n){return '« '+n+' »';}).join(', ')+' passent au nom « '+canon+' ». Les dossiers devis d\'un client forfait sont marques HORS FORFAIT. Les montants, dates de depot, paiements et liens bancaires ne changent pas.',
+    function(){ var r = regrouperNomsClient(cle, canon); afficherToastNotif('Client regroupe', r.vehicules+' dossier(s) et '+r.forfaits+' facture(s) forfait sous « '+canon+' ».', 'ok'); renderPage(); },
+    { icone:'&#x1F517;', libelleOk:'Regrouper' });
+}
+function regrouperNomsClient(cle, canon){
+  var res = {vehicules:0, forfaits:0};
+  var estF = clientEstForfait(canon), qui = currentUser ? currentUser.login : 'Direction';
+  vehicles.forEach(function(v){
+    if(!v || hfNorm(v.client)!==cle) return;
+    var modif = false, ancien = v.client;
+    if(!estDossierAssurance(v) && v.typeClient!=='forfait' && (HF_RE.test(v.client) || estF) && v.horsForfait!==true){ v.horsForfait = true; modif = true; }
+    if(v.client!==canon && !estDossierAssurance(v)){ v.client = canon; modif = true; }
+    if(v.proprietaireVehicule && hfNorm(v.proprietaireVehicule)===cle && v.proprietaireVehicule!==canon){ v.proprietaireVehicule = canon; modif = true; }
+    if(modif){ res.vehicules++; marquerVehiculeModifie(v.id);
+      ajouterCommentaireSysteme(v, '&#x1F517; Regroupement client (direction) : '+ancien+' -> '+v.client+(v.horsForfait?' (hors forfait)':''), qui); }
+  });
+  // Factures forfait sous un autre nom : nom + cle de mois + liens bancaires reecrits
+  FORFAIT_FACTURES.forEach(function(f){
+    if(hfNorm(f.client)!==cle || f.client===canon) return;
+    var old = f.client, oldPk = f.periodeKey, newPk = oldPk;
+    if(oldPk && oldPk.slice(-(old.length+1))==='-'+old) newPk = oldPk.slice(0, oldPk.length-old.length) + canon;
+    if(newPk!==oldPk && FORFAIT_FACTURES.some(function(z){ return z!==f && z.periodeKey===newPk; })) return;   // mois deja facture sous le bon nom : on ne touche pas
+    var oldRef = refKeyFacture('forfait', oldPk+'::'+old), newRef = refKeyFacture('forfait', newPk+'::'+canon);
+    ENGAGEMENTS_BANCAIRES.forEach(function(e){ (e.facturesLiees||[]).forEach(function(l){ if(l.refKey===oldRef){ l.refKey=newRef; l.periodeKey=newPk; l.client=canon; } }); });
+    f.client = canon; f.periodeKey = newPk; res.forfaits++;
+  });
+  // Parametrage forfait et delai de paiement
+  if(!FORFAITS_CLIENTS.some(function(fc){ return fc.client===canon; })){
+    var fc0 = FORFAITS_CLIENTS.find(function(fc){ return hfNorm(fc.client)===cle; }); if(fc0) fc0.client = canon;
+  }
+  Object.keys(CLIENT_DELAIS_PAIEMENT).forEach(function(n){
+    if(n!==canon && hfNorm(n)===cle && typeof CLIENT_DELAIS_PAIEMENT[canon]!=='number') CLIENT_DELAIS_PAIEMENT[canon] = CLIENT_DELAIS_PAIEMENT[n];
+  });
+  saveV(); saveForfaitFactures(); saveForfaitsClients(); saveEngagementsBancaires(); saveClientDelaisPaiement();
+  return res;
 }
 function htmlHorsForfaitARegulariser(){
   if(currentRole!=='direction') return '';
@@ -3627,7 +3705,7 @@ function htmlHorsForfaitARegulariser(){
 }
 function estHorsForfait(v){
   if(!v || v.typeClient === 'forfait' || estDossierAssurance(v)) return false;
-  return v.horsForfait === true || /\(\s*hors\s*forfait\s*\)/i.test(String(v.client || ''));
+  return v.horsForfait === true || HF_RE.test(String(v.client || ''));
 }
 function assuranceBadge(v){
   return (estDossierAssurance(v) ? ' <span class="badge b-teal" title="Dossier assurance">&#x1F6E1; Assurance</span>' : '')
@@ -10700,7 +10778,6 @@ function pageFacturationEcheances(){
   html += kpi('Non echues', totalNonEchues?totalNonEchues.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', 'blue');
   html += '</div>';
 
-  html += htmlHorsForfaitARegulariser();   // HORS FORFAIT v.6
   html += rendreQuatreTableauxParClient(dossiersUnifies, 'echeances');
   html += htmlModalStatutFacturesClient();
   return html;
@@ -12801,7 +12878,8 @@ function creancesParClient(dossiers, enCoursNonFactures){
 // NON totalement payees (devis + forfait), avec impression/export Excel
 // des factures deja deposees.
 function htmlBarreRechercheClientFacturation(){
-  var html = '<div style="position:relative;margin-bottom:16px">';
+  var html = htmlNomsClientDoublons();   // v.8
+  html += '<div style="position:relative;margin-bottom:16px">';
   html += '<div class="card" style="padding:10px 14px">';
   html += '<input class="inp" id="rechercheClientFacturation" placeholder="Rechercher un client..." oninput="rechercherClientFacturation(this.value)" autocomplete="off">';
   html += '</div>';
@@ -30392,7 +30470,7 @@ function openDet(id){
         // HORS FORFAIT v.6 : bascule directe forfait <-> hors forfait (client forfait uniquement)
         if(clientEstForfait(v.client)){
           if(v.typeClient!=='forfait'){
-            var suffixeHF = /\(\s*hors\s*forfait\s*\)/i.test(String(v.client||''));
+            var suffixeHF = HF_RE.test(String(v.client||''));
             if(suffixeHF || v.horsForfait!==true) b += '<button class="btn btn-sm" style="color:#854F0B;border-color:#E8A44A" onclick="basculerHorsForfaitById(this)" data-sens="hf" data-vid="'+v.id+'">'+(suffixeHF?'Rattacher a '+nomClientForfait(v.client)+' (hors forfait)':'Classer hors forfait')+'</button>';
             b += '<button class="btn btn-sm" style="color:#534AB7;border-color:#B8B2E8" onclick="basculerHorsForfaitById(this)" data-sens="forfait" data-vid="'+v.id+'">Remettre dans le forfait</button>';
           } else {
