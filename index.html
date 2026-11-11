@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-10.8';
+var GOS_VERSION = '2026-11-11.9';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -23100,6 +23100,15 @@ function gosHashCourt(t){
   for(var i = 0; i < t.length; i++){ var c = t.charCodeAt(i); h1 = (h1 * 33) ^ c; h2 = (h2 * 33) ^ c; }
   return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36).slice(0, 3);
 }
+// v.9 : retrouve une ligne par son identifiant ; si l'objet a ete remplace par la version du
+// serveur entre-temps (synchro) sans identifiant, on les regenere (deterministes) et on reessaie.
+function trouverLigneChiffrage(v, lid){
+  if(!v || !v.chiffrage || !v.chiffrage.lignes || !lid || lid==='undefined') return null;
+  var f = function(){ return v.chiffrage.lignes.find(function(x){ return x.devisId===lid || x.libreId===lid; }); };
+  var cl = f();
+  if(!cl && garantirIdsLignesChiffrage(v)) cl = f();
+  return cl || null;
+}
 function garantirIdsLignesChiffrage(v){
   if(!v || !v.chiffrage || !v.chiffrage.lignes) return false;
   var vus = {}, change = false;
@@ -23273,6 +23282,10 @@ function renderChiffrageSection(v){
       if(existing.qte === undefined || existing.qte === null || existing.qte === '') existing.qte = (parseInt(dl.qte,10)||1);
     }
   });
+  // v.9 : les lignes qui viennent d'etre creees ci-dessus n'avaient pas encore d'identifiant
+  // (garantirIdsLignesChiffrage est passe AVANT) -> champs « data-clid=undefined », prix saisis
+  // perdus, totaux a 0 et « Saisissez au moins un prix » au moment de valider.
+  if(garantirIdsLignesChiffrage(v)) saveV();
 
   // Construire le menu déroulant fournisseurs
   var fournOpts = '<option value="">-- Fournisseur</option>';
@@ -23905,7 +23918,7 @@ function commiterSaisiesChiffrage(){
       // valeur part des la selection — elle n'est jamais en retard.
       if(champ === 'source' || champ === 'stockArticleId') continue;
       var lid = el.getAttribute(jeu[1]);
-      var cl = v.chiffrage.lignes.find(function(x){ return x.devisId === lid || x.libreId === lid; });
+      var cl = trouverLigneChiffrage(v, lid);
       // Identifiant inconnu de ce chiffrage (champ d'un devis complementaire,
       // par exemple) : on n'y touche pas.
       if(!cl) continue;
@@ -23932,7 +23945,7 @@ function updateChiffrageLigne(lineId, field, val){
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v || !v.chiffrage) return;
   // Chercher par devisId OU libreId
-  var cl = v.chiffrage.lignes.find(function(x){return x.devisId===lineId || x.libreId===lineId;});
+  var cl = trouverLigneChiffrage(v, lineId);
   if(!cl) return;
   // C-09 v12 : etat AVANT modification, pour savoir si un montant deja valide change.
   var CHAMPS_MONTANT = ['prixAchat','prixVente','qte','remise'];
@@ -24041,7 +24054,7 @@ function toggleDiffereChiffrageLigne(el){
     return;
   }
   var lid = el.getAttribute('data-lid');
-  var cl = v.chiffrage.lignes.find(function(x){return x.devisId===lid || x.libreId===lid;});
+  var cl = trouverLigneChiffrage(v, lid);
   if(!cl) return;
   cl.differe = el.checked;
   // Une piece mise de cote alors qu'elle avait deja ete validee (direction)
@@ -24671,7 +24684,7 @@ function setSourceFinancement(sel){
   var val = sel.value;
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   if(!v || !v.chiffrage) return;
-  var cl = v.chiffrage.lignes.find(function(x){return x.devisId===lid||x.libreId===lid;});
+  var cl = trouverLigneChiffrage(v, lid);
   if(cl){ cl.sourceFinancement=val; saveV(); }
 }
 
@@ -31624,7 +31637,7 @@ function afficherAutocompletePiece(inp, lid){
 
   var v = vehicles.find(function(x){return x.id===detCurrentVid;});
   var cl = (v && v.chiffrage && v.chiffrage.lignes)
-    ? v.chiffrage.lignes.find(function(x){return x.devisId===lid || x.libreId===lid;}) : null;
+    ? trouverLigneChiffrage(v, lid) : null;
 
   // ── Source STOCK : proposer les articles reellement disponibles ──
   if(cl && cl.source === 'stock'){
