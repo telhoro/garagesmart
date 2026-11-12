@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-11.9';
+var GOS_VERSION = '2026-11-12.10';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -10619,9 +10619,14 @@ function collecterFacturesNonDeposees(){
     if(LIV_ST.indexOf(v.status)<0) return; // pas encore arrive au stade facturation : pas pertinent ici
     var dateRef = v.chiffrage.valideDirLe || v.chiffrage.soumisLe || v.entree || 0;
     var jours = dateRef ? Math.floor((maintenant-dateRef)/86400000) : 0;
+    // v.10 : l'acompte (et tout versement deja recu) se deduit du reste du, meme avant le depot
+    var dejaPayeND = parseFloat(v.montantPaye)||0;
+    var resteND = montantFacture - dejaPayeND;
+    if(resteND<=0) return;
     items.push({
       type:'devis', nom:payeurDossier(v), label:v.immat+' '+(v.marque||'')+' '+(v.modele||''),   // PAYEUR
-      montant:montantFacture, depuis:jours+' jour'+(jours>1?'s':''), vid:v.id, periodeKey:null,
+      montantFacture:montantFacture, montantPaye:dejaPayeND, acompte:acomptesRecus(v),
+      montant:resteND, depuis:jours+' jour'+(jours>1?'s':''), vid:v.id, periodeKey:null,
       numeroFactureExterne:v.numeroFactureExterne||'', entite:v.entite||'Particulier'
     });
   });
@@ -10690,7 +10695,7 @@ function pageFacturationEcheances(){
     }
     dossiersUnifies.push({
       id: it.vid, client: it.nom, immat: immat, marque: marque, modele: modele,
-      resteARecouvrir: it.montant, montantFacture: it.montant,
+      resteARecouvrir: it.montant, montantFacture: it.montantFacture || it.montant, acompte: it.acompte || 0,
       factureDeposee: false, dateEcheance: 0, enRetard: false, statut: 'attente_depot',
       isForfaitFacture: it.type==='forfait', periodeKey: it.periodeKey,
       numeroFactureExterne: it.numeroFactureExterne||'', numeroSecondaire: ''
@@ -10698,6 +10703,9 @@ function pageFacturationEcheances(){
   });
 
   var maintenantEch = Date.now();
+  // v.10 : un dossier livre mais pas encore depose est deja dans « non deposees » ci-dessus ;
+  // le reprendre ici le comptait une 2e fois (dans « Non echues », marque a tort comme depose).
+  encaissements = encaissements.filter(function(it){ return it.categorieClient!=='devis' || it.factureDeposee; });
   encaissements.forEach(function(it){
     var v = it.vid ? vehicles.find(function(x){return x.id===it.vid;}) : null;
     var delaiJoursIt = it.dateDepot ? Math.floor((maintenantEch-it.dateDepot)/86400000) : null;
@@ -10712,7 +10720,7 @@ function pageFacturationEcheances(){
       id: it.vid, client: it.nom, immat: it.immat||'', marque: it.marque||'', modele: it.modele||'',
       resteARecouvrir: it.montant, montantFacture: it.montant,
       factureDeposee: true, dateEcheance: it.dateEcheance, enRetard: it.enRetard,
-      dateDepot: it.dateDepot||null, delaiJours: delaiJoursIt,
+      dateDepot: it.dateDepot||null, delaiJours: delaiJoursIt, acompte: v ? acomptesRecus(v) : 0,
       statut: it.enRetard ? 'retard' : 'en_attente',
       isForfaitFacture: estForfaitIt, periodeKey: it.periodeKey,
       numeroFactureExterne: estForfaitIt ? (refForfaitIt?refForfaitIt.numeroFactureExterne:'')||'' : (v ? (v.numeroFactureExterne||'') : ''),
