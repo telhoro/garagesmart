@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-12.11';
+var GOS_VERSION = '2026-11-12.13';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -13348,7 +13348,8 @@ function traiterClientForfaitExposition(client){
   var engageParMois = {}, dossiersParMois = {};
 
   var cleCF = hfNorm(client);   // v.11 : KAYDAN = Kaydan
-  vehicles.filter(function(v){return hfNorm(v.client)===cleCF && v.typeClient==='forfait' && !estDossierAssurance(v);})   // EXPOSITION COHERENTE + PAYEUR (assurance : chez l'assureur) : aussi sans piece (depenses Caisse)
+  var _ordreStF = Object.keys(STATUSES), _iValFinF = _ordreStF.indexOf('valide_fin');
+  vehicles.filter(function(v){return hfNorm(v.client)===cleCF && v.typeClient==='forfait' && !estDossierAssurance(v) && !(v.isDevisCompl && _ordreStF.indexOf(v.status) < _iValFinF);})   // EXPOSITION COHERENTE + PAYEUR (assurance : chez l'assureur) : aussi sans piece (depenses Caisse)
     .forEach(function(v){
       // Meme regle que pour les devis : seules les pieces dont l'achat a
       // ete valide (cl.valideDir) representent un engagement financier
@@ -13428,8 +13429,36 @@ function collecterExpositionFinanciere(){
   var buckets = {};
   var totalEngageGlobal = 0;
 
-  // ── DEVIS : inchange, par dossier ──
-  vehicles.filter(function(v){return v.typeClient!=='forfait' || estDossierAssurance(v);}).forEach(function(v){   // EXPOSITION COHERENTE + PAYEUR : aussi sans piece (depenses Caisse)
+  // v.12 : un acompte verse sur le dossier principal couvre aussi ses devis complementaires
+  // (meme vehicule, meme client). On calcule d'abord, par famille, le trop-percu de chaque
+  // dossier, puis on l'impute aux dossiers de la famille encore exposes.
+  var _expoBase = {}, _surplusFamille = {};
+  // v.13 : un devis complementaire n'entre dans l'exposition qu'apres la validation
+  // financiere (le client peut encore le refuser avant).
+  var _ordreSt = Object.keys(STATUSES), _iValFin = _ordreSt.indexOf('valide_fin');
+  function _dcPasEncoreValide(v){ return !!(v && v.isDevisCompl && _ordreSt.indexOf(v.status) < _iValFin); }
+  function _familleExpo(v){ return (v.isDevisCompl && v.parentId) ? v.parentId : v.id; }
+  function _baseExpo(v){
+    var lg = ((v.chiffrage && v.chiffrage.lignes) || []).filter(function(cl){return (cl.piece||'').trim() && cl.valideDir===true && !cl.differe;});
+    var eng = lg.reduce(function(s,cl){return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1);},0)
+      + CAISSE_MOUVEMENTS.filter(function(m){return m.type==='sortie' && m.vehiculeId===v.id;}).reduce(function(s,m){return s+(parseFloat(m.montant)||0);},0);
+    var rec = eng;
+    if(LIV_ST.indexOf(v.status) >= 0){
+      var ff = ((v.chiffrage && v.chiffrage.lignes) || []).filter(function(cl){return (cl.piece||'').trim() && !cl.differe;}).reduce(function(s,cl){return s+montantChiffrageLigne(cl);},0);
+      if(ff > 0) rec = Math.min(eng, ff);
+    }
+    var paye = parseFloat(v.montantPaye)||0;
+    if(v.paiementStatut==='paye' && v.paiementDate) paye = Math.max(paye, rec);
+    return {engage:eng, recuperable:rec, paye:paye};
+  }
+  vehicles.filter(function(v){return v && (v.typeClient!=='forfait' || estDossierAssurance(v)) && !_dcPasEncoreValide(v);}).forEach(function(v){
+    var b = _baseExpo(v); _expoBase[v.id] = b;
+    var f = _familleExpo(v);
+    _surplusFamille[f] = (_surplusFamille[f]||0) + Math.max(0, b.paye - b.recuperable);
+  });
+
+  // ── DEVIS : par dossier ──
+  vehicles.filter(function(v){return (v.typeClient!=='forfait' || estDossierAssurance(v)) && !_dcPasEncoreValide(v);}).forEach(function(v){   // EXPOSITION COHERENTE + PAYEUR : aussi sans piece (depenses Caisse) ; v.13 DC non valide exclu
     // Seules les pieces dont l'ACHAT A ETE VALIDE par Direction (cl.valideDir)
     // representent un vrai engagement financier reel — une piece juste
     // presente dans le chiffrage mais jamais validee n'a pas encore ete
@@ -13456,6 +13485,13 @@ function collecterExpositionFinanciere(){
       if(factureFinale > 0) recuperable = Math.min(montantEngage, factureFinale);
     }
     var montantExpose = Math.max(0, recuperable - montantPaye);
+    // v.12 : imputer le trop-percu des autres dossiers de la meme famille
+    var creditFamille = 0, famE = _familleExpo(v);
+    if(montantExpose > 0 && _surplusFamille[famE] > 0){
+      creditFamille = Math.min(montantExpose, _surplusFamille[famE]);
+      _surplusFamille[famE] -= creditFamille;
+      montantExpose -= creditFamille;
+    }
     if(montantExpose<=0) return;
 
     totalEngageGlobal += montantEngage;
@@ -13470,7 +13506,7 @@ function collecterExpositionFinanciere(){
     buckets[cleP].dossiers.push({
       id:v.id, immat:v.immat, marque:v.marque, modele:v.modele, entite:v.entite,
       dateOuverture:dateOuverture, dateEngagement:dateEngagement, montantFacture:montantFacture, montantEngage:montantEngage,   // TRESORERIE PAR TYPE
-      montantPaye:(montantPaye===Infinity?montantFacture:montantPaye), montantExpose:montantExpose, margePrevisionnelle:margePrevisionnelle,
+      montantPaye:(montantPaye===Infinity?montantFacture:montantPaye), creditFamille:creditFamille, montantExpose:montantExpose, margePrevisionnelle:margePrevisionnelle,
       joursExposition:joursExposition
     });
     buckets[cleP].totalExpose += montantExpose;
@@ -13566,7 +13602,8 @@ function pageExpositionFinanciere(){
       html += '<tr style="background:#faf9f7"><td colspan="8" style="padding:6px 10px 10px 24px" class="xs muted">';
       html += (c.type==='forfait' ? d.immat+' '+(d.marque||'')+' '+(d.modele||'') : (d.entite||'')+' — '+d.immat+' '+(d.marque||'')+' '+(d.modele||''));
       html += ' &middot; Ouvert le '+dateOuvTxt;
-      if(c.type!=='forfait') html += ' &middot; Avance client : '+d.montantPaye.toLocaleString('fr-FR', GOS_FMT0)+' FCFA';
+      if(c.type!=='forfait') html += ' &middot; Avance client : '+d.montantPaye.toLocaleString('fr-FR', GOS_FMT0)+' FCFA'
+        + (d.creditFamille>0 ? ' &middot; Acompte du dossier principal impute : '+Math.round(d.creditFamille).toLocaleString('fr-FR', GOS_FMT0)+' FCFA' : '');
       html += ' &middot; Expose depuis '+joursExpo+' j';
       html += '</td></tr>';
     } else {
