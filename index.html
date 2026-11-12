@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-12.10';
+var GOS_VERSION = '2026-11-12.11';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -13347,7 +13347,8 @@ function traiterClientForfaitExposition(client){
   var maintenant = Date.now();
   var engageParMois = {}, dossiersParMois = {};
 
-  vehicles.filter(function(v){return v.client===client && v.typeClient==='forfait' && !estDossierAssurance(v);})   // EXPOSITION COHERENTE + PAYEUR (assurance : chez l'assureur) : aussi sans piece (depenses Caisse)
+  var cleCF = hfNorm(client);   // v.11 : KAYDAN = Kaydan
+  vehicles.filter(function(v){return hfNorm(v.client)===cleCF && v.typeClient==='forfait' && !estDossierAssurance(v);})   // EXPOSITION COHERENTE + PAYEUR (assurance : chez l'assureur) : aussi sans piece (depenses Caisse)
     .forEach(function(v){
       // Meme regle que pour les devis : seules les pieces dont l'achat a
       // ete valide (cl.valideDir) representent un engagement financier
@@ -13369,10 +13370,13 @@ function traiterClientForfaitExposition(client){
     });
 
   var payeParMois = {};
-  FORFAIT_FACTURES.filter(function(f){return f.client===client;}).forEach(function(f){
+  FORFAIT_FACTURES.filter(function(f){return hfNorm(f.client)===cleCF;}).forEach(function(f){
     var parts = (f.periodeKey||'').split('-');
     var moisKey = parts[0]+'-'+parts[1];
-    payeParMois[moisKey] = (payeParMois[moisKey]||0) + (f.montantPaye||0);
+    // v.11 : facture marquee payee sans montant detaille = montant de la facture
+    var payeF = parseFloat(f.montantPaye)||0;
+    if(f.statut==='payee' && payeF<=0) payeF = parseFloat(f.montant)||0;
+    payeParMois[moisKey] = (payeParMois[moisKey]||0) + payeF;
   });
 
   var ledger = calculerLedgerForfaitClient(engageParMois, payeParMois);
@@ -13440,6 +13444,8 @@ function collecterExpositionFinanciere(){
     var montantEngage = montantEngagePieces + montantEngageCaisse;
     if(!montantEngage) return;
     var montantPaye = parseFloat(v.montantPaye)||0;
+    // v.11 : dossier marque « paye » (anciennes saisies, sans montant detaille) = entierement regle
+    if(v.paiementStatut==='paye' && v.paiementDate) montantPaye = Infinity;
     // EXPOSITION COHERENTE : dossier livre = facture definitive ; on ne peut plus recuperer que
     // le montant facture. Un dossier solde qui a coute plus que facture est une PERTE (visible
     // dans la marge), pas une exposition en attente de remboursement.
@@ -13464,7 +13470,7 @@ function collecterExpositionFinanciere(){
     buckets[cleP].dossiers.push({
       id:v.id, immat:v.immat, marque:v.marque, modele:v.modele, entite:v.entite,
       dateOuverture:dateOuverture, dateEngagement:dateEngagement, montantFacture:montantFacture, montantEngage:montantEngage,   // TRESORERIE PAR TYPE
-      montantPaye:montantPaye, montantExpose:montantExpose, margePrevisionnelle:margePrevisionnelle,
+      montantPaye:(montantPaye===Infinity?montantFacture:montantPaye), montantExpose:montantExpose, margePrevisionnelle:margePrevisionnelle,
       joursExposition:joursExposition
     });
     buckets[cleP].totalExpose += montantExpose;
@@ -13479,7 +13485,9 @@ function collecterExpositionFinanciere(){
 
   // ── FORFAIT : grand livre chronologique, un traitement par client ──
   var clientsForfait = {};
-  vehicles.filter(function(v){return v.typeClient==='forfait';}).forEach(function(v){ clientsForfait[v.client]=true; });
+  var clesVuesF = {};
+  vehicles.filter(function(v){return v.typeClient==='forfait' && !estDossierAssurance(v);}).forEach(function(v){
+    var k = hfNorm(v.client); if(clesVuesF[k]) return; clesVuesF[k] = true; clientsForfait[nomClientForfait(v.client)||v.client]=true; });   // v.11 : un seul calcul par client
   Object.keys(clientsForfait).forEach(function(client){
     var resultat = traiterClientForfaitExposition(client);
     if(!resultat) return;
@@ -14928,11 +14936,13 @@ function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
   // 53M au total ne fait que ~5.7%).
   var tauxEncaissement = (encaisseRealise+totalAttendu)>0 ? (encaisseRealise/(encaisseRealise+totalAttendu)*100) : null;
 
-  var expositionTotale = 0;
+  var expositionTotale = 0, expositionDevis = 0, expositionForfait = 0;
   (function(){
     var collecteExpo = collecterExpositionFinanciere();
     Object.keys(collecteExpo.buckets).forEach(function(k){
-      expositionTotale += collecteExpo.buckets[k].totalExpose;
+      var b = collecteExpo.buckets[k];
+      expositionTotale += b.totalExpose;
+      if(b.type==='forfait') expositionForfait += b.totalExpose; else expositionDevis += b.totalExpose;
     });
   })();
 
@@ -15004,7 +15014,7 @@ function calculerKPIsDashboardComplet(bornesActivite, bornesTreso){
     chargesFixesPayees:detailChargesFixes.paye, chargesFixesNonPayees:detailChargesFixes.prevuNonPaye,
     resultatOperationnel:resultatOperationnel, margeOperationnelle:margeOperationnelle,
     totalAttendu:totalAttendu, attenduDevis:attenduDevis, attenduForfait:attenduForfait,
-    encaisseRealise:encaisseRealise, tauxEncaissement:tauxEncaissement, expositionTotale:expositionTotale,
+    encaisseRealise:encaisseRealise, tauxEncaissement:tauxEncaissement, expositionTotale:expositionTotale, expositionDevis:expositionDevis, expositionForfait:expositionForfait,
     totalEcheancesPeriode:totalEcheancesPeriode, echFourn:echFourn, echCharges:echCharges, echEngag:echEngag,
     factEnRetard:factEnRetard, prochainesEcheances:toutesEcheances.slice(0,6)
   };
@@ -15139,7 +15149,9 @@ function pageFinancesDashboard(){
   html += '<div class="card" style="padding:13px 15px;'+(expositionTotale>0?'background:#FCEBEB':'')+'">';
   html += '<div class="xs" style="margin-bottom:6px;color:'+(expositionTotale>0?'#A32D2D':'#999')+'">Exposition financiere</div>';
   html += '<div style="font-size:19px;font-weight:700;color:'+(expositionTotale>0?'#A32D2D':'#3B6D11')+';margin-bottom:8px">'+(expositionTotale?expositionTotale.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—')+'</div>';
-  html += '<div class="xs" style="color:'+(expositionTotale>0?'#A32D2D':'#999')+';opacity:.85">Engage non couvert par l\'encaisse</div>';
+  html += '<div class="xs" style="color:'+(expositionTotale>0?'#A32D2D':'#999')+';opacity:.85">Cout des pieces engagees, pas encore couvert par les reglements</div>';
+  if(expositionTotale>0) html += '<div class="xs" style="margin-top:6px;color:#A32D2D">Devis / assurance : <b>'+Math.round(K.expositionDevis||0).toLocaleString('fr-FR', GOS_FMT0)+'</b><br>Forfaits : <b>'+Math.round(K.expositionForfait||0).toLocaleString('fr-FR', GOS_FMT0)+'</b></div>'
+    + '<div class="xs" style="margin-top:4px"><a href="#" style="color:#A32D2D" onclick="event.preventDefault();facturationOnglet=\'exposition\';navigate(\'facturation\')">Voir le detail par client &rsaquo;</a></div>';
   html += '</div>';
   html += bloc('Echeances de la periode', totalEcheancesPeriode?totalEcheancesPeriode.toLocaleString('fr-FR', GOS_FMT0)+' FCFA':'—', '#854F0B', [
     {label:'Fournisseurs', value:echFourn?echFourn.toLocaleString('fr-FR', GOS_FMT0):'—'},
