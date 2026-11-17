@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-12.13';
+var GOS_VERSION = '2026-11-17.15';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -10590,6 +10590,141 @@ function analysePiecesVehicules(lignes){
 // recalcules a partir de fonctions de collecte deja existantes.
 var facturationOnglet = 'echeances'; // 'devis','forfait','echeances' — 'echeances' par defaut : vue transversale des factures a traiter
 
+// ══ DEVIS EN COURS (17/11/2026, v.14-15) : CA theorique des devis dont le chiffrage est termine ══
+// Dossiers devis / hors forfait / assurance (pas le forfait pur, couvert par l'abonnement),
+// chiffrage termine mais pas encore livres (ensuite ils comptent dans le CA reel).
+// v.15 : regroupement par client (fleche depliante), barre de recherche, sans veille/differes.
+var devisEnCoursEtape = 'tous';   // 'tous','attente','accepte'
+var devisEnCoursTri = 'montant';  // 'montant','anciennete','client'
+var devisEnCoursRecherche = '';
+var devisEnCoursOuverts = {};
+var DEC_ETAPES = {
+  attente: {l:'En attente de l\'accord client', c:'#854F0B', bg:'#FDF3E3', st:['devis_termine','devis_envoye','modifier_devis','prospect','prospect_envoye']},
+  accepte: {l:'Accepte — en cours de realisation', c:'#3B6D11', bg:'#EAF3DE', st:['accord_client','attente_fin','valide_fin','attente_appro','pieces_commande','appro_en_cours','pieces_partiel','pieces_livrees','travaux_attente','travaux_cours','travaux_termines','en_test','attente_valid_chef','reprise_demandee','vehicule_termine','en_lavage','client_contacte','attente_client','en_cours_livraison','facture_emettre','facture_emise']}
+};
+function decEtape(v){
+  for(var k in DEC_ETAPES){ if(DEC_ETAPES[k].st.indexOf(v.status)>=0) return k; }
+  return null;
+}
+function collecterDevisEnCours(){
+  var res = [];
+  vehicles.forEach(function(v){
+    if(!v || v.archive || chiffrageSurPrixAchat(v)) return;
+    if(v.isProspect && v.prospectStatut==='archive') return;
+    var et = decEtape(v); if(!et) return;
+    var lg = ((v.chiffrage && v.chiffrage.lignes) || []).filter(function(cl){ return (cl.piece||'').trim() && !cl.differe; });
+    var montant = lg.reduce(function(s,cl){ return s+montantChiffrageLigne(cl); },0);
+    if(montant<=0) return;
+    var cout = lg.reduce(function(s,cl){ return s+(parseFloat(cl.prixAchat)||0)*(parseInt(cl.qte)||1); },0);
+    var depuis = v.stepStart || (v.chiffrage && (v.chiffrage.valideDirLe||v.chiffrage.soumisLe)) || v.entree || Date.now();
+    res.push({v:v, etape:et, montant:montant, cout:cout, marge:montant-cout, acompte:parseFloat(v.montantPaye)||0,
+      payeur:payeurDossier(v), jours:Math.max(0,Math.floor((Date.now()-depuis)/86400000))});
+  });
+  return res;
+}
+function setDevisEnCoursEtapeByEl(el){ devisEnCoursEtape = el.getAttribute('data-e'); renderPage(); }
+function setDevisEnCoursTri(val){ devisEnCoursTri = val; renderPage(); }
+function basculerDevisEnCoursClient(el){
+  var k = decodeURIComponent(el.getAttribute('data-k'));
+  devisEnCoursOuverts[k] = !devisEnCoursOuverts[k]; renderPage();
+}
+function toutDeplierDevisEnCours(ouvrir){
+  devisEnCoursOuverts = {};
+  if(ouvrir) collecterDevisEnCours().forEach(function(d){ devisEnCoursOuverts[d.payeur] = true; });
+  renderPage();
+}
+function rechercherDevisEnCours(el){
+  devisEnCoursRecherche = el.value; var pos = el.selectionStart;
+  renderPage();
+  setTimeout(function(){ var i = document.getElementById('decRecherche'); if(i){ i.focus(); try{ i.setSelectionRange(pos,pos); }catch(e){} } }, 0);
+}
+function pageDevisEnCours(){
+  var tous = collecterDevisEnCours();
+  var fmt = function(n){ return Math.round(n||0).toLocaleString('fr-FR', GOS_FMT0); };
+  var tot = {attente:{n:0,m:0,c:0}, accepte:{n:0,m:0,c:0}};
+  tous.forEach(function(d){ var t=tot[d.etape]; t.n++; t.m+=d.montant; t.c+=d.cout; });
+  var caTheo = tot.attente.m + tot.accepte.m, coutTheo = tot.attente.c + tot.accepte.c;
+  var html = '';
+  html += '<div class="xs muted" style="margin-bottom:10px">Dossiers devis (y compris hors forfait et assurance) dont le chiffrage est termine, pas encore livres. Montants au prix de vente, hors pieces mises de cote. Une fois livres, ils passent dans le CA reel.</div>';
+  html += '<div class="kgrid k4" style="margin-bottom:16px">';
+  function kp(titre, val, coul, sous){ return '<div class="card" style="padding:13px 15px"><div class="xs muted" style="margin-bottom:6px">'+titre+'</div><div style="font-size:19px;font-weight:700;color:'+coul+'">'+val+'</div><div class="xs muted" style="margin-top:6px">'+sous+'</div></div>'; }
+  html += kp('CA theorique en cours', fmt(caTheo)+' FCFA', '#185FA5', (tot.attente.n+tot.accepte.n)+' dossier(s)');
+  html += kp('Accepte — en realisation', fmt(tot.accepte.m)+' FCFA', '#3B6D11', tot.accepte.n+' dossier(s)');
+  html += kp('En attente accord client', fmt(tot.attente.m)+' FCFA', '#854F0B', tot.attente.n+' dossier(s)');
+  html += kp('Marge previsionnelle', fmt(caTheo-coutTheo)+' FCFA', (caTheo-coutTheo)>=0?'#3B6D11':'#A32D2D', caTheo>0?((caTheo-coutTheo)/caTheo*100).toFixed(1)+'% du CA theorique':'—');
+  html += '</div>';
+  // recherche + filtres
+  html += '<input id="decRecherche" class="inp" style="margin-bottom:10px" placeholder="&#x1F50D; Rechercher un client, une immatriculation, une marque..." value="'+String(devisEnCoursRecherche).replace(/"/g,'&quot;')+'" oninput="rechercherDevisEnCours(this)">';
+  html += '<div class="flex gap6" style="margin-bottom:12px;flex-wrap:wrap;align-items:center">';
+  [['tous','Tous'],['accepte','Acceptes'],['attente','En attente accord']].forEach(function(o){
+    html += '<button class="btn btn-sm'+(devisEnCoursEtape===o[0]?' btn-primary':'')+'" data-e="'+o[0]+'" onclick="setDevisEnCoursEtapeByEl(this)">'+o[1]+'</button>';
+  });
+  html += '<button class="btn btn-sm" onclick="toutDeplierDevisEnCours(true)">Tout deplier</button><button class="btn btn-sm" onclick="toutDeplierDevisEnCours(false)">Tout replier</button>';
+  html += '<span class="xs muted" style="margin-left:auto">Trier par</span><select class="inp" style="width:auto;padding:4px 8px" onchange="setDevisEnCoursTri(this.value)">';
+  [['montant','Montant'],['anciennete','Anciennete'],['client','Client']].forEach(function(o){ html += '<option value="'+o[0]+'"'+(devisEnCoursTri===o[0]?' selected':'')+'>'+o[1]+'</option>'; });
+  html += '</select></div>';
+  var q = String(devisEnCoursRecherche||'').trim().toLowerCase();
+  var liste = tous.filter(function(d){
+    if(devisEnCoursEtape!=='tous' && d.etape!==devisEnCoursEtape) return false;
+    if(!q) return true;
+    var v = d.v;
+    return [d.payeur, v.client, v.immat, (v.immat||'').replace(/[-\s]/g,''), v.marque, v.modele].join(' ').toLowerCase().indexOf(q) >= 0;
+  });
+  if(!liste.length) return html + '<div class="card muted" style="padding:20px;text-align:center">Aucun devis'+(q?' pour « '+devisEnCoursRecherche+' »':' dans cette categorie')+'.</div>';
+  // regroupement par client
+  var grp = {};
+  liste.forEach(function(d){
+    if(!grp[d.payeur]) grp[d.payeur] = {nom:d.payeur, ds:[], m:0, c:0, a:0, j:0};
+    var g = grp[d.payeur]; g.ds.push(d); g.m += d.montant; g.c += d.cout; g.a += d.acompte; g.j = Math.max(g.j, d.jours);
+  });
+  var tri = function(a,b){
+    if(devisEnCoursTri==='anciennete') return b.jours!==undefined ? (b.jours-a.jours) : 0;
+    if(devisEnCoursTri==='client') return String(a.nom||a.payeur).localeCompare(String(b.nom||b.payeur),'fr');
+    return (b.m!==undefined?b.m-a.m:b.montant-a.montant);
+  };
+  var groupes = Object.keys(grp).map(function(k){ return grp[k]; });
+  groupes.forEach(function(g){ g.ds.sort(function(a,b){ return devisEnCoursTri==='anciennete' ? b.jours-a.jours : b.montant-a.montant; }); });
+  groupes.sort(function(a,b){
+    if(devisEnCoursTri==='anciennete') return b.j-a.j;
+    if(devisEnCoursTri==='client') return String(a.nom).localeCompare(String(b.nom),'fr');
+    return b.m-a.m;
+  });
+  var sm = liste.reduce(function(s,d){return s+d.montant;},0), sc = liste.reduce(function(s,d){return s+d.cout;},0);
+  html += '<div class="card"><div class="tw"><table><thead><tr><th>Client / vehicule</th><th>Etape</th><th style="text-align:right">Depuis</th><th style="text-align:right">Montant devis</th><th style="text-align:right">Cout pieces</th><th style="text-align:right">Marge</th><th style="text-align:right">Acompte</th><th></th></tr></thead><tbody>';
+  function ligneDossier(d, indent){
+    var v = d.v, E = DEC_ETAPES[d.etape];
+    var tags = (v.isDevisCompl?' <span class="badge" style="background:#FDF3E3;color:#854F0B">Devis compl.</span>':'')
+      + (v.isProspect?' <span class="badge" style="background:#F1EFE8;color:#666">Prospect</span>':'')
+      + (estHorsForfait(v)?' <span class="badge" style="background:#FDF3E3;color:#854F0B">Hors forfait</span>':'')
+      + (estDossierAssurance(v)?' <span class="badge" style="background:#E1F5EE;color:#1B6E7A">Assurance — vehicule de '+v.client+'</span>':'');
+    return '<tr'+(indent?' style="background:#FBFAF7"':'')+'><td style="'+(indent?'padding-left:34px':'')+'">'
+      + (indent?'':'<div class="xs muted">'+d.payeur+'</div>')
+      + '<strong>'+(v.immat||'—')+'</strong> <span class="xs muted">'+(v.marque||'')+' '+(v.modele||'')+'</span>'+tags+'</td>'
+      + '<td><span class="badge" style="background:'+E.bg+';color:'+E.c+'">'+((STATUSES[v.status]||{l:v.status}).l)+'</span></td>'
+      + '<td class="xs" style="text-align:right">'+d.jours+' j</td>'
+      + '<td style="text-align:right;font-weight:700">'+fmt(d.montant)+'</td>'
+      + '<td class="xs" style="text-align:right">'+fmt(d.cout)+'</td>'
+      + '<td class="xs" style="text-align:right;color:'+(d.marge>=0?'#3B6D11':'#A32D2D')+'">'+fmt(d.marge)+'</td>'
+      + '<td class="xs" style="text-align:right">'+(d.acompte?fmt(d.acompte):'—')+'</td>'
+      + '<td><button class="btn btn-sm" data-vid="'+v.id+'" onclick="openDetById(this)">&#x1F441;</button></td></tr>';
+  }
+  groupes.forEach(function(g){
+    if(g.ds.length===1){ html += ligneDossier(g.ds[0], false); return; }
+    var ouvert = !!devisEnCoursOuverts[g.nom] || !!q;   // recherche active : on deplie
+    var nA = g.ds.filter(function(d){return d.etape==='accepte';}).length, nW = g.ds.length - nA;
+    html += '<tr style="cursor:pointer;background:#F7F6F2" data-k="'+encodeURIComponent(g.nom)+'" onclick="basculerDevisEnCoursClient(this)">'
+      + '<td><span style="display:inline-block;width:16px;color:#185FA5">'+(ouvert?'&#x25BE;':'&#x25B8;')+'</span> <strong>'+g.nom+'</strong> <span class="badge" style="background:#E6F1FB;color:#185FA5">'+g.ds.length+' dossiers</span></td>'
+      + '<td class="xs">'+(nA?'<span style="color:#3B6D11">'+nA+' accepte'+(nA>1?'s':'')+'</span>':'')+(nA&&nW?' · ':'')+(nW?'<span style="color:#854F0B">'+nW+' en attente</span>':'')+'</td>'
+      + '<td class="xs" style="text-align:right">'+g.j+' j</td>'
+      + '<td style="text-align:right;font-weight:700">'+fmt(g.m)+'</td>'
+      + '<td class="xs" style="text-align:right">'+fmt(g.c)+'</td>'
+      + '<td class="xs" style="text-align:right;color:'+((g.m-g.c)>=0?'#3B6D11':'#A32D2D')+'">'+fmt(g.m-g.c)+'</td>'
+      + '<td class="xs" style="text-align:right">'+(g.a?fmt(g.a):'—')+'</td><td></td></tr>';
+    if(ouvert) g.ds.forEach(function(d){ html += ligneDossier(d, true); });
+  });
+  html += '<tr style="background:#EFEDE6;font-weight:700"><td colspan="3">Total ('+groupes.length+' client'+(groupes.length>1?'s':'')+', '+liste.length+' dossier'+(liste.length>1?'s':'')+')</td><td style="text-align:right">'+fmt(sm)+'</td><td style="text-align:right">'+fmt(sc)+'</td><td style="text-align:right">'+fmt(sm-sc)+'</td><td></td><td></td></tr>';
+  return html + '</tbody></table></div></div>';
+}
 function setFacturationOngletByEl(el){ facturationOnglet=el.getAttribute('data-fo'); renderPage(); }
 
 // ── Onglet Echeances : vue transversale devis + forfait par statut de
@@ -11665,6 +11800,7 @@ function pageFacturation(){
   html += '<button class="btn'+(facturationOnglet==='echeances'?' btn-primary':'')+'" data-fo="echeances" onclick="setFacturationOngletByEl(this)">Echeances</button>';
   html += '<button class="btn'+(facturationOnglet==='exposition'?' btn-primary':'')+'" data-fo="exposition" onclick="setFacturationOngletByEl(this)">&#x1F4C9; Exposition financiere</button>';
   html += '<button class="btn'+(facturationOnglet==='bilan'?' btn-primary':'')+'" data-fo="bilan" onclick="setFacturationOngletByEl(this)">&#x1F4CA; Bilan global</button>';
+  html += '<button class="btn'+(facturationOnglet==='devis_en_cours'?' btn-primary':'')+'" data-fo="devis_en_cours" onclick="setFacturationOngletByEl(this)">&#x1F4CB; Devis en cours</button>';
   html += '</div>';
 
   if(facturationOnglet==='forfait'){
@@ -11675,6 +11811,8 @@ function pageFacturation(){
     html += pageExpositionFinanciere();
   } else if(facturationOnglet==='bilan'){
     html += pageBilanGlobal();
+  } else if(facturationOnglet==='devis_en_cours'){
+    html += pageDevisEnCours();
   } else {
     html += pageCreances();
   }
