@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-17.15';
+var GOS_VERSION = '2026-11-18.16';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -943,10 +943,10 @@ var GOS_VERSION = '2026-11-17.15';
   </div>
   <!-- Options -->
   <div style="padding:14px 18px;border-bottom:1px solid #e8e6e1;background:#faf9f7;display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
-    <div><label class="fl" style="margin-bottom:4px">Periode du</label><input class="inp" type="date" id="rapFrom" style="width:140px"></div>
-    <div><label class="fl" style="margin-bottom:4px">au</label><input class="inp" type="date" id="rapTo" style="width:140px"></div>
+    <div><label class="fl" style="margin-bottom:4px">Periode du</label><input class="inp" type="date" id="rapFrom" style="width:140px" onchange="actualiserRapport()"></div>
+    <div><label class="fl" style="margin-bottom:4px">au</label><input class="inp" type="date" id="rapTo" style="width:140px" onchange="actualiserRapport()"></div>
     <div style="display:flex;align-items:center;gap:6px;padding-bottom:2px">
-      <input type="checkbox" id="rapShowTech" checked style="width:15px;height:15px">
+      <input type="checkbox" id="rapShowTech" checked style="width:15px;height:15px" onchange="actualiserRapport()">
       <label for="rapShowTech" style="font-size:12px;cursor:pointer">Afficher les techniciens</label>
     </div>
     <button class="btn btn-primary btn-sm" style="padding:7px 14px" onclick="actualiserRapport()">Actualiser</button>
@@ -34254,7 +34254,7 @@ function genRapportVehiculeHtml(v, showTech){
   h += '<div>Entrée : <strong>'+dateEntree+'</strong></div>';
   h += '<div>Sortie : <strong>'+dateSortie+'</strong></div>';
   if(v.km) h += '<div>Kilométrage : <strong>'+v.km.toLocaleString('fr-FR', GOS_FMT0)+' km</strong></div>';
-  if(showTech!==false && v.technicien) h += '<div>Technicien : <strong>'+v.technicien+'</strong></div>';
+  if(showTech!==false){ var tl = techniciensDossierRapport(v); if(tl.length) h += '<div>Technicien'+(tl.length>1?'s':'')+' : <strong>'+tl.join(', ')+'</strong></div>'; }
   h += '</div></div>';
 
   // Motif et symptômes
@@ -34307,6 +34307,29 @@ function genRapportVehiculeHtml(v, showTech){
   return h;
 }
 
+// v.16 : techniciens d'un dossier (technicien principal + ceux notes dans les interventions)
+function techniciensDossierRapport(v){
+  var vus = {}, l = [];
+  function aj(n){ n = String(n||'').trim(); if(n && !vus[n.toLowerCase()]){ vus[n.toLowerCase()] = 1; l.push(n); } }
+  aj(v.technicien);
+  (v.interventions||[]).forEach(function(it){ (it.techniciens||[]).forEach(aj); });
+  return l;
+}
+// v.16 : filtre de periode (date d'entree) commun aux rapports vehicule et client
+function rapportDansPeriode(d, dateFrom, dateTo){
+  if(!d.entree) return !(dateFrom || dateTo) ? true : false;
+  if(dateFrom && d.entree < new Date(dateFrom+'T00:00:00').getTime()) return false;
+  if(dateTo && d.entree > new Date(dateTo+'T23:59:59').getTime()) return false;
+  return true;
+}
+function rapportLibellePeriode(dateFrom, dateTo){
+  var f = function(x){ return new Date(x+'T12:00:00').toLocaleDateString('fr-FR'); };
+  if(dateFrom && dateTo) return 'Periode du '+f(dateFrom)+' au '+f(dateTo);
+  if(dateFrom) return 'A partir du '+f(dateFrom);
+  if(dateTo) return 'Jusqu\'au '+f(dateTo);
+  return 'Toutes periodes';
+}
+var rapportDernierDossiers = [];   // pour l'export Excel
 function genRapportVehicule(id, dateFrom, dateTo, showTech){
   var vRef = vehicles.find(function(x){return x.id===id;});
   if(!vRef) return '<div>Véhicule introuvable</div>';
@@ -34314,30 +34337,19 @@ function genRapportVehicule(id, dateFrom, dateTo, showTech){
   // Tous les dossiers partageant la meme immatriculation (pas seulement
   // celui ouvert au moment du clic), tries du plus recent au plus ancien.
   var tousDossiers = vehicles.filter(function(x){
-    return !x.isProspect && x.immat && vRef.immat && x.immat.toUpperCase()===vRef.immat.toUpperCase();
+    return !x.isProspect && !x.isDevisCompl && x.immat && vRef.immat && x.immat.toUpperCase()===vRef.immat.toUpperCase();   // v.16 : les DC sont affiches sous leur dossier
   }).sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
 
   // Filtre de periode, applique sur la date d'entree de chaque dossier —
   // un dossier sans date d'entree connue est conserve par prudence.
-  var dossiersFiltres = tousDossiers.filter(function(d){
-    if(!d.entree) return true;
-    if(dateFrom){
-      var deb = new Date(dateFrom).setHours(0,0,0,0);
-      if(d.entree < deb) return false;
-    }
-    if(dateTo){
-      var fin = new Date(dateTo).setHours(23,59,59,999);
-      if(d.entree > fin) return false;
-    }
-    return true;
-  });
-
+  var dossiersFiltres = tousDossiers.filter(function(d){ return rapportDansPeriode(d, dateFrom, dateTo); });
+  rapportDernierDossiers = dossiersFiltres.slice();
   if(!dossiersFiltres.length) return '';
 
   var h = '<div style="font-family:Arial,sans-serif">';
   h += '<div style="text-align:center;margin-bottom:16px">';
   h += '<div style="font-size:18px;font-weight:700">RAPPORT VÉHICULE</div>';
-  h += '<div style="font-size:12px;color:#666">Généré le '+new Date().toLocaleDateString('fr-FR')
+  h += '<div style="font-size:12px;color:#666">'+rapportLibellePeriode(dateFrom, dateTo)+' — Généré le '+new Date().toLocaleDateString('fr-FR')
      + (dossiersFiltres.length>1 ? ' — '+dossiersFiltres.length+' passage'+(dossiersFiltres.length>1?'s':'') : '')+'</div>';
   h += '</div>';
 
@@ -34358,15 +34370,29 @@ function genRapportVehicule(id, dateFrom, dateTo, showTech){
 function genRapportClient(clientKey, dateFrom, dateTo, showTech){
   var clients = buildClients2();
   var c = clients.find(function(x){return x.key===clientKey;});
+  if(!c){ var c0 = buildClients('').find(function(x){ return ((x.nom||'')+'_'+(x.tel||'')).replace(/\W/g,'_')===clientKey; });
+    if(c0) c = {key:clientKey, nom:c0.nom, tel:c0.tel, vehicules:c0.vehicules}; }
   if(!c) return '<div>Client introuvable</div>';
   var h = '<div style="font-family:Arial,sans-serif">';
   h += '<div style="text-align:center;margin-bottom:20px">';
   h += '<div style="font-size:20px;font-weight:700">RAPPORT CLIENT</div>';
   h += '<div style="font-size:14px;font-weight:600;margin-top:4px">'+c.nom+(c.tel?' — '+c.tel:'')+'</div>';
-  h += '<div style="font-size:12px;color:#666">Généré le '+new Date().toLocaleDateString('fr-FR')+'</div>';
+  // v.16 : la periode s'applique enfin au rapport client
+  // v.16 : meme regroupement que la page Clients (majuscules / espaces du telephone ignores),
+  // et dossiers archives compris (c'est un historique)
+  var cleCR = function(v){ return (v.client||'').trim().toLowerCase().replace(/\s+/g,'_')+'_'+((v.tel||'').trim().replace(/\s/g,'')||'no_tel'); };
+  var cc = buildClients('').find(function(x){ return ((x.nom||'')+'_'+(x.tel||'')).replace(/\W/g,'_')===clientKey; });
+  var basesCR = c.vehicules;
+  if(cc){ var clesCR = {}; cc.vehicules.forEach(function(v){ clesCR[cleCR(v)] = 1; }); c.vehicules.forEach(function(v){ clesCR[cleCR(v)] = 1; });
+    basesCR = vehicles.filter(function(v){ return !v.isProspect && clesCR[cleCR(v)]; }); }
+  var dossiersC = basesCR.filter(function(v){ return !v.isDevisCompl && rapportDansPeriode(v, dateFrom, dateTo); })
+    .sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+  rapportDernierDossiers = dossiersC.slice();
+  if(!dossiersC.length) return '';
+  h += '<div style="font-size:12px;color:#666">'+rapportLibellePeriode(dateFrom, dateTo)+' — '+dossiersC.length+' dossier'+(dossiersC.length>1?'s':'')+' — Généré le '+new Date().toLocaleDateString('fr-FR')+'</div>';
   h += '</div>';
   var totalGlobal = 0;
-  c.vehicules.forEach(function(v,i){
+  dossiersC.forEach(function(v,i){
     if(i>0) h += '<div style="border-top:2px solid #185FA5;margin:16px 0"></div>';
     h += genRapportVehiculeHtml(v, showTech);
     // Calculer total
@@ -34379,10 +34405,11 @@ function genRapportClient(clientKey, dateFrom, dateTo, showTech){
     var dcs = vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl;});
     if(dcs.length){
       h += '<div style="font-size:12px;font-weight:700;margin:8px 0 6px;color:#854F0B">Devis complémentaires</div>';
-      dcs.forEach(function(dc){ h += genRapportVehiculeHtml(dc, showTech); });
+      dcs.forEach(function(dc){ h += genRapportVehiculeHtml(dc, showTech);
+        ((dc.chiffrage&&dc.chiffrage.lignes)||[]).filter(function(l){return (l.piece||'').trim();}).forEach(function(l){ totalGlobal += (l.prixVente||0)*(l.qte||1); }); });
     }
   });
-  if(c.vehicules.length>1){
+  if(dossiersC.length>1){
     h += '<div style="background:#185FA5;color:#fff;padding:10px 16px;border-radius:8px;margin-top:16px;font-size:14px;font-weight:700;text-align:right">';
     h += 'TOTAL CLIENT : '+totalGlobal.toLocaleString('fr-FR', GOS_FMT0)+' F CFA';
     h += '</div>';
@@ -34401,6 +34428,42 @@ function imprimerRapport(){
 }
 
 
+// v.16 : les boutons Excel et Word du rapport appelaient des fonctions inexistantes
+function nomFichierRapport(){
+  var t = (document.getElementById('rapportTitle')||{}).textContent || 'Rapport';
+  return t.replace(/[^A-Za-z0-9\u00C0-\u017F -]+/g,' ').replace(/\s+/g,'_').slice(0,60);
+}
+function exportWord(){
+  var el = document.getElementById('rapportBody'); if(!el || !el.innerHTML.trim()) return;
+  var html = '<!DOCTYPE html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8">'
+    + '<style>body{font-family:Arial,sans-serif;font-size:11pt}table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:4pt;font-size:10pt}@page{size:A4;margin:2cm}</style></head><body>'
+    + el.innerHTML + '</body></html>';
+  var blob = new Blob(['\ufeff', html], {type:'application/msword'});
+  var url = URL.createObjectURL(blob), a = document.createElement('a');
+  a.href = url; a.download = nomFichierRapport()+'.doc'; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+}
+function exportExcel(){
+  var showTech = !document.getElementById('rapShowTech') || document.getElementById('rapShowTech').checked;
+  var q = function(x){ x = String(x==null?'':x); return '"'+x.replace(/"/g,'""')+'"'; };
+  var d8 = function(t){ return t ? new Date(t).toLocaleDateString('fr-FR') : ''; };
+  var ent = ['Immatriculation','Vehicule','Client','Type dossier','Entree','Sortie'].concat(showTech?['Technicien(s)']:[]).concat(['Piece','Qte','Prix unitaire','Total']);
+  var rows = [ent.map(q).join(';')];
+  var liste = [];
+  rapportDernierDossiers.forEach(function(v){ liste.push(v); vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl;}).forEach(function(dc){ liste.push(dc); }); });
+  liste.forEach(function(v){
+    var base = [v.immat, (v.marque||'')+' '+(v.modele||''), v.client, v.isDevisCompl?'Devis complementaire':'Dossier', d8(v.entree), d8(v.livraison||v.dateSort)]
+      .concat(showTech?[techniciensDossierRapport(v).join(', ')]:[]);
+    var lg = ((v.chiffrage&&v.chiffrage.lignes)||(v.devis&&v.devis.lignes)||[]).filter(function(l){return (l.piece||'').trim();});
+    if(!lg.length){ rows.push(base.concat(['(aucune piece)','','','']).map(q).join(';')); return; }
+    lg.forEach(function(l){ var pu = parseFloat(l.prixVente)||0, qt = parseInt(l.qte)||1;
+      rows.push(base.concat([l.piece, qt, pu||'', pu*qt||'']).map(q).join(';')); });
+  });
+  var blob = new Blob(['\ufeff'+rows.join('\r\n')], {type:'text/csv;charset=utf-8'});
+  var url = URL.createObjectURL(blob), a = document.createElement('a');
+  a.href = url; a.download = nomFichierRapport()+'.csv'; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+}
 function getRapportHtml(){var el=document.getElementById('rapportBody');return el?el.innerHTML:'';}
 
 // ============================================================
