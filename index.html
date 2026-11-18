@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-18.19';
+var GOS_VERSION = '2026-11-18.20';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -32485,6 +32485,7 @@ function _paginerPourPdf(doc, body){
 }
 
 function exporterPDF(){
+  if(_modaleImpressionMode === 'rapport') return exporterPDFRapport();   // v.20
   var frame = document.getElementById('modalImpressionFrame');
   var doc = _modalImpressionDoc();
   var title = document.getElementById('modalImpressionTitle');
@@ -32686,6 +32687,7 @@ function _modalImpressionDoc(){
 // du A4) etait completement faussee dans l'apercu, et cette meme mise
 // en page faussee se retrouvait dans le PDF/Word/Excel generes ensuite.
 function ouvrirModaleImpression(titre, htmlContenu){
+  _modaleImpressionMode = null;   // v.20 : un rapport repositionne ce mode apres l'appel
   var t = document.getElementById('modalImpressionTitle');
   var m = document.getElementById('modalImpression');
   var frame = document.getElementById('modalImpressionFrame');
@@ -34263,7 +34265,7 @@ function genRapportVehiculeHtml(v, showTech){
   var dateSortie = v.livraison ? new Date(v.livraison).toLocaleDateString('fr-FR') : (v.dateSort ? new Date(v.dateSort).toLocaleDateString('fr-FR') : '—');
 
   // En-tête véhicule
-  h += '<div style="border:1px solid #ccc;border-radius:8px;padding:16px;margin-bottom:20px;page-break-inside:avoid">';
+  h += '<div data-rap-bloc="1" style="border:1px solid #ccc;border-radius:8px;padding:16px;margin-bottom:20px;page-break-inside:avoid">';
   h += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">';
   h += '<div>';
   var badgeT = chiffrageSurPrixAchat(v) ? ' <span style="font-size:11px;font-weight:600;background:#EEEDFE;color:#534AB7;border-radius:10px;padding:2px 8px">Forfait</span>'
@@ -34460,13 +34462,59 @@ function genRapportClient(clientKey, dateFrom, dateTo, showTech){
   return h;
 }
 
+// v.20 : comme pour un devis, le rapport s'ouvre dans l'apercu interne (Imprimer / PDF /
+// Word / Excel / Fermer) au lieu de quitter l'application pour une autre page.
+var _modaleImpressionMode = null;
 function imprimerRapport(){
   var el = document.getElementById('rapportBody');
-  if(!el) return;
-  var rapportHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Rapport</title><style>body{font-family:Arial,sans-serif;margin:20px;font-size:12px}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}@media print{@page{size:A4;margin:12mm 12mm 18mm}body{margin:0;padding-bottom:14mm}button{display:none}.gos-pied-smart{position:fixed;bottom:0;left:0;right:0;margin:0!important;background:#fff}}</style></head><body>'
-    + el.innerHTML
-    + '<scr'+'ipt>window.onload=function(){window.print()}</scr'+'ipt></body></html>';
-  openPrintWindow(rapportHtml);
+  if(!el || !el.innerHTML.trim()) return;
+  var titre = (document.getElementById('rapportTitle')||{}).textContent || 'Rapport';
+  ouvrirModaleImpression(titre, '<div style="padding:12mm 12mm 6mm">'+el.innerHTML+'</div>');
+  _modaleImpressionMode = 'rapport';
+  var doc = _modalImpressionDoc();
+  if(doc && doc.head){
+    var st = doc.createElement('style');
+    st.textContent = 'html,body{font-size:12px}'
+      + '@media print{@page{size:A4;margin:10mm 10mm 18mm}body>div{padding:0!important}'
+      + '.gos-pied-smart{position:fixed;bottom:0;left:0;right:0;margin:0!important;background:#fff}body{padding-bottom:12mm}}';
+    doc.head.appendChild(st);
+  }
+}
+// PDF du rapport : decoupage entre deux dossiers (jamais au milieu d'un dossier) et
+// pied de page Smart Services + numero de page ajoutes sur CHAQUE page.
+function exporterPDFRapport(){
+  var doc = _modalImpressionDoc(); if(!doc || !doc.body) return;
+  if(typeof html2pdf === 'undefined'){
+    afficherToastNotif('Module PDF indisponible', 'Rechargez la page (connexion internet requise au premier chargement), ou utilisez Imprimer puis "Enregistrer en PDF".', 'alerte');
+    return;
+  }
+  var nom = nomFichierRapport();
+  var src = doc.body.firstElementChild || doc.body;
+  var clone = src.cloneNode(true);
+  var pied = clone.querySelector('.gos-pied-smart'); var textePied = pied ? pied.textContent : '';
+  if(pied) pied.parentNode.removeChild(pied);
+  clone.style.padding = '0';
+  var hote = document.createElement('div'); hote.style.cssText = 'width:190mm;background:#fff;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#1a1a1a';
+  hote.innerHTML = clone.innerHTML;   // element detache : html2pdf le recopie dans son propre cadre
+  afficherToastNotif('Generation du PDF...', 'Le telechargement demarre dans quelques secondes.', 'info');
+  var fin = function(){ if(hote.parentNode) hote.parentNode.removeChild(hote); };
+  html2pdf().set({
+    margin: [10, 10, 18, 10],
+    filename: nom + '.pdf',
+    image: { type:'jpeg', quality:0.95 },
+    html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+    jsPDF: { unit:'mm', format:'a4', orientation:'portrait' },
+    pagebreak: { mode:['css','legacy'], avoid:'[data-rap-bloc]' }
+  }).from(hote).toPdf().get('pdf').then(function(pdf){
+    var n = pdf.internal.getNumberOfPages();
+    for(var i = 1; i <= n; i++){
+      pdf.setPage(i);
+      pdf.setDrawColor(26,26,26); pdf.setLineWidth(0.5); pdf.line(10, 284, 200, 284);
+      pdf.setFontSize(9); pdf.setTextColor(85,85,85);
+      if(textePied) pdf.text(textePied.replace(/\u2014/g,'-'), 105, 289, {align:'center'});
+      pdf.text(i + ' / ' + n, 200, 289, {align:'right'});
+    }
+  }).save().then(fin).catch(function(){ fin(); afficherToastNotif('PDF non genere', 'Utilisez Imprimer puis "Enregistrer en PDF".', 'alerte'); });
 }
 
 
