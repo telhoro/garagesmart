@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-18.16';
+var GOS_VERSION = '2026-11-18.17';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -949,6 +949,12 @@ var GOS_VERSION = '2026-11-18.16';
       <input type="checkbox" id="rapShowTech" checked style="width:15px;height:15px" onchange="actualiserRapport()">
       <label for="rapShowTech" style="font-size:12px;cursor:pointer">Afficher les techniciens</label>
     </div>
+    <div id="rapTypeWrap" style="display:none"><label class="fl" style="margin-bottom:4px">Dossiers</label>
+      <select class="inp" id="rapType" style="width:auto" onchange="actualiserRapport()">
+        <option value="tous">Forfait et hors forfait</option>
+        <option value="forfait">Forfait uniquement</option>
+        <option value="hf">Hors forfait uniquement</option>
+      </select></div>
     <button class="btn btn-primary btn-sm" style="padding:7px 14px" onclick="actualiserRapport()">Actualiser</button>
   </div>
   <div class="mbody" id="rapportBody" style="padding:20px"></div>
@@ -31401,8 +31407,21 @@ function ouvrirRapportCli(btn){var key=btn.getAttribute('data-ck');ouvrirRapport
 // RAPPORT
 // ============================================================
 var rapportCtx={mode:null,key:null};
-function ouvrirRapportClient(clientKey){rapportCtx={mode:'client',key:clientKey};var clients=buildClients2();var c=clients.find(function(x){return x.key===clientKey;});document.getElementById('rapportTitle').textContent='Rapport client - '+(c?c.nom:clientKey);document.getElementById('rapFrom').value='';document.getElementById('rapTo').value='';document.getElementById('rapShowTech').checked=true;afficherRapport();document.getElementById('modalRapport').style.display='flex';}
-function ouvrirRapportVehicule(vehiculeId){rapportCtx={mode:'vehicule',key:vehiculeId};var v=vehicles.find(function(x){return x.id===vehiculeId;});document.getElementById('rapportTitle').textContent='Rapport vehicule - '+(v?v.immat+' ('+v.client+')':vehiculeId);document.getElementById('rapFrom').value='';document.getElementById('rapTo').value='';document.getElementById('rapShowTech').checked=true;afficherRapport();document.getElementById('modalRapport').style.display='flex';}
+function ouvrirRapportClient(clientKey){rapportCtx={mode:'client',key:clientKey};var clients=buildClients2();var c=clients.find(function(x){return x.key===clientKey;});document.getElementById('rapportTitle').textContent='Rapport client - '+(c?c.nom:clientKey);document.getElementById('rapFrom').value='';document.getElementById('rapTo').value='';document.getElementById('rapShowTech').checked=true;majChoixTypeRapport(c?c.vehicules:[]);afficherRapport();document.getElementById('modalRapport').style.display='flex';}
+function ouvrirRapportVehicule(vehiculeId){rapportCtx={mode:'vehicule',key:vehiculeId};var v=vehicles.find(function(x){return x.id===vehiculeId;});document.getElementById('rapportTitle').textContent='Rapport vehicule - '+(v?v.immat+' ('+v.client+')':vehiculeId);document.getElementById('rapFrom').value='';document.getElementById('rapTo').value='';document.getElementById('rapShowTech').checked=true;majChoixTypeRapport(v?vehicles.filter(function(x){return x.immat&&v.immat&&x.immat.toUpperCase()===v.immat.toUpperCase();}):[]);afficherRapport();document.getElementById('modalRapport').style.display='flex';}
+// v.17 : choix Forfait / Hors forfait, propose seulement si le client (ou le vehicule) a des dossiers forfait
+function majChoixTypeRapport(liste){
+  var w = document.getElementById('rapTypeWrap'), sel = document.getElementById('rapType'); if(!w||!sel) return;
+  var aF = (liste||[]).some(function(v){ return v && chiffrageSurPrixAchat(v); }) || (liste||[]).some(function(v){ return v && clientEstForfait(v.client); });
+  w.style.display = aF ? '' : 'none'; sel.value = 'tous';
+}
+function typeRapportChoisi(){ var w=document.getElementById('rapTypeWrap'), sel=document.getElementById('rapType'); return (w && w.style.display!=='none' && sel) ? sel.value : 'tous'; }
+function rapportTypeOk(v){
+  var t = typeRapportChoisi(); if(t==='tous') return true;
+  var f = chiffrageSurPrixAchat(v);
+  return t==='forfait' ? f : !f;
+}
+function rapportLibelleType(){ var t = typeRapportChoisi(); return t==='forfait' ? ' — Dossiers forfait uniquement' : (t==='hf' ? ' — Dossiers hors forfait uniquement' : ''); }
 function actualiserRapport(){afficherRapport();}
 function afficherRapport(){
   var dateFrom=document.getElementById('rapFrom')?document.getElementById('rapFrom').value:'';
@@ -34247,7 +34266,9 @@ function genRapportVehiculeHtml(v, showTech){
   h += '<div style="border:1px solid #ccc;border-radius:8px;padding:16px;margin-bottom:20px;page-break-inside:avoid">';
   h += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">';
   h += '<div>';
-  h += '<div style="font-size:16px;font-weight:700">'+v.immat+' — '+v.marque+' '+v.modele+'</div>';
+  var badgeT = chiffrageSurPrixAchat(v) ? ' <span style="font-size:11px;font-weight:600;background:#EEEDFE;color:#534AB7;border-radius:10px;padding:2px 8px">Forfait</span>'
+    : (clientEstForfait(v.client) ? ' <span style="font-size:11px;font-weight:600;background:#FDF3E3;color:#854F0B;border-radius:10px;padding:2px 8px">'+(estDossierAssurance(v)?'Assurance':'Hors forfait')+'</span>' : '');
+  h += '<div style="font-size:16px;font-weight:700">'+v.immat+' — '+v.marque+' '+v.modele+badgeT+'</div>';
   h += '<div style="font-size:12px;color:#666;margin-top:2px">Client : '+v.client+(v.tel?' | '+v.tel:'')+'</div>';
   h += '</div>';
   h += '<div style="text-align:right;font-size:12px;color:#666">';
@@ -34342,21 +34363,21 @@ function genRapportVehicule(id, dateFrom, dateTo, showTech){
 
   // Filtre de periode, applique sur la date d'entree de chaque dossier —
   // un dossier sans date d'entree connue est conserve par prudence.
-  var dossiersFiltres = tousDossiers.filter(function(d){ return rapportDansPeriode(d, dateFrom, dateTo); });
+  var dossiersFiltres = tousDossiers.filter(function(d){ return rapportDansPeriode(d, dateFrom, dateTo) && (rapportTypeOk(d) || vehicles.some(function(x){ return x.parentId===d.id && x.isDevisCompl && rapportTypeOk(x); })); });
   rapportDernierDossiers = dossiersFiltres.slice();
   if(!dossiersFiltres.length) return '';
 
   var h = '<div style="font-family:Arial,sans-serif">';
   h += '<div style="text-align:center;margin-bottom:16px">';
   h += '<div style="font-size:18px;font-weight:700">RAPPORT VÉHICULE</div>';
-  h += '<div style="font-size:12px;color:#666">'+rapportLibellePeriode(dateFrom, dateTo)+' — Généré le '+new Date().toLocaleDateString('fr-FR')
+  h += '<div style="font-size:12px;color:#666">'+rapportLibellePeriode(dateFrom, dateTo)+rapportLibelleType()+' — Généré le '+new Date().toLocaleDateString('fr-FR')
      + (dossiersFiltres.length>1 ? ' — '+dossiersFiltres.length+' passage'+(dossiersFiltres.length>1?'s':'') : '')+'</div>';
   h += '</div>';
 
   dossiersFiltres.forEach(function(v){
-    h += genRapportVehiculeHtml(v, showTech);
+    if(rapportTypeOk(v)) h += genRapportVehiculeHtml(v, showTech);
     // Devis complémentaires liés a ce dossier precis
-    var dcs = vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl;});
+    var dcs = vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl && rapportTypeOk(x);});
     if(dcs.length){
       h += '<div style="font-size:13px;font-weight:700;margin:12px 0 8px;color:#854F0B">Devis complémentaires</div>';
       dcs.forEach(function(dc){ h += genRapportVehiculeHtml(dc, showTech); });
@@ -34385,33 +34406,34 @@ function genRapportClient(clientKey, dateFrom, dateTo, showTech){
   var basesCR = c.vehicules;
   if(cc){ var clesCR = {}; cc.vehicules.forEach(function(v){ clesCR[cleCR(v)] = 1; }); c.vehicules.forEach(function(v){ clesCR[cleCR(v)] = 1; });
     basesCR = vehicles.filter(function(v){ return !v.isProspect && clesCR[cleCR(v)]; }); }
-  var dossiersC = basesCR.filter(function(v){ return !v.isDevisCompl && rapportDansPeriode(v, dateFrom, dateTo); })
+  var dossiersC = basesCR.filter(function(v){ return !v.isDevisCompl && rapportDansPeriode(v, dateFrom, dateTo) && (rapportTypeOk(v) || vehicles.some(function(x){ return x.parentId===v.id && x.isDevisCompl && rapportTypeOk(x); })); })
     .sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
   rapportDernierDossiers = dossiersC.slice();
   if(!dossiersC.length) return '';
-  h += '<div style="font-size:12px;color:#666">'+rapportLibellePeriode(dateFrom, dateTo)+' — '+dossiersC.length+' dossier'+(dossiersC.length>1?'s':'')+' — Généré le '+new Date().toLocaleDateString('fr-FR')+'</div>';
+  h += '<div style="font-size:12px;color:#666">'+rapportLibellePeriode(dateFrom, dateTo)+rapportLibelleType()+' — '+dossiersC.length+' dossier'+(dossiersC.length>1?'s':'')+' — Généré le '+new Date().toLocaleDateString('fr-FR')+'</div>';
   h += '</div>';
   var totalGlobal = 0;
   dossiersC.forEach(function(v,i){
     if(i>0) h += '<div style="border-top:2px solid #185FA5;margin:16px 0"></div>';
-    h += genRapportVehiculeHtml(v, showTech);
+    var okV = rapportTypeOk(v);
+    if(okV) h += genRapportVehiculeHtml(v, showTech);
     // Calculer total
-    if(v.chiffrage&&v.chiffrage.lignes){
+    if(okV && v.chiffrage&&v.chiffrage.lignes){
       v.chiffrage.lignes.filter(function(l){return (l.piece||'').trim();}).forEach(function(l){
         totalGlobal += (l.prixVente||0)*(l.qte||1);
       });
     }
     // DC liés
-    var dcs = vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl;});
+    var dcs = vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl && rapportTypeOk(x);});
     if(dcs.length){
-      h += '<div style="font-size:12px;font-weight:700;margin:8px 0 6px;color:#854F0B">Devis complémentaires</div>';
+      h += '<div style="font-size:12px;font-weight:700;margin:8px 0 6px;color:#854F0B">Devis complémentaires'+(okV?'':' <span style="font-weight:400;color:#888">(du dossier forfait '+v.immat+' entré le '+(v.entree?new Date(v.entree).toLocaleDateString('fr-FR'):'—')+')</span>')+'</div>';
       dcs.forEach(function(dc){ h += genRapportVehiculeHtml(dc, showTech);
         ((dc.chiffrage&&dc.chiffrage.lignes)||[]).filter(function(l){return (l.piece||'').trim();}).forEach(function(l){ totalGlobal += (l.prixVente||0)*(l.qte||1); }); });
     }
   });
   if(dossiersC.length>1){
     h += '<div style="background:#185FA5;color:#fff;padding:10px 16px;border-radius:8px;margin-top:16px;font-size:14px;font-weight:700;text-align:right">';
-    h += 'TOTAL CLIENT : '+totalGlobal.toLocaleString('fr-FR', GOS_FMT0)+' F CFA';
+    h += (typeRapportChoisi()==='forfait' && !totalGlobal) ? 'Dossiers couverts par l\'abonnement forfait' : 'TOTAL CLIENT : '+totalGlobal.toLocaleString('fr-FR', GOS_FMT0)+' F CFA';
     h += '</div>';
   }
   h += '</div>';
@@ -34450,9 +34472,9 @@ function exportExcel(){
   var ent = ['Immatriculation','Vehicule','Client','Type dossier','Entree','Sortie'].concat(showTech?['Technicien(s)']:[]).concat(['Piece','Qte','Prix unitaire','Total']);
   var rows = [ent.map(q).join(';')];
   var liste = [];
-  rapportDernierDossiers.forEach(function(v){ liste.push(v); vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl;}).forEach(function(dc){ liste.push(dc); }); });
+  rapportDernierDossiers.forEach(function(v){ if(rapportTypeOk(v)) liste.push(v); vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl && rapportTypeOk(x);}).forEach(function(dc){ liste.push(dc); }); });
   liste.forEach(function(v){
-    var base = [v.immat, (v.marque||'')+' '+(v.modele||''), v.client, v.isDevisCompl?'Devis complementaire':'Dossier', d8(v.entree), d8(v.livraison||v.dateSort)]
+    var base = [v.immat, (v.marque||'')+' '+(v.modele||''), v.client, (v.isDevisCompl?'Devis complementaire':'Dossier')+(chiffrageSurPrixAchat(v)?' forfait':(clientEstForfait(v.client)?' hors forfait':'')), d8(v.entree), d8(v.livraison||v.dateSort)]
       .concat(showTech?[techniciensDossierRapport(v).join(', ')]:[]);
     var lg = ((v.chiffrage&&v.chiffrage.lignes)||(v.devis&&v.devis.lignes)||[]).filter(function(l){return (l.piece||'').trim();});
     if(!lg.length){ rows.push(base.concat(['(aucune piece)','','','']).map(q).join(';')); return; }
