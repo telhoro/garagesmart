@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-18.20';
+var GOS_VERSION = '2026-11-18.21';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -34296,7 +34296,13 @@ function genRapportVehiculeHtml(v, showTech){
     lignes = v.devis.lignes.filter(function(l){return (l.piece||'').trim();});
   }
 
-  if(lignes.length){
+  // v.21 : dossier forfait = couvert par l'abonnement : on liste les pieces, sans aucun prix
+  if(lignes.length && chiffrageSurPrixAchat(v)){
+    h += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+    h += '<thead><tr style="background:#f0ede8"><th style="padding:6px;text-align:left;border:1px solid #ddd">Pièce / Désignation</th><th style="padding:6px;text-align:center;border:1px solid #ddd;width:80px">Qté</th></tr></thead><tbody>';
+    lignes.forEach(function(l){ h += '<tr><td style="padding:6px;border:1px solid #ddd">'+l.piece+'</td><td style="padding:6px;text-align:center;border:1px solid #ddd">'+(l.qte||1)+'</td></tr>'; });
+    h += '</tbody><tfoot><tr style="background:#534AB7;color:#fff"><td colspan="2" style="padding:8px;font-weight:700;border:1px solid #ddd">COUVERT PAR L\'ABONNEMENT FORFAIT</td></tr></tfoot></table>';
+  } else if(lignes.length){
     var total = 0;
     h += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
     h += '<thead><tr style="background:#f0ede8">';
@@ -34439,7 +34445,7 @@ function genRapportClient(clientKey, dateFrom, dateTo, showTech){
     var okV = rapportTypeOk(v) && rapportLivre(v);
     if(okV) h += genRapportVehiculeHtml(v, showTech);
     // Calculer total
-    if(okV && v.chiffrage&&v.chiffrage.lignes){
+    if(okV && !chiffrageSurPrixAchat(v) && v.chiffrage&&v.chiffrage.lignes){
       v.chiffrage.lignes.filter(function(l){return (l.piece||'').trim();}).forEach(function(l){
         totalGlobal += (l.prixVente||0)*(l.qte||1);
       });
@@ -34449,12 +34455,13 @@ function genRapportClient(clientKey, dateFrom, dateTo, showTech){
     if(dcs.length){
       h += '<div style="font-size:12px;font-weight:700;margin:8px 0 6px;color:#854F0B">Devis complémentaires'+(okV?'':' <span style="font-weight:400;color:#888">(du dossier forfait '+v.immat+' entré le '+(v.entree?new Date(v.entree).toLocaleDateString('fr-FR'):'—')+')</span>')+'</div>';
       dcs.forEach(function(dc){ h += genRapportVehiculeHtml(dc, showTech);
-        ((dc.chiffrage&&dc.chiffrage.lignes)||[]).filter(function(l){return (l.piece||'').trim();}).forEach(function(l){ totalGlobal += (l.prixVente||0)*(l.qte||1); }); });
+        if(!chiffrageSurPrixAchat(dc)) ((dc.chiffrage&&dc.chiffrage.lignes)||[]).filter(function(l){return (l.piece||'').trim();}).forEach(function(l){ totalGlobal += (l.prixVente||0)*(l.qte||1); }); });
     }
   });
   if(dossiersC.length>1){
     h += '<div style="background:#185FA5;color:#fff;padding:10px 16px;border-radius:8px;margin-top:16px;font-size:14px;font-weight:700;text-align:right">';
-    h += (typeRapportChoisi()==='forfait' && !totalGlobal) ? 'Dossiers couverts par l\'abonnement forfait' : 'TOTAL CLIENT : '+totalGlobal.toLocaleString('fr-FR', GOS_FMT0)+' F CFA';
+    h += (typeRapportChoisi()==='forfait' || !totalGlobal) && dossiersC.some(function(x){ return chiffrageSurPrixAchat(x); }) && !totalGlobal ? 'Dossiers couverts par l\'abonnement forfait'
+      : 'TOTAL CLIENT'+(dossiersC.some(function(x){ return chiffrageSurPrixAchat(x); })?' (hors forfait)':'')+' : '+totalGlobal.toLocaleString('fr-FR', GOS_FMT0)+' F CFA';
     h += '</div>';
   }
   h += rapportPiedSmart();
@@ -34546,8 +34553,9 @@ function exportExcel(){
       .concat(showTech?[techniciensDossierRapport(v).join(', ')]:[]);
     var lg = ((v.chiffrage&&v.chiffrage.lignes)||(v.devis&&v.devis.lignes)||[]).filter(function(l){return (l.piece||'').trim();});
     if(!lg.length){ rows.push(base.concat(['(aucune piece)','','','']).map(q).join(';')); return; }
+    var estF = chiffrageSurPrixAchat(v);
     lg.forEach(function(l){ var pu = parseFloat(l.prixVente)||0, qt = parseInt(l.qte)||1;
-      rows.push(base.concat([l.piece, qt, pu||'', pu*qt||'']).map(q).join(';')); });
+      rows.push(base.concat(estF ? [l.piece, qt, 'Forfait', 'Couvert par l\'abonnement'] : [l.piece, qt, pu||'', pu*qt||'']).map(q).join(';')); });
   });
   var blob = new Blob(['\ufeff'+rows.join('\r\n')], {type:'text/csv;charset=utf-8'});
   var url = URL.createObjectURL(blob), a = document.createElement('a');
