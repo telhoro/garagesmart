@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-18.21';
+var GOS_VERSION = '2026-11-18.24';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -338,6 +338,11 @@ var GOS_VERSION = '2026-11-18.21';
         <div class="fr"><label class="fl">Nom complet <span>*</span></label><input class="inp" id="f_client" list="f_client_list" placeholder="Kouassi Jean" onblur="verifierClientExistant()"><datalist id="f_client_list"></datalist><div id="f_client_type_hint" style="font-size:11px;color:#3B6D11;margin-top:2px"></div></div>
         <div class="fr"><label class="fl">Telephone <span>*</span></label><input class="inp" id="f_tel" placeholder="+225 07 00 00 00"></div>
         <div class="fr"><label class="fl">Email</label><input class="inp" type="email" id="f_email" placeholder="client@email.com"></div>
+      </div>
+      <div id="f_coord_hint" style="display:none;font-size:11px;color:#666;margin:-4px 0 8px">&#x1F512; Client existant : telephone, email, statut et type de client modifiables uniquement dans <b>Clients et vehicules</b>.</div>
+      <div class="g3" style="margin-bottom:8px">
+        <div class="fr"><label class="fl">Utilisateur du vehicule <em style="color:#888;font-style:normal;font-weight:400">(chauffeur, opt.)</em></label><input class="inp" id="f_utilNom" placeholder="Nom du chauffeur / de l'utilisateur"></div>
+        <div class="fr"><label class="fl">Contact utilisateur <em style="color:#888;font-style:normal;font-weight:400">(opt.)</em></label><input class="inp" id="f_utilTel" placeholder="+225 07 00 00 00"></div>
       </div>
       <div class="g4" style="margin-bottom:10px">
         <div class="fr"><label class="fl">Type client</label>
@@ -29628,12 +29633,60 @@ function toggleRecup(){
 }
 
 
+// v.22 : UN client = UNE fiche. Les coordonnees d'un client deja enregistre sont reprises telles
+// quelles (champs grises) : elles ne se modifient que depuis « Clients et vehicules ».
+function coordonneesClientExistant(nom, exclureId){
+  var k = String(nom||'').trim().toLowerCase(); if(!k) return null;
+  var tels = {}, email = '', emailT = -1, trouve = false, noms = {}, ents = {}, types = {};
+  vehicles.forEach(function(x){
+    if(!x || x.isProspect || x.id===exclureId) return;
+    var n = String(x.proprietaireVehicule||x.client||'').trim().toLowerCase(); if(n!==k) return;
+    trouve = true; var nv = String(x.proprietaireVehicule||x.client).trim(); noms[nv] = (noms[nv]||0) + 1;
+    if(x.entite) ents[x.entite] = (ents[x.entite]||0) + 1;
+    if(!estDossierAssurance(x) && !estHorsForfait(x) && x.typeClient) types[x.typeClient] = (types[x.typeClient]||0) + 1;
+    var t = String(x.tel||'').trim(); var tn = t.replace(/\s/g,'');
+    if(tn){ if(!tels[tn]) tels[tn] = {tel:t, nb:0, der:0}; tels[tn].nb++; tels[tn].der = Math.max(tels[tn].der, x.entree||0); }
+    if(x.email && (x.entree||0) > emailT){ email = x.email; emailT = x.entree||0; }
+  });
+  (typeof CLIENTS_SANS_VEHICULE!=='undefined' ? CLIENTS_SANS_VEHICULE : []).forEach(function(c){
+    if(String(c.nom||'').trim().toLowerCase()!==k) return; trouve = true;
+    var tn = String(c.tel||'').replace(/\s/g,''); if(tn && !tels[tn]) tels[tn] = {tel:c.tel, nb:0, der:0};
+    if(!email && c.email) email = c.email;
+    if(c.entite) ents[c.entite] = (ents[c.entite]||0) + 1;
+    if(c.typeClient) types[c.typeClient] = (types[c.typeClient]||0) + 1;
+  });
+  if(!trouve) return null;
+  var best = Object.keys(tels).map(function(t){ return tels[t]; }).sort(function(a,b){ return (b.nb-a.nb) || (b.der-a.der); })[0];
+  var nomRef = Object.keys(noms).sort(function(a,b){ return noms[b]-noms[a]; })[0] || String(nom).trim();
+  var maj = function(o){ return Object.keys(o).sort(function(a,b){ return o[b]-o[a]; })[0] || ''; };
+  var typeRef = clientEstForfait(nomRef) ? 'forfait' : (maj(types) || 'devis');
+  return {nom: nomRef, tel: best ? best.tel : '', email: email, entite: maj(ents) || '', typeClient: typeRef};
+}
+function verrouillerCoordonneesClient(nom, exclureId){
+  var telEl = document.getElementById('f_tel'), emEl = document.getElementById('f_email'), hint = document.getElementById('f_coord_hint');
+  var ref = coordonneesClientExistant(nom, exclureId);
+  var nomEl = document.getElementById('f_client');
+  if(ref && nomEl && nomEl.value.trim() && nomEl.value.trim()!==ref.nom) nomEl.value = ref.nom;   // meme orthographe que la fiche client
+  // v.23 : client existant -> champs grises MEME vides (a completer dans Clients et vehicules)
+  function lock(el, actif, val){ if(!el) return; if(actif){ el.value = val||''; el.readOnly = true; el.style.background = '#F1EFE8'; el.style.color = '#666'; el.title = 'Modifiable uniquement dans Clients et vehicules'; if(!val) el.placeholder = 'Non renseigne — a completer dans Clients et vehicules'; } else { el.readOnly = false; el.style.background = ''; el.style.color = ''; el.title = ''; el.placeholder = el.id==='f_tel' ? '+225 07 00 00 00' : 'client@email.com'; } }
+  lock(telEl, !!ref, ref ? ref.tel : ''); lock(emEl, !!ref, ref ? ref.email : '');
+  // v.24 : statut (Particulier / Entreprise) et type de client figes aussi
+  var entEl = document.getElementById('f_entite'), typEl = document.getElementById('f_typeClient');
+  if(entEl){ if(ref){ if(ref.entite) entEl.value = ref.entite; entEl.disabled = true; entEl.title = 'Modifiable uniquement dans Clients et vehicules'; } else { entEl.disabled = false; entEl.title = ''; } }
+  if(typEl){ if(ref){ var hfC = document.getElementById('f_horsForfait');
+      if(!(ref.typeClient==='forfait' && hfC && hfC.checked)) typEl.value = ref.typeClient;
+      typEl.disabled = true; typEl.title = 'Modifiable uniquement dans Clients et vehicules'; }
+    else { typEl.disabled = false; typEl.title = ''; } }
+  if(hint) hint.style.display = ref ? '' : 'none';
+  return ref;
+}
 function verifierClientExistant(){
   var nomEl = document.getElementById('f_client');
   var typeEl = document.getElementById('f_typeClient');
   var hintEl = document.getElementById('f_client_type_hint');
   if(!nomEl || !typeEl) return;
   var nom = (nomEl.value||'').trim();
+  verrouillerCoordonneesClient(nom, editingId);   // v.22
   if(!nom){ if(hintEl) hintEl.textContent=''; return; }
   // Chercher un client existant avec ce nom EXACT (insensible casse) — le
   // vrai proprietaire (proprietaireVehicule) prime sur client.
@@ -29651,10 +29704,7 @@ function verifierClientExistant(){
   // Client existant reconnu : remplir AUTOMATIQUEMENT les infos + verrouiller le type
   var typeLabel = match.typeClient==='forfait' ? 'Forfait' : (match.typeClient==='assurance' ? 'Assurance' : 'Devis');
   // Toujours remplir tel/email (le vehicule appartient au meme client)
-  var telEl = document.getElementById('f_tel');
-  var emailEl = document.getElementById('f_email');
-  if(telEl) telEl.value = match.tel || '';
-  if(emailEl) emailEl.value = match.email || '';
+  verrouillerCoordonneesClient(nom, editingId);   // v.22 : coordonnees de reference, grisees
   // Remplir aussi l'entite si disponible
   var entEl = document.getElementById('f_entite');
   if(entEl && match.entite) entEl.value = match.entite;
@@ -30056,7 +30106,7 @@ function openEdit(id, prefill){
   // visite technique deja enregistree lors de l'enregistrement.
   s('f_ct_echeance',v.ct_echeance);
   if(v.livraison)s('f_livraison',new Date(v.livraison).toISOString().split('T')[0]);
-  s('f_client',v.proprietaireVehicule||v.client);s('f_tel',v.tel);s('f_email',v.email);s('f_motif',v.motif);s('f_symp',v.symptomes);
+  s('f_client',v.proprietaireVehicule||v.client);s('f_tel',v.tel);s('f_email',v.email);s('f_motif',v.motif);s('f_utilNom',v.utilisateurNom);s('f_utilTel',v.utilisateurTel);s('f_symp',v.symptomes);
   s('f_sin',v.sinistre);s('f_assureur',v.assureur);s('f_contact_ass',v.contactAssurance);s('f_expert',v.expert);s('f_contact_exp',v.contactExpert);s('f_date_sin',v.dateSinistre);
   var daEl2=document.getElementById('f_dossierAssurance');if(daEl2){ daEl2.checked = (v.dossierAssurance===true || v.typeClient==='assurance'); daEl2.disabled = (currentRole!=='direction'); toggleSectionSinistre(); }
   var tkmEl2=document.getElementById('f_tkm');if(tkmEl2){ tkmEl2.checked = (v.tkm===true); }
@@ -30087,6 +30137,7 @@ function openEdit(id, prefill){
     if(inv.autres){document.getElementById('inv_autres').value=inv.autres||'';}
     if(inv.photos && inv.photos.length){ window._recPhotosTemp=inv.photos; setTimeout(renderRecPhotosGrid,100); }
   }
+  verrouillerCoordonneesClient(v.proprietaireVehicule||v.client, v.id);   // v.22
   showTab('v');document.getElementById('modalRec').style.display='flex';
 }
 var _pendingClose = null;
@@ -30130,6 +30181,8 @@ function showTab(id){
 }
 
 function resetForm(){
+  verrouillerCoordonneesClient('', null);   // v.22
+  ['f_utilNom','f_utilTel'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   ['f_immat','f_modele','f_vin','f_km','f_mec','f_ct_echeance','f_livraison','f_client','f_tel','f_email','f_motif','f_symp','f_sin','f_assureur','f_contact_ass','f_expert','f_contact_exp','f_date_sin'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
   // Reinitialiser l'etat "reprise des travaux a prevoir" — sans cela, une
   // reprise selectionnee puis abandonnee (fenetre fermee sans valider)
@@ -30216,6 +30269,17 @@ function submitRec(){
   var client = (document.getElementById('f_client').value||'').trim();
   var tel    = (document.getElementById('f_tel').value||'').trim();
   var emailVal = (document.getElementById('f_email').value||'').trim();
+  // v.22 : client deja enregistre -> ses coordonnees de reference, jamais une variante saisie
+  var refCoord = coordonneesClientExistant(client, editingId);
+  if(refCoord){ client = refCoord.nom; document.getElementById('f_client').value = client;
+    tel = refCoord.tel||''; document.getElementById('f_tel').value = tel;   // v.23 : jamais une saisie ici, meme vide
+    emailVal = refCoord.email||''; document.getElementById('f_email').value = emailVal;
+    var entS = document.getElementById('f_entite'); if(entS && refCoord.entite) entS.value = refCoord.entite;   // v.24
+    var typS = document.getElementById('f_typeClient'), hfS = document.getElementById('f_horsForfait');
+    var hfCoche = refCoord.typeClient==='forfait' && hfS && hfS.checked;
+    if(typS) typS.value = hfCoche ? 'devis' : refCoord.typeClient; }
+  var utilNom = ((document.getElementById('f_utilNom')||{}).value||'').trim();
+  var utilTel = ((document.getElementById('f_utilTel')||{}).value||'').trim();
   var motif  = (document.getElementById('f_motif').value||'').trim();
 
   // Validation avec messages inline
@@ -30234,7 +30298,7 @@ function submitRec(){
     if(!hasError) showTab('v');
     hasError = true;
   }
-  if(!tel){
+  if(!tel && !refCoord){   // v.23 : client existant sans numero -> a completer dans Clients et vehicules, pas ici
     showFieldError('f_tel','Telephone obligatoire');
     if(!hasError) showTab('v');
     hasError = true;
@@ -30251,6 +30315,7 @@ function submitRec(){
   }
 
   if(hasError) return;
+  if(refCoord && !tel) afficherToastNotif('Telephone du client manquant', 'Le dossier est enregistre. Completez le numero de '+client+' dans Clients et vehicules (bouton Modifier le client).', 'alerte');
 
   // Verifications doublons (nouveau dossier uniquement)
   if(!editingId){
@@ -30359,7 +30424,7 @@ function submitRec(){
     }
   }
 
-  var data={inventaire:inv,aRecuperer:!!aRecup,recuperation:recupData,immat:immat,marque:marque,modele:modele,vin:(document.getElementById('f_vin').value||'').trim(),km:parseInt(document.getElementById('f_km').value)||0,mec:document.getElementById('f_mec').value,ct_echeance:(document.getElementById('f_ct_echeance')||{value:''}).value,annee:(document.getElementById('f_mec').value?(new Date(document.getElementById('f_mec').value).getFullYear()+''):''),client:clientEffectif,proprietaireVehicule:proprietaireVehicule,tel:tel,email:emailVal,typeClient:(document.getElementById('f_typeClient')||document.getElementById('f_type')||{value:'devis'}).value,dossierAssurance:dossierAssuranceCoche,horsForfait:!!(document.getElementById('f_horsForfait')&&document.getElementById('f_horsForfait').checked&&document.getElementById('f_hf_wrap').style.display!=='none'&&(document.getElementById('f_typeClient')||{}).value==='devis'&&!dossierAssuranceCoche),tkm:tkmCoche,expertPasse:expertPasseFinal,expertPasseLe:expertPasseLeFinal,expertValidationTravaux:expertValidationTravauxFinal,expertValidationTravauxLe:expertValidationTravauxLeFinal,expertRapportRecu:expertRapportRecuFinal,expertRapportRecuLe:expertRapportRecuLeFinal,bonSortieAssurance:bonSortieAssuranceFinal,bonSortieAssuranceLe:bonSortieAssuranceLeFinal,entite:document.getElementById('f_entite').value,priorite:document.getElementById('f_prio').value,nature:document.getElementById('f_nature').value,motif:motif,symptomes:(document.getElementById('f_symp').value||'').trim(),livraison:livDate?new Date(livDate).getTime():null,sinistre:(document.getElementById('f_sin').value||'').trim()||null,assureur:nomAssureurSaisi||null,contactAssurance:(document.getElementById('f_contact_ass').value||'').trim()||null,expert:(document.getElementById('f_expert').value||'').trim()||null,contactExpert:(document.getElementById('f_contact_exp').value||'').trim()||null,dateSinistre:document.getElementById('f_date_sin').value||null,bpc:document.getElementById('f_bpc').value,photos:getRecPhotosData(),zonesEndommagees:(zonesEndommagees||[]).slice(),energie:(document.getElementById('f_energie')||{value:''}).value||null,vignette:(document.getElementById('f_vignette')||{value:''}).value||null};
+  var data={inventaire:inv,aRecuperer:!!aRecup,recuperation:recupData,immat:immat,marque:marque,modele:modele,vin:(document.getElementById('f_vin').value||'').trim(),km:parseInt(document.getElementById('f_km').value)||0,mec:document.getElementById('f_mec').value,ct_echeance:(document.getElementById('f_ct_echeance')||{value:''}).value,annee:(document.getElementById('f_mec').value?(new Date(document.getElementById('f_mec').value).getFullYear()+''):''),client:clientEffectif,proprietaireVehicule:proprietaireVehicule,tel:tel,email:emailVal,utilisateurNom:utilNom,utilisateurTel:utilTel,typeClient:(document.getElementById('f_typeClient')||document.getElementById('f_type')||{value:'devis'}).value,dossierAssurance:dossierAssuranceCoche,horsForfait:!!(document.getElementById('f_horsForfait')&&document.getElementById('f_horsForfait').checked&&document.getElementById('f_hf_wrap').style.display!=='none'&&(document.getElementById('f_typeClient')||{}).value==='devis'&&!dossierAssuranceCoche),tkm:tkmCoche,expertPasse:expertPasseFinal,expertPasseLe:expertPasseLeFinal,expertValidationTravaux:expertValidationTravauxFinal,expertValidationTravauxLe:expertValidationTravauxLeFinal,expertRapportRecu:expertRapportRecuFinal,expertRapportRecuLe:expertRapportRecuLeFinal,bonSortieAssurance:bonSortieAssuranceFinal,bonSortieAssuranceLe:bonSortieAssuranceLeFinal,entite:document.getElementById('f_entite').value,priorite:document.getElementById('f_prio').value,nature:document.getElementById('f_nature').value,motif:motif,symptomes:(document.getElementById('f_symp').value||'').trim(),livraison:livDate?new Date(livDate).getTime():null,sinistre:(document.getElementById('f_sin').value||'').trim()||null,assureur:nomAssureurSaisi||null,contactAssurance:(document.getElementById('f_contact_ass').value||'').trim()||null,expert:(document.getElementById('f_expert').value||'').trim()||null,contactExpert:(document.getElementById('f_contact_exp').value||'').trim()||null,dateSinistre:document.getElementById('f_date_sin').value||null,bpc:document.getElementById('f_bpc').value,photos:getRecPhotosData(),zonesEndommagees:(zonesEndommagees||[]).slice(),energie:(document.getElementById('f_energie')||{value:''}).value||null,vignette:(document.getElementById('f_vignette')||{value:''}).value||null};
   // Lire l'équipe sélectionnée
   var equipeChoisie = (document.getElementById('f_equipe')||{value:''}).value;
   if(editingId){
@@ -30696,7 +30761,7 @@ function openDet(id){
     b += '</div></div>';
   }
   b+='<div class="g2" style="gap:14px"><div><div class="sdiv">Vehicule</div><div class="drow"><span class="dlbl">Immat</span><strong>'+v.immat+'</strong></div><div class="drow"><span class="dlbl">Marque/Modele</span>'+v.marque+' '+v.modele+'</div><div class="drow"><span class="dlbl">VIN</span>'+(v.vin||'—')+'</div><div class="drow"><span class="dlbl">Kilometrage</span>'+(v.km?v.km.toLocaleString('fr-FR', GOS_FMT0)+' km':'—')+'</div><div class="drow"><span class="dlbl">1ere mise en circulation</span>'+(v.mec?new Date(v.mec).toLocaleDateString('fr-FR'):'—')+'</div><div class="drow"><span class="dlbl">Visite technique</span>'+(v.ct_echeance?new Date(v.ct_echeance).toLocaleDateString('fr-FR'):'—')+htmlBadgeEcheanceCT(v.ct_echeance)+'</div>'+(v.energie?'<div class="drow"><span class="dlbl">Energie</span>'+v.energie+'</div>':'')+(v.vignette?'<div class="drow"><span class="dlbl">Vignette</span>'+parseFloat(v.vignette).toLocaleString('fr-FR', GOS_FMT0)+' F</div>':'')+'</div>';
-  b+='<div><div class="sdiv">Client</div><div class="drow"><span class="dlbl">Nom</span><strong>'+v.client+'</strong></div>'+(v.proprietaireVehicule && v.proprietaireVehicule!==v.client ? '<div class="drow"><span class="dlbl">Proprietaire reel</span><span style="color:#3B6D11;font-weight:600">'+v.proprietaireVehicule+'</span></div>' : '')+'<div class="drow"><span class="dlbl">Tel</span>'+v.tel+'</div><div class="drow"><span class="dlbl">Email</span>'+(v.email||'—')+'</div><div class="drow"><span class="dlbl">Type</span>'+tbadge(v.typeClient)+assuranceBadge(v)+'</div><div class="drow"><span class="dlbl">Priorite</span>'+pbadge(v.priorite)+'</div></div></div>';
+  b+='<div><div class="sdiv">Client</div><div class="drow"><span class="dlbl">Nom</span><strong>'+v.client+'</strong></div>'+(v.proprietaireVehicule && v.proprietaireVehicule!==v.client ? '<div class="drow"><span class="dlbl">Proprietaire reel</span><span style="color:#3B6D11;font-weight:600">'+v.proprietaireVehicule+'</span></div>' : '')+'<div class="drow"><span class="dlbl">Tel</span>'+v.tel+'</div><div class="drow"><span class="dlbl">Email</span>'+(v.email||'—')+'</div>'+((v.utilisateurNom||v.utilisateurTel)?'<div class="drow"><span class="dlbl">Utilisateur</span><span>'+(v.utilisateurNom||'—')+(v.utilisateurTel?' — <a href="tel:'+String(v.utilisateurTel).replace(/\s/g,'')+'">'+v.utilisateurTel+'</a>':'')+'</span></div>':'')+'<div class="drow"><span class="dlbl">Type</span>'+tbadge(v.typeClient)+assuranceBadge(v)+'</div><div class="drow"><span class="dlbl">Priorite</span>'+pbadge(v.priorite)+'</div></div></div>';
   b += htmlSectionSinistre(v);
   b += htmlSequenceFinTravauxAssurance(v);
   if(v.circuitTkmRaccourci){
@@ -34272,6 +34337,7 @@ function genRapportVehiculeHtml(v, showTech){
     : (clientEstForfait(v.client) ? ' <span style="font-size:11px;font-weight:600;background:#FDF3E3;color:#854F0B;border-radius:10px;padding:2px 8px">'+(estDossierAssurance(v)?'Assurance':'Hors forfait')+'</span>' : '');
   h += '<div style="font-size:16px;font-weight:700">'+v.immat+' — '+v.marque+' '+v.modele+badgeT+'</div>';
   h += '<div style="font-size:12px;color:#666;margin-top:2px">Client : '+v.client+(v.tel?' | '+v.tel:'')+'</div>';
+  if(v.utilisateurNom||v.utilisateurTel) h += '<div style="font-size:12px;color:#666">Utilisateur : '+(v.utilisateurNom||'—')+(v.utilisateurTel?' | '+v.utilisateurTel:'')+'</div>';
   h += '</div>';
   h += '<div style="text-align:right;font-size:12px;color:#666">';
   h += '<div>Entrée : <strong>'+dateEntree+'</strong></div>';
