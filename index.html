@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-18.17';
+var GOS_VERSION = '2026-11-18.19';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -31431,7 +31431,7 @@ function afficherRapport(){
   if(rapportCtx.mode==='client')html=genRapportClient(rapportCtx.key,dateFrom,dateTo,showTech);
   else if(rapportCtx.mode==='vehicule')html=genRapportVehicule(rapportCtx.key,dateFrom,dateTo,showTech);
   var el=document.getElementById('rapportBody');
-  if(el)el.innerHTML=html||'<div style="padding:30px;text-align:center;color:#aaa">Aucune intervention trouvee pour cette periode</div>';
+  if(el)el.innerHTML=html||'<div style="padding:30px;text-align:center;color:#aaa">Aucun dossier livre pour cette periode</div>';
 }
 // ============================================================
 // CATALOGUE PIÈCES — recherche historique
@@ -34337,6 +34337,11 @@ function techniciensDossierRapport(v){
   return l;
 }
 // v.16 : filtre de periode (date d'entree) commun aux rapports vehicule et client
+// v.19 : le rapport ne montre que les dossiers LIVRES (livre, facture deposee, cloture),
+// pas les dossiers en cours, ni les devis abandonnes / dossiers clotures sans travaux.
+function rapportLivre(v){
+  return !!v && LIV_ST.indexOf(v.status)>=0 && !v.devisAbandonne && !v.clotureForcee;
+}
 function rapportDansPeriode(d, dateFrom, dateTo){
   if(!d.entree) return !(dateFrom || dateTo) ? true : false;
   if(dateFrom && d.entree < new Date(dateFrom+'T00:00:00').getTime()) return false;
@@ -34345,10 +34350,10 @@ function rapportDansPeriode(d, dateFrom, dateTo){
 }
 function rapportLibellePeriode(dateFrom, dateTo){
   var f = function(x){ return new Date(x+'T12:00:00').toLocaleDateString('fr-FR'); };
-  if(dateFrom && dateTo) return 'Periode du '+f(dateFrom)+' au '+f(dateTo);
-  if(dateFrom) return 'A partir du '+f(dateFrom);
-  if(dateTo) return 'Jusqu\'au '+f(dateTo);
-  return 'Toutes periodes';
+  if(dateFrom && dateTo) return 'Dossiers livres — periode du '+f(dateFrom)+' au '+f(dateTo);
+  if(dateFrom) return 'Dossiers livres a partir du '+f(dateFrom);
+  if(dateTo) return 'Dossiers livres jusqu\'au '+f(dateTo);
+  return 'Dossiers livres — toutes periodes';
 }
 var rapportDernierDossiers = [];   // pour l'export Excel
 function genRapportVehicule(id, dateFrom, dateTo, showTech){
@@ -34363,29 +34368,43 @@ function genRapportVehicule(id, dateFrom, dateTo, showTech){
 
   // Filtre de periode, applique sur la date d'entree de chaque dossier —
   // un dossier sans date d'entree connue est conserve par prudence.
-  var dossiersFiltres = tousDossiers.filter(function(d){ return rapportDansPeriode(d, dateFrom, dateTo) && (rapportTypeOk(d) || vehicles.some(function(x){ return x.parentId===d.id && x.isDevisCompl && rapportTypeOk(x); })); });
+  var dossiersFiltres = tousDossiers.filter(function(d){ return rapportDansPeriode(d, dateFrom, dateTo) && ((rapportLivre(d) && rapportTypeOk(d)) || vehicles.some(function(x){ return x.parentId===d.id && x.isDevisCompl && rapportLivre(x) && rapportTypeOk(x); })); });
   rapportDernierDossiers = dossiersFiltres.slice();
   if(!dossiersFiltres.length) return '';
 
   var h = '<div style="font-family:Arial,sans-serif">';
+  h += rapportEnteteSmart('RAPPORT VÉHICULE');
   h += '<div style="text-align:center;margin-bottom:16px">';
-  h += '<div style="font-size:18px;font-weight:700">RAPPORT VÉHICULE</div>';
+  h += '<div style="font-size:14px;font-weight:600">'+(vRef.immat||'')+' — '+(vRef.marque||'')+' '+(vRef.modele||'')+' — '+(vRef.client||'')+'</div>';
   h += '<div style="font-size:12px;color:#666">'+rapportLibellePeriode(dateFrom, dateTo)+rapportLibelleType()+' — Généré le '+new Date().toLocaleDateString('fr-FR')
      + (dossiersFiltres.length>1 ? ' — '+dossiersFiltres.length+' passage'+(dossiersFiltres.length>1?'s':'') : '')+'</div>';
   h += '</div>';
 
   dossiersFiltres.forEach(function(v){
-    if(rapportTypeOk(v)) h += genRapportVehiculeHtml(v, showTech);
+    if(rapportTypeOk(v) && rapportLivre(v)) h += genRapportVehiculeHtml(v, showTech);
     // Devis complémentaires liés a ce dossier precis
-    var dcs = vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl && rapportTypeOk(x);});
+    var dcs = vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl && rapportTypeOk(x) && rapportLivre(x);});
     if(dcs.length){
       h += '<div style="font-size:13px;font-weight:700;margin:12px 0 8px;color:#854F0B">Devis complémentaires</div>';
       dcs.forEach(function(dc){ h += genRapportVehiculeHtml(dc, showTech); });
     }
   });
 
+  h += rapportPiedSmart();
   h += '</div>';
   return h;
+}
+
+// v.18 : en-tete et pied de page Smart Services (memes que devis / factures)
+function rapportEnteteSmart(titre){
+  return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;padding-bottom:12px;border-bottom:2px solid #1a1a1a">'
+    + '<img src="'+LOGO_BASE64+'" style="height:65px;width:auto;display:block" alt="Smart Services">'
+    + '<div style="border:3px solid #1a1a1a;padding:8px 20px"><span style="font-size:20px;font-weight:900;letter-spacing:1px">'+titre+'</span></div>'
+    + '</div>';
+}
+function rapportPiedSmart(){
+  return '<div class="gos-pied-smart" style="margin-top:24px;border-top:2px solid #1a1a1a;padding-top:8px;text-align:center;font-size:12px;color:#555">'
+    + 'CI -ABJ-2007-A6390 — 2345 ABJ 01 — 27 22 43 63 55 — 07 07 73 90 73</div>';
 }
 
 function genRapportClient(clientKey, dateFrom, dateTo, showTech){
@@ -34395,8 +34414,8 @@ function genRapportClient(clientKey, dateFrom, dateTo, showTech){
     if(c0) c = {key:clientKey, nom:c0.nom, tel:c0.tel, vehicules:c0.vehicules}; }
   if(!c) return '<div>Client introuvable</div>';
   var h = '<div style="font-family:Arial,sans-serif">';
+  h += rapportEnteteSmart('RAPPORT CLIENT');
   h += '<div style="text-align:center;margin-bottom:20px">';
-  h += '<div style="font-size:20px;font-weight:700">RAPPORT CLIENT</div>';
   h += '<div style="font-size:14px;font-weight:600;margin-top:4px">'+c.nom+(c.tel?' — '+c.tel:'')+'</div>';
   // v.16 : la periode s'applique enfin au rapport client
   // v.16 : meme regroupement que la page Clients (majuscules / espaces du telephone ignores),
@@ -34406,7 +34425,7 @@ function genRapportClient(clientKey, dateFrom, dateTo, showTech){
   var basesCR = c.vehicules;
   if(cc){ var clesCR = {}; cc.vehicules.forEach(function(v){ clesCR[cleCR(v)] = 1; }); c.vehicules.forEach(function(v){ clesCR[cleCR(v)] = 1; });
     basesCR = vehicles.filter(function(v){ return !v.isProspect && clesCR[cleCR(v)]; }); }
-  var dossiersC = basesCR.filter(function(v){ return !v.isDevisCompl && rapportDansPeriode(v, dateFrom, dateTo) && (rapportTypeOk(v) || vehicles.some(function(x){ return x.parentId===v.id && x.isDevisCompl && rapportTypeOk(x); })); })
+  var dossiersC = basesCR.filter(function(v){ return !v.isDevisCompl && rapportDansPeriode(v, dateFrom, dateTo) && ((rapportLivre(v) && rapportTypeOk(v)) || vehicles.some(function(x){ return x.parentId===v.id && x.isDevisCompl && rapportLivre(x) && rapportTypeOk(x); })); })
     .sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
   rapportDernierDossiers = dossiersC.slice();
   if(!dossiersC.length) return '';
@@ -34415,7 +34434,7 @@ function genRapportClient(clientKey, dateFrom, dateTo, showTech){
   var totalGlobal = 0;
   dossiersC.forEach(function(v,i){
     if(i>0) h += '<div style="border-top:2px solid #185FA5;margin:16px 0"></div>';
-    var okV = rapportTypeOk(v);
+    var okV = rapportTypeOk(v) && rapportLivre(v);
     if(okV) h += genRapportVehiculeHtml(v, showTech);
     // Calculer total
     if(okV && v.chiffrage&&v.chiffrage.lignes){
@@ -34424,7 +34443,7 @@ function genRapportClient(clientKey, dateFrom, dateTo, showTech){
       });
     }
     // DC liés
-    var dcs = vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl && rapportTypeOk(x);});
+    var dcs = vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl && rapportTypeOk(x) && rapportLivre(x);});
     if(dcs.length){
       h += '<div style="font-size:12px;font-weight:700;margin:8px 0 6px;color:#854F0B">Devis complémentaires'+(okV?'':' <span style="font-weight:400;color:#888">(du dossier forfait '+v.immat+' entré le '+(v.entree?new Date(v.entree).toLocaleDateString('fr-FR'):'—')+')</span>')+'</div>';
       dcs.forEach(function(dc){ h += genRapportVehiculeHtml(dc, showTech);
@@ -34436,6 +34455,7 @@ function genRapportClient(clientKey, dateFrom, dateTo, showTech){
     h += (typeRapportChoisi()==='forfait' && !totalGlobal) ? 'Dossiers couverts par l\'abonnement forfait' : 'TOTAL CLIENT : '+totalGlobal.toLocaleString('fr-FR', GOS_FMT0)+' F CFA';
     h += '</div>';
   }
+  h += rapportPiedSmart();
   h += '</div>';
   return h;
 }
@@ -34443,7 +34463,7 @@ function genRapportClient(clientKey, dateFrom, dateTo, showTech){
 function imprimerRapport(){
   var el = document.getElementById('rapportBody');
   if(!el) return;
-  var rapportHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Rapport</title><style>body{font-family:Arial,sans-serif;margin:20px;font-size:12px}@media print{body{margin:10px}button{display:none}}</style></head><body>'
+  var rapportHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Rapport</title><style>body{font-family:Arial,sans-serif;margin:20px;font-size:12px}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}@media print{@page{size:A4;margin:12mm 12mm 18mm}body{margin:0;padding-bottom:14mm}button{display:none}.gos-pied-smart{position:fixed;bottom:0;left:0;right:0;margin:0!important;background:#fff}}</style></head><body>'
     + el.innerHTML
     + '<scr'+'ipt>window.onload=function(){window.print()}</scr'+'ipt></body></html>';
   openPrintWindow(rapportHtml);
@@ -34472,7 +34492,7 @@ function exportExcel(){
   var ent = ['Immatriculation','Vehicule','Client','Type dossier','Entree','Sortie'].concat(showTech?['Technicien(s)']:[]).concat(['Piece','Qte','Prix unitaire','Total']);
   var rows = [ent.map(q).join(';')];
   var liste = [];
-  rapportDernierDossiers.forEach(function(v){ if(rapportTypeOk(v)) liste.push(v); vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl && rapportTypeOk(x);}).forEach(function(dc){ liste.push(dc); }); });
+  rapportDernierDossiers.forEach(function(v){ if(rapportTypeOk(v) && rapportLivre(v)) liste.push(v); vehicles.filter(function(x){return x.parentId===v.id && x.isDevisCompl && rapportTypeOk(x) && rapportLivre(x);}).forEach(function(dc){ liste.push(dc); }); });
   liste.forEach(function(v){
     var base = [v.immat, (v.marque||'')+' '+(v.modele||''), v.client, (v.isDevisCompl?'Devis complementaire':'Dossier')+(chiffrageSurPrixAchat(v)?' forfait':(clientEstForfait(v.client)?' hors forfait':'')), d8(v.entree), d8(v.livraison||v.dateSort)]
       .concat(showTech?[techniciensDossierRapport(v).join(', ')]:[]);
