@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-23.29';
+var GOS_VERSION = '2026-11-23.30';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -37897,6 +37897,7 @@ function diagnostiquerVehiculePortail(){
     var vus = comptes.filter(function(c){ return dossierVisiblePortail(v, c); });
     var pb = [];
     if(!prospectPublie(v)) pb.push('devis prospect pas encore envoye au client (ou archive) : non publie');
+    if(v.clotureForcee || v.devisAbandonne) pb.push('dossier cloture sans travaux (cloture directe Direction / devis abandonne) : non publie');
     if(!vus.length && prospectPublie(v)){
       var memeNom = comptes.filter(function(c){ return nomClientNorm(c.clientNom)===nomClientNorm(v.client); });
       if(memeNom.length) pb.push('compte limite au departement « '+memeNom.map(function(c){ return c.departement; }).join(', ')+' » et dossier sans ce departement');
@@ -41029,6 +41030,8 @@ function prospectPublie(v){
 }
 function dossierVisiblePortail(v, c){
   if(!v || !c || !prospectPublie(v)) return false;
+  // v.30 : dossier cloture par la Direction sans travaux (cloture forcee / devis abandonne) : rien a montrer au client
+  if(v.clotureForcee || v.devisAbandonne) return false;
   if(nomClientNorm(v.client) !== nomClientNorm(c.clientNom)) return false;
   if(c.departement) return (v.departements || []).indexOf(c.departement) >= 0;
   return true;

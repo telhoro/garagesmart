@@ -1370,6 +1370,10 @@ function regrouperClientDevis(liste){
     var tous = g[k];
     var principaux = tous.filter(function(v){ return !v.isDevisCompl || !tous.some(function(x){ return x.id===v.parentId; }); })
       .sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+    // 23/11/2026 : le passage « courant » est le dossier encore ouvert, meme s'il a ete saisi avant un
+    // dossier deja cloture ; a defaut, le plus recent.
+    var ouvert = principaux.filter(function(v){ return LIV_ST.indexOf(v.status)<0; })[0];
+    if(ouvert){ principaux = [ouvert].concat(principaux.filter(function(v){ return v!==ouvert; })); }
     var courant = principaux[0];
     var dcs = function(p){ return tous.filter(function(x){ return x.isDevisCompl && x.parentId===p.id; }).sort(function(a,b){ return (a.entree||0)-(b.entree||0); }); };
     var km = null; tous.slice().sort(function(a,b){ return (b.entree||0)-(a.entree||0); }).some(function(p){ if(p.km){ km = p.km; return true; } return false; });
