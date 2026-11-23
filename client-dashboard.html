@@ -13,7 +13,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .client-name{font-weight:700;font-size:15px}
 .client-sub{font-size:11px;color:#999}
 .btn-logout{border:1px solid #d0cec9;border-radius:7px;padding:6px 12px;font-size:12px;background:#fff;cursor:pointer;color:#1a1a1a}
-.container{max-width:900px;margin:0 auto;padding:20px}
+.container{max-width:1440px;margin:0 auto;padding:20px}   /* 23/11/2026 : zone elargie (tableaux complets) */
 .kgrid{display:grid;gap:12px;margin-bottom:20px}
 .k2{grid-template-columns:repeat(2,1fr)}
 .k3{grid-template-columns:repeat(3,1fr)}
@@ -1348,7 +1348,7 @@ function htmlTableauVehiculesDevis(titre, groupes, couleur, vide, cle){
     h += '<tr style="cursor:pointer'+(ouvert?';background:#F7F9FC':'')+'" onclick="basculerLigneDevis(\''+g.cle+'\')">'
       + '<td style="white-space:nowrap"><span style="color:#185FA5;display:inline-block;width:14px">'+(ouvert?'&#x25BE;':'&#x25B8;')+'</span><strong>'+(g.immat||'—')+'</strong> <span style="color:#666;font-size:11px">'+(g.marque||'')+' '+(g.modele||'')+'</span>'
       + (g.dcs.length ? ' <span class="badge b-amber" style="font-size:10px">+'+g.dcs.length+' compl.</span>' : '') + '</td>'
-      + '<td style="font-size:11px;max-width:200px">'+(p.motif||'—')+'</td>'
+      + '<td style="font-size:11px;min-width:160px;max-width:320px">'+(p.motif||'—')+'</td>'
       + '<td><span class="badge b-blue" style="font-size:10px;white-space:nowrap">'+labelStatut(p.status)+'</span></td>'
       + '<td style="text-align:right;white-space:nowrap">'+(j===null?'—':j+' j')+'</td>'
       + '<td style="text-align:right;font-weight:700;white-space:nowrap">'+(m?fmtF(m):'—')+'</td>'
