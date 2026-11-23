@@ -129,10 +129,19 @@ var periodeFin = null;
 var LIV_ST = ['livre','facture_deposee','dossier_cloture'];
 var STATUT_LABELS = {
   'nouveau':'Nouveau','diagnostic':'Diagnostic','chiffrage':'Chiffrage en cours',
-  'attente_validation':'Attente validation','travaux_cours':'Travaux en cours',
-  'attente_pieces':'Attente pieces','livre':'Livre','facture_deposee':'Facture deposee',
-  'dossier_cloture':'Dossier cloture','attente_fin':'En cours de traitement',
-  'devis_termine':'Devis envoye','devis_envoye':'Devis envoye'
+  'attente_validation':'Attente validation','attente_pieces':'Attente pieces',
+  // 23/11/2026 : tous les statuts de l'atelier, en mots clairs pour le client
+  'reception':'Vehicule recu','attente_diag':'En attente de diagnostic','diag_en_cours':'Diagnostic en cours',
+  'devis_atelier':'Devis en preparation','devis_valide':'Devis en preparation','attente_chiffrage':'Devis en preparation','devis_prep':'Devis en preparation',
+  'devis_termine':'Devis pret','devis_envoye':'Devis envoye — en attente de votre accord','accord_client':'Accord recu','modifier_devis':'Devis en cours de modification',
+  'veille':'Devis en veille','devis_differe':'Devis differe',
+  'attente_fin':'Accord recu — preparation des travaux','valide_fin':'Accord recu — preparation des travaux',
+  'attente_appro':'Pieces en commande','pieces_commande':'Pieces en commande','appro_en_cours':'Pieces en commande','pieces_partiel':'Pieces partiellement recues','pieces_livrees':'Pieces recues',
+  'travaux_attente':'En attente des travaux','travaux_cours':'Travaux en cours','reprise_demandee':'Travaux en cours',
+  'travaux_termines':'Controle qualite','en_test':'Controle qualite','attente_valid_chef':'Controle qualite',
+  'vehicule_termine':'Vehicule termine','en_lavage':'Lavage','client_contacte':'Pret — vous avez ete contacte','attente_client':'Pret — en attente de recuperation',
+  'en_cours_livraison':'En cours de livraison','facture_emettre':'Facturation en cours','facture_emise':'Facture emise',
+  'livre':'Livre','facture_deposee':'Facture deposee','dossier_cloture':'Dossier cloture'
 };
 
 function labelStatut(s){ return STATUT_LABELS[s] || (s||'—'); }
@@ -420,6 +429,13 @@ function renderDashboard(){
   html += '<div class="kpi"><div class="kpi-lbl">Vehicules</div><div class="kpi-val">'+vehiculesUniques.length+'</div></div>';
   html += '<div class="kpi"'+(vehiculesCtEcheance.length>0?' style="cursor:pointer;border-color:#E8A44A;background:#FFF8E8" onclick="ouvrirListeCtEcheance()"':'')+'><div class="kpi-lbl">CT a echeance / en retard</div><div class="kpi-val"'+(vehiculesCtEcheance.length>0?' style="color:#854F0B"':'')+'>'+nbCtCeMois+' ce mois'+(nbCtRetard>0?' <span style="color:#A32D2D">&middot; '+nbCtRetard+' en retard</span>':'')+'</div></div>';
   html += '</div>';
+
+  // 23/11/2026 : client 100 % devis -> presentation compacte en tableaux depliables
+  if(vehiculesDevis.length && !vehiculesForfait.length){
+    html += renderTableauxClientDevis(vehiculesFiltres);
+    document.getElementById('mainContent').innerHTML = html;
+    return;
+  }
 
   if(vehiculesDevis.length){
     var coutTotalFlotte = 0;
@@ -1223,6 +1239,158 @@ function voirDocument(passageId){
 }
 function imprimerDocumentOuvert(){ var f = document.getElementById('docFrame'); if(f && f.contentWindow){ f.contentWindow.focus(); f.contentWindow.print(); } }
 function fermerDocument(){ var ov = document.getElementById('docOverlay'); if(ov) ov.style.display = 'none'; }
+
+
+// ══ PRESENTATION CLIENT DEVIS (23/11/2026) ═══════════════════════════════════
+// Quatre tableaux compacts, comme la facturation au garage : vehicules en cours,
+// devis differes, vehicules livres en attente de vos documents, factures en
+// attente de reglement. Un clic sur une ligne la deplie (pieces du passage en
+// cours, puis passages precedents).
+var DEV_OUVERTS = {}, DEV_PASSAGES_OUVERTS = {};
+var DEV_DIFFERES = ['devis_differe','veille'];
+function fmtF(n){ return Math.round(n||0).toLocaleString('fr-FR'); }
+function fmtD(t){ return t ? new Date(t).toLocaleDateString('fr-FR') : '—'; }
+function joursDepuis(debut, fin){ if(!debut) return null; return Math.max(0, Math.floor(((fin||Date.now()) - debut)/86400000)); }
+function acomptePassage(p){ return (p.paiementsClient||[]).filter(function(x){ return x.acompte; }).reduce(function(s,x){ return s+(parseFloat(x.montant)||0); },0); }
+// Regroupe par immatriculation : passage principal le plus recent + ses devis complementaires
+function regrouperClientDevis(liste){
+  var g = {};
+  liste.forEach(function(v){ var k = (v.immat||'sans-immat').toUpperCase().replace(/[\s-]/g,''); (g[k] = g[k] || []).push(v); });
+  return Object.keys(g).map(function(k){
+    var tous = g[k];
+    var principaux = tous.filter(function(v){ return !v.isDevisCompl || !tous.some(function(x){ return x.id===v.parentId; }); })
+      .sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+    var courant = principaux[0];
+    var dcs = function(p){ return tous.filter(function(x){ return x.isDevisCompl && x.parentId===p.id; }).sort(function(a,b){ return (a.entree||0)-(b.entree||0); }); };
+    var km = null; tous.slice().sort(function(a,b){ return (b.entree||0)-(a.entree||0); }).some(function(p){ if(p.km){ km = p.km; return true; } return false; });
+    return {cle:k, immat:courant.immat, marque:courant.marque, modele:courant.modele, courant:courant, dcs:dcs(courant),
+      precedents:principaux.slice(1).map(function(p){ return {p:p, dcs:dcs(p)}; }), visites:principaux.length, km:km};
+  });
+}
+// Devis complementaire compte dans le montant seulement une fois accepte (avant, le client peut le refuser)
+var DC_NON_ACCEPTES = ['reception','attente_diag','diag_en_cours','devis_atelier','devis_valide','attente_chiffrage','devis_prep','devis_termine','devis_envoye','modifier_devis','devis_differe','veille'];
+function montantFamille(p, dcs){ return totalDevisPassage(p) + (dcs||[]).filter(function(d){ return DC_NON_ACCEPTES.indexOf(d.status)<0; }).reduce(function(s,d){ return s+totalDevisPassage(d); },0); }
+function categorieVehicule(g){
+  var st = g.courant.status;
+  if(DEV_DIFFERES.indexOf(st)>=0) return 'differe';
+  if(st==='livre') return 'livre';
+  if(LIV_ST.indexOf(st)>=0) return 'termine';
+  return 'en_cours';
+}
+function basculerLigneDevis(cle){ DEV_OUVERTS[cle] = !DEV_OUVERTS[cle]; renderDashboard(); }
+function basculerPassagesDevis(cle, ev){ if(ev) ev.stopPropagation(); DEV_PASSAGES_OUVERTS[cle] = !DEV_PASSAGES_OUVERTS[cle]; renderDashboard(); }
+function htmlPiecesPassage(p, titre){
+  var lg = ((p.chiffrage&&p.chiffrage.lignes)||[]).filter(function(l){ return (l.piece||'').trim() && !l.differe; });
+  var h = '<div style="margin:6px 0 10px">';
+  h += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;font-weight:700;margin-bottom:6px">'+titre
+    + (p.motif ? ' <span style="font-weight:400;color:#666">— '+p.motif+'</span>' : '')
+    + (p.doc && lg.length ? ' <button class="btn-detail" onclick="event.stopPropagation();voirDocument(\''+p.id+'\')">&#x1F4C4; Voir '+(estFacturePassage(p)?'la facture':'le devis')+'</button>' : '') + '</div>';
+  if(!lg.length) return h + '<div class="xs muted" style="font-size:11px;color:#999">Devis pas encore etabli.</div></div>';
+  h += '<table style="background:#fff;border:1px solid #eee"><thead><tr><th>Piece / prestation</th><th style="text-align:center">Qte</th><th style="text-align:right">Prix unit.</th><th style="text-align:right">Remise</th><th style="text-align:right">Montant</th></tr></thead><tbody>';
+  lg.forEach(function(l){
+    h += '<tr><td>'+l.piece+'</td><td style="text-align:center">'+(parseInt(l.qte)||1)+'</td><td style="text-align:right">'+(parseFloat(l.prixVente)?fmtF(l.prixVente):'—')+'</td>'
+      + '<td style="text-align:right">'+(l.remise?l.remise+'%':'')+'</td><td style="text-align:right;font-weight:600">'+fmtF(montantChiffrageLigne(l))+'</td></tr>';
+  });
+  h += '<tr><td colspan="4" style="text-align:right;font-weight:700">Total</td><td style="text-align:right;font-weight:700">'+fmtF(totalDevisPassage(p))+' FCFA</td></tr>';
+  return h + '</tbody></table></div>';
+}
+function htmlDetailVehiculeDevis(g){
+  var h = '<div style="padding:4px 6px 8px">';
+  h += htmlPiecesPassage(g.courant, 'Passage en cours — entre le '+fmtD(g.courant.entree));
+  g.dcs.forEach(function(d){ h += htmlPiecesPassage(d, 'Devis complementaire du '+fmtD(d.entree)+' <span class="badge '+(DC_NON_ACCEPTES.indexOf(d.status)>=0?'b-amber':'b-gray')+'">'+labelStatut(d.status)+'</span>'+(DC_NON_ACCEPTES.indexOf(d.status)>=0?' <span style="font-weight:400;font-size:11px;color:#854F0B">(non compte dans le montant tant qu\'il n\'est pas accepte)</span>':'')); });
+  if(g.precedents.length){
+    var ouvert = !!DEV_PASSAGES_OUVERTS[g.cle];
+    h += '<button class="btn-detail" style="margin-top:2px" onclick="basculerPassagesDevis(\''+g.cle+'\', event)">'+(ouvert?'&#x25BE;':'&#x25B8;')+' Passages precedents ('+g.precedents.length+')</button>';
+    if(ouvert){
+      h += '<table style="margin-top:8px;background:#fff;border:1px solid #eee"><thead><tr><th>Entree</th><th>Sortie</th><th>Motif</th><th>Statut</th><th style="text-align:right">Km</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
+      g.precedents.forEach(function(x){
+        var p = x.p, m = montantFamille(p, x.dcs);
+        h += '<tr><td>'+fmtD(p.entree)+'</td><td>'+fmtD(p.livraison)+'</td><td style="font-size:11px">'+(p.motif||'—')+'</td><td><span class="badge b-gray">'+labelStatut(p.status)+'</span></td>'
+          + '<td style="text-align:right">'+(p.km?fmtF(p.km):'—')+'</td><td style="text-align:right;font-weight:600">'+(m?fmtF(m):'—')+'</td>'
+          + '<td>'+(p.doc && m ? '<button class="btn-detail" onclick="event.stopPropagation();voirDocument(\''+p.id+'\')">&#x1F4C4;</button>' : '')+'</td></tr>';
+      });
+      h += '</tbody></table>';
+    }
+  }
+  return h + '</div>';
+}
+function htmlTableauVehiculesDevis(titre, groupes, couleur, vide){
+  var total = groupes.reduce(function(s,g){ return s+montantFamille(g.courant, g.dcs); },0);
+  var h = '<div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+titre
+    + ' <span class="badge" style="background:'+couleur.bg+';color:'+couleur.c+'">'+groupes.length+' vehicule'+(groupes.length>1?'s':'')+'</span>'
+    + (total ? ' <span style="font-size:13px;color:'+couleur.c+'">'+fmtF(total)+' FCFA</span>' : '') + '</div>';
+  if(!groupes.length) return h + '<div class="empty" style="padding:14px">'+vide+'</div>';
+  h += '<div style="overflow-x:auto;background:#fff;border:1px solid #e8e6e1;border-radius:10px"><table><thead><tr>'
+    + '<th>Vehicule</th><th>Motif</th><th>Statut</th><th style="text-align:right">Immob.</th><th style="text-align:right">Montant</th><th style="text-align:right">Km</th><th>Entree</th><th style="text-align:center">Visites</th><th></th></tr></thead><tbody>';
+  groupes.forEach(function(g){
+    var p = g.courant, ouvert = !!DEV_OUVERTS[g.cle], m = montantFamille(p, g.dcs);
+    var j = joursDepuis(p.entree, LIV_ST.indexOf(p.status)>=0 ? p.livraison : null);
+    h += '<tr style="cursor:pointer'+(ouvert?';background:#F7F9FC':'')+'" onclick="basculerLigneDevis(\''+g.cle+'\')">'
+      + '<td style="white-space:nowrap"><span style="color:#185FA5;display:inline-block;width:14px">'+(ouvert?'&#x25BE;':'&#x25B8;')+'</span><strong>'+(g.immat||'—')+'</strong> <span style="color:#666;font-size:11px">'+(g.marque||'')+' '+(g.modele||'')+'</span>'
+      + (g.dcs.length ? ' <span class="badge b-amber" style="font-size:10px">+'+g.dcs.length+' compl.</span>' : '') + '</td>'
+      + '<td style="font-size:11px;max-width:200px">'+(p.motif||'—')+'</td>'
+      + '<td><span class="badge b-blue" style="font-size:10px">'+labelStatut(p.status)+'</span></td>'
+      + '<td style="text-align:right;white-space:nowrap">'+(j===null?'—':j+' j')+'</td>'
+      + '<td style="text-align:right;font-weight:700;white-space:nowrap">'+(m?fmtF(m):'—')+'</td>'
+      + '<td style="text-align:right;white-space:nowrap">'+(g.km?fmtF(g.km):'—')+'</td>'
+      + '<td style="white-space:nowrap">'+fmtD(p.entree)+'</td>'
+      + '<td style="text-align:center">'+g.visites+'</td>'
+      + '<td style="white-space:nowrap">'+(p.doc && m ? '<button class="btn-detail" onclick="event.stopPropagation();voirDocument(\''+p.id+'\')">&#x1F4C4; '+(estFacturePassage(p)?'Facture':'Devis')+'</button> ' : '')
+      + '<button class="btn-detail" id="btn-msg-'+p.id+'" onclick="event.stopPropagation();ouvrirMessagerie(\''+p.id+'\',\''+g.immat+'\')">&#128172;</button></td></tr>';
+    if(ouvert) h += '<tr><td colspan="9" style="background:#F7F9FC;padding:4px 10px">'+htmlDetailVehiculeDevis(g)+'</td></tr>';
+  });
+  return h + '</tbody></table></div>';
+}
+function htmlTableauFacturesAttente(passages){
+  var lignes = passages.filter(function(p){ return (p.status==='facture_deposee' || p.status==='dossier_cloture') && totalDevisPassage(p) > (parseFloat(p.montantPaye)||0) + 0.5; })
+    .sort(function(a,b){ return (a.factureDeposeeLe||a.entree||0)-(b.factureDeposeeLe||b.entree||0); });
+  var totalReste = lignes.reduce(function(s,p){ return s+Math.max(0,totalDevisPassage(p)-(parseFloat(p.montantPaye)||0)); },0);
+  var h = '<div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">Factures en attente de reglement'
+    + ' <span class="badge b-red">'+lignes.length+' facture'+(lignes.length>1?'s':'')+'</span>'
+    + (totalReste ? ' <span style="font-size:13px;color:#A32D2D">Reste a payer : '+fmtF(totalReste)+' FCFA</span>' : '') + '</div>';
+  if(!lignes.length) return h + '<div class="empty" style="padding:14px">Aucune facture en attente de reglement.</div>';
+  h += '<div style="overflow-x:auto;background:#fff;border:1px solid #e8e6e1;border-radius:10px"><table><thead><tr>'
+    + '<th>Vehicule</th><th style="text-align:right">Montant</th><th>N&deg; facture</th><th>N&deg; secondaire</th><th>Depot</th><th style="text-align:right">Jours ecoules</th><th style="text-align:right">Acompte</th><th style="text-align:right">Reste a payer</th><th></th></tr></thead><tbody>';
+  lignes.forEach(function(p){
+    var tot = totalDevisPassage(p), paye = parseFloat(p.montantPaye)||0, ac = acomptePassage(p), j = joursDepuis(p.factureDeposeeLe);
+    h += '<tr><td style="white-space:nowrap"><strong>'+(p.immat||'—')+'</strong> <span style="color:#666;font-size:11px">'+(p.marque||'')+' '+(p.modele||'')+'</span>'+(p.isDevisCompl?' <span class="badge b-amber" style="font-size:10px">Compl.</span>':'')+'</td>'
+      + '<td style="text-align:right;white-space:nowrap">'+fmtF(tot)+'</td>'
+      + '<td style="font-family:monospace;font-size:11px">'+(p.numeroFactureExterne||'—')+'</td>'
+      + '<td style="font-size:11px">'+(p.numeroSecondaire||'—')+'</td>'
+      + '<td style="white-space:nowrap">'+fmtD(p.factureDeposeeLe)+'</td>'
+      + '<td style="text-align:right">'+(j===null?'—':j+' j')+'</td>'
+      + '<td style="text-align:right;color:#3B6D11;white-space:nowrap">'+(ac?fmtF(ac):'—')+'</td>'
+      + '<td style="text-align:right;font-weight:700;color:#A32D2D;white-space:nowrap">'+fmtF(Math.max(0,tot-paye))+'</td>'
+      + '<td>'+(p.doc ? '<button class="btn-detail" onclick="voirDocument(\''+p.id+'\')">&#x1F4C4;</button>' : '')+'</td></tr>';
+  });
+  return h + '</tbody></table></div>';
+}
+function renderTableauxClientDevis(passages){
+  var groupes = regrouperClientDevis(passages);
+  var cat = {en_cours:[], differe:[], livre:[], termine:[]};
+  groupes.forEach(function(g){ cat[categorieVehicule(g)].push(g); });
+  var parEntree = function(a,b){ return (a.courant.entree||0)-(b.courant.entree||0); };
+  cat.en_cours.sort(parEntree); cat.differe.sort(parEntree); cat.livre.sort(parEntree);
+  var h = '';
+  // indicateurs
+  var totEnCours = cat.en_cours.reduce(function(s,g){ return s+montantFamille(g.courant,g.dcs); },0);
+  var resteTotal = passages.filter(function(p){ return p.status==='facture_deposee'||p.status==='dossier_cloture'; }).reduce(function(s,p){ return s+Math.max(0,totalDevisPassage(p)-(parseFloat(p.montantPaye)||0)); },0);
+  h += '<div class="kgrid k4">';
+  h += kpiHtml('Vehicules en cours', cat.en_cours.length, '#185FA5');
+  h += kpiHtml('Devis differes', cat.differe.length, cat.differe.length?'#854F0B':null);
+  h += kpiHtml('Livres — documents attendus', cat.livre.length, cat.livre.length?'#854F0B':null);
+  h += kpiHtml('Reste a payer', fmtF(resteTotal)+' FCFA', resteTotal>0?'#A32D2D':'#3B6D11');
+  h += '</div>';
+  h += htmlTableauVehiculesDevis('Vehicules en cours', cat.en_cours, {bg:'#E6F1FB', c:'#185FA5'}, 'Aucun vehicule en cours a l\'atelier.');
+  h += htmlTableauVehiculesDevis('Devis differes', cat.differe, {bg:'#FAEEDA', c:'#854F0B'}, 'Aucun devis differe.');
+  h += htmlTableauVehiculesDevis('Vehicules livres — en attente de vos documents (ordre de reparation, bon de commande...)', cat.livre, {bg:'#FAEEDA', c:'#854F0B'}, 'Aucun vehicule livre en attente de documents.');
+  h += htmlTableauFacturesAttente(passages);
+  if(cat.termine.length){
+    cat.termine.sort(function(a,b){ return (b.courant.entree||0)-(a.courant.entree||0); });
+    h += htmlTableauVehiculesDevis('Historique — vehicules factures', cat.termine, {bg:'#EAF3DE', c:'#3B6D11'}, '');
+  }
+  return h;
+}
 
 // Imprime une facture individuelle (un seul passage), avec prix — jamais
 // utilise pour un vehicule forfait (le bouton n'apparait que pour devis).
