@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-18.24';
+var GOS_VERSION = '2026-11-23.25';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -37822,13 +37822,19 @@ function pageAccesClients(){
   }
 
   html += '<div class="card"><div class="tw"><table><thead><tr>';
-  html += '<th>Client</th><th>Departement</th><th>Contact</th><th>Email</th><th>Cree le</th><th>Mot de passe</th><th></th>';
+  html += '<th>Client</th><th>Departement</th><th>Visible sur le portail</th><th>Contact</th><th>Email</th><th>Cree le</th><th>Mot de passe</th><th></th>';
   html += '</tr></thead><tbody>';
   uids.forEach(function(uid){
     var c = CLIENT_ACCOUNTS[uid];
     html += '<tr>';
     html += '<td><strong>'+(c.clientNom||'—')+'</strong></td>';
     html += '<td>'+(c.departement ? '<span class="badge b-blue">'+c.departement+'</span>' : '<span class="xs muted">Vue globale</span>')+'</td>';
+    var dg = diagnosticPortailCompte(c);   // v.25
+    html += '<td class="xs">'+(dg.visibles
+      ? '<span style="color:#3B6D11;font-weight:600">'+dg.vehicules+' vehicule'+(dg.vehicules>1?'s':'')+'</span> · '+dg.visibles+' dossier'+(dg.visibles>1?'s':'')+(dg.enCours?' · <b>'+dg.enCours+' en cours</b>':'')
+      : '<span style="color:#A32D2D;font-weight:600">&#x26A0; Aucun dossier</span>'+(dg.total? '' : '<div class="muted">aucun dossier au nom « '+c.clientNom+' »</div>'))
+      + (dg.horsDepartement ? '<div style="color:#854F0B">'+dg.horsDepartement+' dossier(s) sans le departement « '+c.departement+' »</div>' : '')
+      + '</td>';
     html += '<td class="xs">'+(c.nomContact||'—')+'</td>';
     html += '<td class="xs" style="font-family:monospace">'+(c.email||'—')+'</td>';
     html += '<td class="xs muted">'+(c.creeLe ? new Date(c.creeLe).toLocaleDateString('fr-FR') : '—')+'</td>';
@@ -40958,6 +40964,22 @@ var GOS_FIN_VALIDATIONS = (function(){ try{ return JSON.parse(localStorage.getIt
 // Ecrite par les postes Direction et accueil ; lue uniquement par le client concerne.
 // Champs publies limites a ceux affiches par le portail. « commentaires » est
 // strictement interne et n'est JAMAIS publie.
+function nomClientNorm(s){ return String(s||'').trim().toLowerCase().replace(/\s+/g,' '); }
+function dossierVisiblePortail(v, c){
+  if(!v || !c || v.isProspect) return false;
+  if(nomClientNorm(v.client) !== nomClientNorm(c.clientNom)) return false;
+  if(c.departement) return (v.departements || []).indexOf(c.departement) >= 0;
+  return true;
+}
+// Diagnostic affiche dans « Acces clients » : ce que le client voit vraiment
+function diagnosticPortailCompte(c){
+  var tous = vehicles.filter(function(v){ return v && !v.isProspect && nomClientNorm(v.client)===nomClientNorm(c.clientNom); });
+  var vis = tous.filter(function(v){ return dossierVisiblePortail(v, c); });
+  var enCours = vis.filter(function(v){ return LIV_ST.indexOf(v.status) < 0; }).length;
+  var horsDep = c.departement ? tous.length - vis.length : 0;
+  var immats = {}; vis.forEach(function(v){ immats[(v.immat||'').toUpperCase()] = 1; });
+  return {total:tous.length, visibles:vis.length, enCours:enCours, vehicules:Object.keys(immats).length, horsDepartement:horsDep};
+}
 var GOS_PORTAIL = (function(){
   var CHAMPS = ['id','immat','marque','modele','annee','mec','km','status','entree','livraison','motif','nature','typeClient','montantPaye','departements','client','tel'];
   var minuterie = null, derniers = {}, intervalle = null;
@@ -40972,13 +40994,10 @@ var GOS_PORTAIL = (function(){
     }
     return o;
   }
+  // v.25 : rattachement par NOM du client (majuscules / espaces ignores). Le telephone n'est
+  // plus compare : un numero different d'un dossier a l'autre videait le portail du client.
   function dossiersDu(c){
-    return vehicles.filter(function(v){
-      if(v.client !== c.clientNom) return false;
-      if((v.tel || '') !== (c.clientTel || '')) return false;
-      if(c.departement) return (v.departements || []).indexOf(c.departement) >= 0;
-      return true;
-    });
+    return vehicles.filter(function(v){ return dossierVisiblePortail(v, c); });
   }
   function publier(){
     if(!actif() || typeof CLIENT_ACCOUNTS !== 'object' || !fbDb) return;
