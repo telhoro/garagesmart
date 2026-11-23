@@ -851,9 +851,106 @@ function exporterHistoriqueExcel(immat){
 }
 
 
+
+// ══ IMPRESSION HISTORIQUE AVEC LOGO ET FACTURES REGROUPEES (23/11/2026) ═══════
+// Toutes les factures (ou devis) d'un vehicule a la suite, en blocs compacts :
+// plusieurs tiennent sur une meme page, un bloc n'est jamais coupe en deux.
+// Meme presentation que les rapports client / vehicule de GarageOS (Clients et vehicules)
+function rapportEnteteSmart(titre){
+  return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;padding-bottom:12px;border-bottom:2px solid #1a1a1a">'
+    + '<img src="'+LOGO_BASE64+'" style="height:65px;width:auto;display:block" alt="Smart Services">'
+    + '<div style="border:3px solid #1a1a1a;padding:8px 20px"><span style="font-size:20px;font-weight:900;letter-spacing:1px">'+titre+'</span></div>'
+    + '</div>';
+}
+function rapportPiedSmart(){
+  return '<div style="margin-top:24px;border-top:2px solid #1a1a1a;padding-top:8px;text-align:center;font-size:12px;color:#555">'
+    + 'CI -ABJ-2007-A6390 — 2345 ABJ 01 — 27 22 43 63 55 — 07 07 73 90 73</div>';
+}
+function genRapportVehiculeHtml(v){
+  var h = '';
+  var estF = v.typeClient==='forfait';
+  var dateEntree = v.entree ? new Date(v.entree).toLocaleDateString('fr-FR') : '—';
+  var dateSortie = (v.livraison && LIV_ST.indexOf(v.status)>=0) ? new Date(v.livraison).toLocaleDateString('fr-FR') : '—';
+  h += '<div style="border:1px solid #ccc;border-radius:8px;padding:16px;margin-bottom:20px;page-break-inside:avoid;break-inside:avoid">';
+  h += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px"><div>';
+  h += '<div style="font-size:16px;font-weight:700">'+(v.immat||'')+' — '+(v.marque||'')+' '+(v.modele||'')
+    + (estF ? ' <span style="font-size:11px;font-weight:600;background:#EEEDFE;color:#534AB7;border-radius:10px;padding:2px 8px">Forfait</span>' : '')
+    + (LIV_ST.indexOf(v.status)<0 ? ' <span style="font-size:11px;font-weight:600;background:#E6F1FB;color:#185FA5;border-radius:10px;padding:2px 8px">'+labelStatut(v.status)+'</span>' : '') + '</div>';
+  h += '<div style="font-size:12px;color:#666;margin-top:2px">Client : '+(v.client||'')+(v.tel?' | '+v.tel:'')+'</div>';
+  if(v.numeroFactureExterne || v.numeroSecondaire) h += '<div style="font-size:12px;color:#666">'+(v.numeroFactureExterne?'N° facture : '+v.numeroFactureExterne:'')+(v.numeroSecondaire?(v.numeroFactureExterne?' | ':'')+'N° secondaire : '+v.numeroSecondaire:'')+'</div>';
+  h += '</div><div style="text-align:right;font-size:12px;color:#666">';
+  h += '<div>Entrée : <strong>'+dateEntree+'</strong></div>';
+  h += '<div>Sortie : <strong>'+dateSortie+'</strong></div>';
+  if(v.km) h += '<div>Kilométrage : <strong>'+fmtF(v.km)+' km</strong></div>';
+  h += '</div></div>';
+  if(v.motif){
+    h += '<div style="background:#f5f4f1;border-radius:6px;padding:10px 12px;margin-bottom:12px"><span style="font-weight:600;font-size:12px">Motif :</span> <span style="font-size:12px">'+v.motif+'</span></div>';
+  }
+  var lignes = ((v.chiffrage&&v.chiffrage.lignes)||[]).filter(function(l){ return (l.piece||'').trim() && !l.differe; });
+  var td = 'padding:6px;border:1px solid #ddd';
+  if(lignes.length && estF){
+    h += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f0ede8"><th style="'+td+';text-align:left">Pièce / Désignation</th><th style="'+td+';text-align:center;width:80px">Qté</th></tr></thead><tbody>';
+    lignes.forEach(function(l){ h += '<tr><td style="'+td+'">'+l.piece+'</td><td style="'+td+';text-align:center">'+(l.qte||1)+'</td></tr>'; });
+    h += '</tbody><tfoot><tr style="background:#534AB7;color:#fff"><td colspan="2" style="'+td+';padding:8px;font-weight:700">COUVERT PAR L\'ABONNEMENT FORFAIT</td></tr></tfoot></table>';
+  } else if(lignes.length){
+    var total = 0;
+    h += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f0ede8">'
+      + '<th style="'+td+';text-align:left">Pièce / Désignation</th><th style="'+td+';text-align:center">Qté</th><th style="'+td+';text-align:right">Prix unit.</th>'
+      + (lignes.some(function(l){ return parseFloat(l.remise); }) ? '<th style="'+td+';text-align:right">Remise</th>' : '')
+      + '<th style="'+td+';text-align:right">Total</th></tr></thead><tbody>';
+    var avecRemise = lignes.some(function(l){ return parseFloat(l.remise); });
+    lignes.forEach(function(l){
+      var pu = parseFloat(l.prixVente)||0, qte = parseInt(l.qte)||1, tot = montantChiffrageLigne(l);
+      total += tot;
+      h += '<tr><td style="'+td+'">'+l.piece+'</td><td style="'+td+';text-align:center">'+qte+'</td>'
+        + '<td style="'+td+';text-align:right">'+(pu?fmtF(pu)+' F':'—')+'</td>'
+        + (avecRemise ? '<td style="'+td+';text-align:right">'+(l.remise?l.remise+'%':'')+'</td>' : '')
+        + '<td style="'+td+';text-align:right">'+(tot?fmtF(tot)+' F':'—')+'</td></tr>';
+    });
+    h += '</tbody><tfoot><tr style="background:#185FA5;color:#fff"><td colspan="'+(avecRemise?4:3)+'" style="'+td+';padding:8px;font-weight:700">'+(estFacturePassage(v)?'TOTAL FACTURE':'TOTAL DEVIS')+'</td>'
+      + '<td style="'+td+';padding:8px;text-align:right;font-weight:700;font-size:14px">'+fmtF(total)+' F CFA</td></tr></tfoot></table>';
+    var paye = parseFloat(v.montantPaye)||0;
+    if(paye>0) h += '<div style="text-align:right;font-size:12px;margin-top:6px">Déjà versé : <b>'+fmtF(paye)+' F CFA</b> — Reste à payer : <b>'+fmtF(Math.max(0,total-paye))+' F CFA</b></div>';
+  } else {
+    h += '<div style="color:#aaa;font-size:12px;font-style:italic">Aucune pièce enregistrée</div>';
+  }
+  return h + '</div>';
+}
+// Rapport d'un vehicule : tous ses passages, du plus recent au plus ancien, devis complementaires sous leur dossier
+function htmlRapportVehicule(g){
+  var tous = g.passages;
+  var principaux = tous.filter(function(v){ return !v.isDevisCompl || !tous.some(function(x){ return x.id===v.parentId; }); })
+    .sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+  var estF = g.typeClient==='forfait';
+  var total = estF ? 0 : tous.reduce(function(s,p){ return s+totalDevisPassage(p); },0);
+  var h = rapportEnteteSmart('RAPPORT VÉHICULE');
+  h += '<div style="text-align:center;margin-bottom:16px">';
+  h += '<div style="font-size:14px;font-weight:600">'+(g.immat||'')+' — '+(g.marque||'')+' '+(g.modele||'')+' — '+(compteClient.clientNom||'')+'</div>';
+  h += '<div style="font-size:12px;color:#666">Généré le '+new Date().toLocaleDateString('fr-FR')+' — '+principaux.length+' passage'+(principaux.length>1?'s':'')+'</div></div>';
+  principaux.forEach(function(v){
+    h += genRapportVehiculeHtml(v);
+    var dcs = tous.filter(function(x){ return x.isDevisCompl && x.parentId===v.id; }).sort(function(a,b){ return (a.entree||0)-(b.entree||0); });
+    if(dcs.length){
+      h += '<div style="font-size:13px;font-weight:700;margin:12px 0 8px;color:#854F0B">Devis complémentaires</div>';
+      dcs.forEach(function(dc){ h += genRapportVehiculeHtml(dc); });
+    }
+  });
+  if(!estF && principaux.length>1 && total){
+    h += '<div style="background:#185FA5;color:#fff;border-radius:8px;padding:12px 16px;font-size:15px;font-weight:700;text-align:right;margin-top:10px">TOTAL VÉHICULE : '+fmtF(total)+' F CFA</div>';
+  }
+  return h;
+}
+function documentHistorique(groupes){
+  var h = '<div style="font-family:Arial,sans-serif;color:#1a1a1a;padding:6mm 8mm">';
+  groupes.forEach(function(g){ h += '<div class="saut">'+htmlRapportVehicule(g)+rapportPiedSmart()+'</div>'; });
+  return h + '</div>';
+}
 function imprimerHistorique(immat){
   var g = regrouperParImmatriculation(mesVehicules).find(function(x){return x.immat===immat;});
   if(!g) return;
+  // 23/11/2026 : apercu interne, logo Smart, toutes les factures regroupees
+  fermerDetail();
+  return afficherDansApercu('Historique — '+g.immat, documentHistorique([g]));
   var estForfait = g.typeClient==='forfait';
 
   var html = '<html><head><meta charset="utf-8"><title>Historique '+g.immat+'</title>';
@@ -936,6 +1033,8 @@ function imprimerToutHistorique(){
   var vehiculesFiltres = appliquerFiltres(mesVehicules);
   var groupes = regrouperParImmatriculation(vehiculesFiltres);
   if(!groupes.length){ alert('Aucun vehicule a imprimer.'); return; }
+  // 23/11/2026 : logo Smart + factures regroupees ; un vehicule commence une nouvelle page
+  return afficherDansApercu('Historique complet', documentHistorique(groupes));
 
   var html = '<html><head><meta charset="utf-8"><title>Historique complet — '+compteClient.clientNom+'</title>';
   html += '<style>body{font-family:Arial,sans-serif;padding:24px;color:#1a1a1a}';
