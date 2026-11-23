@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-23.30';
+var GOS_VERSION = '2026-11-23.31';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -41046,7 +41046,7 @@ function diagnosticPortailCompte(c){
   return {total:tous.length, visibles:vis.length, enCours:enCours, vehicules:Object.keys(immats).length, horsDepartement:horsDep};
 }
 var GOS_PORTAIL = (function(){
-  var CHAMPS = ['id','immat','marque','modele','annee','mec','km','status','entree','livraison','motif','nature','typeClient','montantPaye','departements','client','tel','vin','carburant','numeroFactureExterne','numeroSecondaire','factureDeposeeLe','isDevisCompl','parentId'];
+  var CHAMPS = ['id','immat','marque','modele','annee','mec','km','status','entree','livraison','motif','nature','typeClient','montantPaye','departements','client','tel','vin','carburant','numeroFactureExterne','numeroSecondaire','factureDeposeeLe','isDevisCompl','parentId','ct_echeance'];   // v.31 : ct_echeance (controle technique) manquait : le KPI du portail restait a 0
   var minuterie = null, derniers = {}, intervalle = null;
   function actif(){ return typeof GOS_AUTH !== 'undefined' && GOS_AUTH.mode === 'firebase' && (currentRole === 'direction' || currentRole === 'reception'); }
   function empreinte(s){ var h = 0; for(var i = 0; i < s.length; i++){ h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return s.length + ':' + h; }

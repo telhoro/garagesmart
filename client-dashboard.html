@@ -431,7 +431,7 @@ function renderDashboard(){
   var nbCtRetard = vehiculesCtEcheance.filter(function(g){return statutEcheanceCt(g.ctEcheance)==='retard';}).length;
   html += '<div class="kgrid k2" style="margin-bottom:16px">';
   html += '<div class="kpi"><div class="kpi-lbl">Vehicules</div><div class="kpi-val">'+vehiculesUniques.length+'</div></div>';
-  html += '<div class="kpi"'+(vehiculesCtEcheance.length>0?' style="cursor:pointer;border-color:#E8A44A;background:#FFF8E8" onclick="ouvrirListeCtEcheance()"':'')+'><div class="kpi-lbl">CT a echeance / en retard</div><div class="kpi-val"'+(vehiculesCtEcheance.length>0?' style="color:#854F0B"':'')+'>'+nbCtCeMois+' ce mois'+(nbCtRetard>0?' <span style="color:#A32D2D">&middot; '+nbCtRetard+' en retard</span>':'')+'</div></div>';
+  html += '<div class="kpi" title="Voir la liste des vehicules" style="cursor:pointer'+(vehiculesCtEcheance.length>0?';border-color:#E8A44A;background:#FFF8E8':'')+'" onclick="ouvrirListeCtEcheance()"><div class="kpi-lbl">Controle technique a echeance / en retard &#x203A;</div><div class="kpi-val"'+(vehiculesCtEcheance.length>0?' style="color:#854F0B"':'')+'>'+nbCtCeMois+' ce mois'+(nbCtRetard>0?' <span style="color:#A32D2D">&middot; '+nbCtRetard+' en retard</span>':'')+'</div></div>';
   html += '</div>';
 
   // 23/11/2026 : client 100 % devis -> presentation compacte en tableaux depliables
@@ -733,7 +733,7 @@ function ouvrirHistoriqueVehicule(immat){
   html += '<span class="badge '+(g.nbRetours>0?'b-red':'b-green')+'">Taux de retour : '+tauxRetour+'%'+(g.nbRetours>0?' ('+g.nbRetours+'/'+g.nbVisites+')':'')+'</span>';
   if(g.ctEcheance && estEcheanceCeMois(g.ctEcheance)){
     var statutCt = statutEcheanceCt(g.ctEcheance);
-    html += '<span class="badge '+(statutCt==='retard'?'b-red':'b-amber')+'">CT '+(statutCt==='retard'?'en retard depuis':'a echeance :')+' '+new Date(g.ctEcheance).toLocaleDateString('fr-FR')+'</span>';
+    html += '<span class="badge '+(statutCt==='retard'?'b-red':'b-amber')+'">Controle technique '+(statutCt==='retard'?'en retard depuis':'a echeance :')+' '+new Date(g.ctEcheance).toLocaleDateString('fr-FR')+'</span>';
   }
   if(!estForfait && coutTotalVehicule>0){
     html += '<span class="badge b-blue" style="font-weight:700">Total depense : '+coutTotalVehicule.toLocaleString('fr-FR')+' FCFA</span>';
@@ -1790,27 +1790,39 @@ function imprimerFacture(passageId){
 // arrive a echeance ce mois-ci, dans la meme modale que l'historique d'un
 // vehicule (reutilise detailOverlay/detailModal, pas de nouveau composant).
 function ouvrirListeCtEcheance(){
-  var groupes = regrouperParImmatriculation(mesVehicules);
-  var concernes = groupes.filter(function(g){return estEcheanceCeMois(g.ctEcheance);});
-  concernes.sort(function(a,b){ return new Date(a.ctEcheance) - new Date(b.ctEcheance); });
-
+  // 23/11/2026 : liste complete (echeances depassees, ce mois, a venir) avec export et impression
+  var groupes = regrouperParImmatriculation(appliquerFiltres(mesVehicules)).filter(function(g){ return g.ctEcheance && !isNaN(new Date(g.ctEcheance).getTime()); });
+  var rang = function(g){ var st = statutEcheanceCt(g.ctEcheance); return st==='retard' ? 0 : (st==='ce_mois' ? 1 : 2); };
+  groupes.sort(function(a,b){ return (rang(a)-rang(b)) || (new Date(a.ctEcheance)-new Date(b.ctEcheance)); });
+  var libSt = function(g){ var st = statutEcheanceCt(g.ctEcheance); return st==='retard' ? 'En retard' : (st==='ce_mois' ? 'Ce mois' : 'A venir'); };
+  var jours = function(g){ var d = new Date(g.ctEcheance); d.setHours(0,0,0,0); var n = new Date(); n.setHours(0,0,0,0); return Math.round((d-n)/86400000); };
+  var nbR = groupes.filter(function(g){ return rang(g)===0; }).length, nbM = groupes.filter(function(g){ return rang(g)===1; }).length;
+  DEV_TABLES.ct = {titre: 'Controle technique — '+nbR+' en retard, '+nbM+' ce mois',
+    colonnes: ['Immatriculation','Vehicule','Echeance controle technique','Situation','Jours restants','Km'],
+    lignes: groupes.map(function(g){ return [g.immat||'', ((g.marque||'')+' '+(g.modele||'')).trim(), new Date(g.ctEcheance).toLocaleDateString('fr-FR'), libSt(g), jours(g), g.dernierKm||'']; }),
+    totalLibelle: groupes.length+' vehicule'+(groupes.length>1?'s':'')+' avec une date de controle technique', colTotal: 5, total: 0, documents: []};
   var html = '<button class="detail-close" onclick="fermerDetail()">&#10005;</button>';
-  html += '<h3>Controle technique a echeance ou en retard</h3>';
-  if(!concernes.length){
-    html += '<div class="empty">Aucun vehicule concerne.</div>';
+  html += '<h3>Controle technique</h3>';
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'
+    + '<span class="badge b-red">'+nbR+' en retard</span><span class="badge b-amber">'+nbM+' ce mois</span><span class="badge b-gray">'+(groupes.length-nbR-nbM)+' a venir</span></div>';
+  if(!groupes.length){
+    html += '<div class="empty">Aucune date de controle technique enregistree pour vos vehicules.</div>';
   } else {
-    html += '<table><thead><tr><th>Vehicule</th><th>Echeance CT</th><th>Statut</th><th></th></tr></thead><tbody>';
-    concernes.forEach(function(g){
-      var statut = statutEcheanceCt(g.ctEcheance);
-      var badgeStatut = statut==='retard' ? '<span class="badge b-red">En retard</span>' : '<span class="badge b-amber">Ce mois</span>';
-      html += '<tr><td>'+g.immat+' <span class="xs muted">'+(g.marque||'')+' '+(g.modele||'')+'</span></td>';
-      html += '<td'+(statut==='retard'?' style="color:#A32D2D;font-weight:600"':'')+'>'+new Date(g.ctEcheance).toLocaleDateString('fr-FR')+'</td>';
-      html += '<td>'+badgeStatut+'</td>';
+    html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'
+      + '<button class="btn-detail" onclick="fermerDetail();exporterTableauDevis(\'ct\',\'print\')">&#x1F5A8; Imprimer / PDF</button>'
+      + '<button class="btn-detail" onclick="exporterTableauDevis(\'ct\',\'excel\')">&#x1F4CA; Excel</button>'
+      + '<button class="btn-detail" onclick="exporterTableauDevis(\'ct\',\'word\')">&#x1F4DD; Word</button></div>';
+    html += '<table><thead><tr><th>Vehicule</th><th>Echeance</th><th>Situation</th><th style="text-align:right">Jours</th><th></th></tr></thead><tbody>';
+    groupes.forEach(function(g){
+      var r = rang(g), j = jours(g);
+      var badge = r===0 ? '<span class="badge b-red">En retard</span>' : (r===1 ? '<span class="badge b-amber">Ce mois</span>' : '<span class="badge b-gray">A venir</span>');
+      html += '<tr><td><strong>'+g.immat+'</strong> <span class="xs muted">'+(g.marque||'')+' '+(g.modele||'')+'</span></td>';
+      html += '<td'+(r===0?' style="color:#A32D2D;font-weight:600"':'')+'>'+new Date(g.ctEcheance).toLocaleDateString('fr-FR')+'</td>';
+      html += '<td>'+badge+'</td><td style="text-align:right'+(j<0?';color:#A32D2D':'')+'">'+(j<0?j+' j':(j===0?'aujourd\'hui':'+'+j+' j'))+'</td>';
       html += '<td><button class="btn-detail" onclick="ouvrirHistoriqueVehicule(\''+g.immat+'\')">Historique</button></td></tr>';
     });
     html += '</tbody></table>';
   }
-
   document.getElementById('detailModal').innerHTML = html;
   document.getElementById('detailOverlay').style.display = 'flex';
 }
