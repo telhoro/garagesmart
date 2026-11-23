@@ -134,6 +134,7 @@ var STATUT_LABELS = {
   'nouveau':'Nouveau','diagnostic':'Diagnostic','chiffrage':'Chiffrage en cours',
   'attente_validation':'Attente validation','attente_pieces':'Attente pieces',
   // 23/11/2026 : tous les statuts de l'atelier, en mots clairs pour le client
+  'prospect':'Devis envoye — en attente de votre accord','prospect_envoye':'Devis envoye — en attente de votre accord',
   'reception':'Vehicule recu','attente_diag':'En attente de diagnostic','diag_en_cours':'Diagnostic en cours',
   'devis_atelier':'Devis en preparation','devis_valide':'Devis en preparation','attente_chiffrage':'Devis en preparation','devis_prep':'Devis en preparation',
   'devis_termine':'Devis pret','devis_envoye':'Devis envoye — en attente de votre accord','accord_client':'Accord recu','modifier_devis':'Devis en cours de modification',
@@ -1620,7 +1621,7 @@ function exporterTableauDevis(cle, action){
 }
 
 // ══ INDICATEURS COMPLEMENTAIRES (23/11/2026) ═════════════════════════════════
-var DEVIS_ATTENTE_ST = ['devis_termine','devis_envoye','modifier_devis'];
+var DEVIS_ATTENTE_ST = ['devis_termine','devis_envoye','modifier_devis','prospect','prospect_envoye'];
 var MAINT_PERIODE = 'mois', MAINT_DEB = null, MAINT_FIN = null;
 function bornesMaintenance(){
   var n = new Date();

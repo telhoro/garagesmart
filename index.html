@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-23.27';
+var GOS_VERSION = '2026-11-23.29';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -37810,8 +37810,14 @@ function pageAccesClients(){
   var html = GOS_COFFRE.bandeau();   // COFFRE MDP
   html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
   html += '<h2 style="font-size:16px;font-weight:700;margin:0">Acces clients — Portail distant</h2>';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+  html += '<button class="btn btn-sm" onclick="republierPortailMaintenant()">&#x1F504; Mettre a jour les portails maintenant</button>';
   html += '<button class="btn btn-primary btn-sm" onclick="ouvrirCreationCompteClient()">+ Nouveau compte</button>';
-  html += '</div>';
+  html += '</div></div>';
+  // v.28 : diagnostic « pourquoi ce vehicule n'apparait pas chez le client ? »
+  html += '<div class="card" style="padding:12px 14px;margin-bottom:16px"><div style="font-weight:700;font-size:13px;margin-bottom:8px">&#x1F50D; Un vehicule n\'apparait pas chez le client ?</div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap"><input class="inp" id="diagPortailImmat" placeholder="Immatriculation (ex : 4977LE01)" style="max-width:260px" onkeydown="if(event.key===\'Enter\')diagnostiquerVehiculePortail()">'
+    + '<button class="btn btn-sm" onclick="diagnostiquerVehiculePortail()">Verifier</button></div><div id="diagPortailRes" style="margin-top:10px"></div></div>';
 
   html += '<div class="info-box" style="margin-bottom:16px">Ces comptes permettent a vos clients de consulter a distance le statut de leurs vehicules, leur historique et (selon le type) leurs factures, via une adresse separee : client.html</div>';
 
@@ -37860,6 +37866,55 @@ function getFirebaseAuthSecondaire(){
   return fbSecondaryApp.auth();
 }
 
+function republierPortailMaintenant(){
+  if(!GOS_PORTAIL.actif()){ afficherToastNotif('Mise a jour impossible depuis ce poste', 'Seuls les postes Direction et Accueil connectes en ligne publient les portails clients.', 'alerte'); return; }
+  GOS_PORTAIL.forcer();
+  afficherToastNotif('Portails clients mis a jour', 'Les clients voient les changements en rechargeant leur page.', 'ok');
+}
+// Ou en est un vehicule cote portail : quel compte le voit, et dans quel tableau
+function diagnostiquerVehiculePortail(){
+  var box = document.getElementById('diagPortailRes'); if(!box) return;
+  var q = String((document.getElementById('diagPortailImmat')||{}).value||'').toUpperCase().replace(/[\s-]/g,'');
+  if(!q){ box.innerHTML = ''; return; }
+  var dossiers = vehicles.filter(function(v){ return v && String(v.immat||'').toUpperCase().replace(/[\s-]/g,'').indexOf(q)>=0; })
+    .sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
+  if(!dossiers.length){ box.innerHTML = '<div style="color:#A32D2D;font-size:12px">Aucun dossier avec cette immatriculation dans GarageOS.</div>'; return; }
+  var comptes = Object.keys(CLIENT_ACCOUNTS).map(function(u){ return CLIENT_ACCOUNTS[u]; });
+  var tableau = function(v){
+    var st = v.status;
+    if(v.typeClient==='forfait' && !estDossierAssurance(v)) return 'Presentation forfait';
+    if(['devis_differe','veille'].indexOf(st)>=0) return 'Devis differes';
+    if(v.isProspect) return 'Vehicules en cours (devis envoye — en attente d\'accord)';
+    if(st==='livre') return 'Vehicules livres — en attente de documents';
+    if(st==='facture_deposee' || st==='dossier_cloture'){
+      var reste = montantFactureDossier(v) - (parseFloat(v.montantPaye)||0);
+      return reste > 0.5 ? 'Factures en attente de reglement (+ bouton Historique)' : 'Bouton Historique seulement (dossier solde)';
+    }
+    return 'Vehicules en cours';
+  };
+  var h = '<table style="font-size:12px"><thead><tr><th>Dossier</th><th>Client sur le dossier</th><th>Statut</th><th>Visible pour le compte</th><th>Ou chez le client</th></tr></thead><tbody>';
+  dossiers.slice(0,10).forEach(function(v){
+    var vus = comptes.filter(function(c){ return dossierVisiblePortail(v, c); });
+    var pb = [];
+    if(!prospectPublie(v)) pb.push('devis prospect pas encore envoye au client (ou archive) : non publie');
+    if(!vus.length && prospectPublie(v)){
+      var memeNom = comptes.filter(function(c){ return nomClientNorm(c.clientNom)===nomClientNorm(v.client); });
+      if(memeNom.length) pb.push('compte limite au departement « '+memeNom.map(function(c){ return c.departement; }).join(', ')+' » et dossier sans ce departement');
+      else pb.push('aucun compte client au nom « '+(v.client||'—')+' » — comptes existants : '+(comptes.map(function(c){ return c.clientNom; }).join(', ')||'aucun'));
+    }
+    h += '<tr><td><strong>'+(v.immat||'')+'</strong> <span class="xs muted">entre le '+(v.entree?new Date(v.entree).toLocaleDateString('fr-FR'):'—')+(v.isDevisCompl?' · devis compl.':'')+'</span></td>'
+      + '<td>'+(v.client||'—')+(estDossierAssurance(v)?' <span class="xs muted">(assurance '+(v.assureur||'?')+')</span>':'')+'</td>'
+      + '<td class="xs">'+((STATUSES[v.status]||{l:v.status}).l)+'</td>'
+      + '<td>'+(vus.length ? '<span style="color:#3B6D11;font-weight:600">&#x2713; '+vus.map(function(c){ return c.clientNom+(c.departement?' ('+c.departement+')':''); }).join(', ')+'</span>' : '<span style="color:#A32D2D;font-weight:600">&#x2717; Non</span><div class="xs" style="color:#A32D2D">'+pb.join(' ; ')+'</div>')+'</td>'
+      + '<td class="xs">'+(vus.length ? tableau(v) : '—')+'</td></tr>';
+  });
+  h += '</tbody></table>';
+  h += '<div class="xs muted" style="margin-top:6px">Si le dossier est « Visible » mais absent chez le client : cliquez « Mettre a jour les portails maintenant », puis faites recharger la page au client (et verifiez qu\'aucune recherche ni periode n\'est active sur sa page).</div>';
+  box.innerHTML = h;
+}
+function montantFactureDossier(v){
+  return ((v.chiffrage&&v.chiffrage.lignes)||[]).filter(function(l){ return (l.piece||'').trim() && !l.differe; }).reduce(function(s,l){ return s+montantChiffrageLigne(l); },0);
+}
 function ouvrirCreationCompteClient(){
   if(currentRole!=='direction') return;
   // Peupler la liste des clients (noms uniques, tous types confondus)
@@ -40965,15 +41020,22 @@ var GOS_FIN_VALIDATIONS = (function(){ try{ return JSON.parse(localStorage.getIt
 // Champs publies limites a ceux affiches par le portail. « commentaires » est
 // strictement interne et n'est JAMAIS publie.
 function nomClientNorm(s){ return String(s||'').trim().toLowerCase().replace(/\s+/g,' '); }
+// v.29 : un devis prospect ENVOYE au client (ou en veille / accepte) est publie ; un prospect
+// pas encore envoye ou archive ne l'est pas.
+function prospectPublie(v){
+  if(!v.isProspect) return true;
+  if(v.prospectStatut==='archive' || v.archive) return false;
+  return v.status!=='prospect' || v.prospectStatut==='envoye' || v.prospectStatut==='valide_client';
+}
 function dossierVisiblePortail(v, c){
-  if(!v || !c || v.isProspect) return false;
+  if(!v || !c || !prospectPublie(v)) return false;
   if(nomClientNorm(v.client) !== nomClientNorm(c.clientNom)) return false;
   if(c.departement) return (v.departements || []).indexOf(c.departement) >= 0;
   return true;
 }
 // Diagnostic affiche dans « Acces clients » : ce que le client voit vraiment
 function diagnosticPortailCompte(c){
-  var tous = vehicles.filter(function(v){ return v && !v.isProspect && nomClientNorm(v.client)===nomClientNorm(c.clientNom); });
+  var tous = vehicles.filter(function(v){ return v && prospectPublie(v) && nomClientNorm(v.client)===nomClientNorm(c.clientNom); });
   var vis = tous.filter(function(v){ return dossierVisiblePortail(v, c); });
   var enCours = vis.filter(function(v){ return LIV_ST.indexOf(v.status) < 0; }).length;
   var horsDep = c.departement ? tous.length - vis.length : 0;
@@ -41018,7 +41080,9 @@ var GOS_PORTAIL = (function(){
     clearTimeout(minuterie); minuterie = setTimeout(publier, 1500);
     if(!intervalle) intervalle = setInterval(publier, 60000);
   }
-  return {planifier: planifier, publier: publier, projeter: projeter};
+  // v.28 : republier tout de suite, meme si rien n'a change depuis la derniere publication
+  function forcer(){ derniers = {}; publier(); }
+  return {planifier: planifier, publier: publier, projeter: projeter, forcer: forcer, actif: actif};
 })();
 
 // ---------------------------------------------------------------- comptes du personnel
