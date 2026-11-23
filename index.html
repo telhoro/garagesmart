@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-23.25';
+var GOS_VERSION = '2026-11-23.26';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -40981,7 +40981,7 @@ function diagnosticPortailCompte(c){
   return {total:tous.length, visibles:vis.length, enCours:enCours, vehicules:Object.keys(immats).length, horsDepartement:horsDep};
 }
 var GOS_PORTAIL = (function(){
-  var CHAMPS = ['id','immat','marque','modele','annee','mec','km','status','entree','livraison','motif','nature','typeClient','montantPaye','departements','client','tel'];
+  var CHAMPS = ['id','immat','marque','modele','annee','mec','km','status','entree','livraison','motif','nature','typeClient','montantPaye','departements','client','tel','vin','carburant'];
   var minuterie = null, derniers = {}, intervalle = null;
   function actif(){ return typeof GOS_AUTH !== 'undefined' && GOS_AUTH.mode === 'firebase' && (currentRole === 'direction' || currentRole === 'reception'); }
   function empreinte(s){ var h = 0; for(var i = 0; i < s.length; i++){ h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return s.length + ':' + h; }
@@ -40990,7 +40990,12 @@ var GOS_PORTAIL = (function(){
     CHAMPS.forEach(function(k){ if(v[k] !== undefined && v[k] !== null) o[k] = JSON.parse(JSON.stringify(v[k])); });
     if(v.chiffrage){
       o.chiffrage = {soumisLe: v.chiffrage.soumisLe || null, valideDirLe: v.chiffrage.valideDirLe || null,
-        lignes: (v.chiffrage.lignes || []).map(function(l){ return {piece: l.piece, qte: l.qte, prixVente: l.prixVente}; })};
+        lignes: (v.chiffrage.lignes || []).map(function(l){ var o2 = {piece: l.piece, qte: l.qte, prixVente: l.prixVente}; if(l.remise) o2.remise = l.remise; if(l.differe) o2.differe = true; return o2; })};
+      // v.26 : de quoi refaire sur le portail le MEME devis / facture que « Imprimer » au garage
+      if(!chiffrageSurPrixAchat(v)){
+        o.doc = {num: genNumeroDoc(v, ['vehicule_termine','en_lavage','client_contacte','facture_editee','facture_deposee','dossier_cloture','attente_client'].indexOf(v.status)>=0 ? 'FACTURE' : 'DEVIS')};
+        o.paiementsClient = (v.paiementsClient || []).map(function(p){ return {montant: p.montant, date: p.date || null, acompte: p.acompte === true}; });
+      }
     }
     return o;
   }
