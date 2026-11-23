@@ -74,6 +74,7 @@ td{padding:8px;border-bottom:1px solid #f0ede8}
     </div>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
+    <button class="btn-logout" id="btnVueHistorique" style="display:none" onclick="basculerVueHistorique()">&#x1F4CB; Historique</button>
     <a href="client-stats.html" class="btn-logout" style="text-decoration:none">&#128202; Statistiques</a>
     <button class="btn-logout" onclick="deconnexion()">Deconnexion</button>
   </div>
@@ -433,9 +434,11 @@ function renderDashboard(){
   html += '</div>';
 
   // 23/11/2026 : client 100 % devis -> presentation compacte en tableaux depliables
+  var btnH = document.getElementById('btnVueHistorique'); if(btnH) btnH.style.display = (vehiculesDevis.length && !vehiculesForfait.length) ? '' : 'none';
   if(vehiculesDevis.length && !vehiculesForfait.length){
     html += renderTableauxClientDevis(vehiculesFiltres);
     document.getElementById('mainContent').innerHTML = html;
+    chargerCompteursMessagesNonLus();
     return;
   }
 
@@ -1332,10 +1335,12 @@ function htmlDetailVehiculeDevis(g){
 function htmlTableauVehiculesDevis(titre, groupes, couleur, vide, cle){
   var total = groupes.reduce(function(s,g){ return s+montantFamille(g.courant, g.dcs); },0);
   // 23/11/2026 : donnees du tableau, pour l'impression / Excel / Word et les documents groupes
+  var colDate = cle==='livre' ? 'Livraison' : 'Entree';   // 23/11/2026 : vehicules livres -> date de livraison
+  var dateLigne = function(p){ return cle==='livre' ? (p.livraison || null) : p.entree; };
   DEV_TABLES[cle] = {titre: titre,
-    colonnes: ['Immatriculation','Vehicule','Motif','Statut','Immobilisation (j)','Montant (FCFA)','Km','Entree','Visites'],
+    colonnes: ['Immatriculation','Vehicule','Motif','Statut','Immobilisation (j)','Montant (FCFA)',colDate,'Km','Visites'],
     lignes: groupes.map(function(g){ var p = g.courant, j = joursDepuis(p.entree, LIV_ST.indexOf(p.status)>=0 ? p.livraison : null);
-      return [g.immat||'', ((g.marque||'')+' '+(g.modele||'')).trim(), p.motif||'', labelStatut(p.status), j===null?'':j, Math.round(montantFamille(p, g.dcs)), g.km||'', fmtD(p.entree), g.visites]; }),
+      return [g.immat||'', ((g.marque||'')+' '+(g.modele||'')).trim(), p.motif||'', labelStatut(p.status), j===null?'':j, Math.round(montantFamille(p, g.dcs)), fmtD(dateLigne(p)), g.km||'', g.visites]; }),
     totalLibelle: groupes.length+' vehicule'+(groupes.length>1?'s':'')+(total?' — total '+fmtF(total)+' FCFA':''), colTotal: 5, total: total,
     documents: [].concat.apply([], groupes.map(function(g){ return [g.courant].concat(g.dcs.filter(function(d){ return DC_NON_ACCEPTES.indexOf(d.status)<0; })); }))
       .filter(function(p){ return aDocument(p); })};
@@ -1344,7 +1349,7 @@ function htmlTableauVehiculesDevis(titre, groupes, couleur, vide, cle){
     + (total ? ' <span style="font-size:13px;color:'+couleur.c+'">'+fmtF(total)+' FCFA</span>' : '') + htmlBoutonsTableau(cle, groupes.length) + '</div>';
   if(!groupes.length) return h + '<div class="empty" style="padding:14px">'+vide+'</div>';
   h += '<div style="overflow-x:auto;background:#fff;border:1px solid #e8e6e1;border-radius:10px"><table class="tab-dev"><thead><tr>'
-    + '<th>Vehicule</th><th>Motif</th><th>Statut</th><th style="text-align:right">Immob.</th><th style="text-align:right">Montant</th><th style="text-align:right">Km</th><th>Entree</th><th style="text-align:center">Visites</th><th></th></tr></thead><tbody>';
+    + '<th>Vehicule</th><th>Motif</th><th>Statut</th><th style="text-align:right">Immob.</th><th style="text-align:right">Montant</th><th>'+colDate+'</th><th style="text-align:right">Km</th><th style="text-align:center">Visites</th><th></th></tr></thead><tbody>';
   groupes.forEach(function(g){
     var p = g.courant, ouvert = !!DEV_OUVERTS[g.cle], m = montantFamille(p, g.dcs);
     var j = joursDepuis(p.entree, LIV_ST.indexOf(p.status)>=0 ? p.livraison : null);
@@ -1355,8 +1360,8 @@ function htmlTableauVehiculesDevis(titre, groupes, couleur, vide, cle){
       + '<td><span class="badge b-blue" style="font-size:10px;white-space:nowrap">'+labelStatut(p.status)+'</span></td>'
       + '<td style="text-align:right;white-space:nowrap">'+(j===null?'—':j+' j')+'</td>'
       + '<td style="text-align:right;font-weight:700;white-space:nowrap">'+(m?fmtF(m):'—')+'</td>'
+      + '<td style="white-space:nowrap">'+fmtD(dateLigne(p))+'</td>'
       + '<td style="text-align:right;white-space:nowrap">'+(g.km?fmtF(g.km):'—')+'</td>'
-      + '<td style="white-space:nowrap">'+fmtD(p.entree)+'</td>'
       + '<td style="text-align:center">'+g.visites+'</td>'
       + '<td style="white-space:nowrap">'+(aDocument(p) ? '<button class="btn-detail" onclick="event.stopPropagation();voirDocument(\''+p.id+'\')">&#x1F4C4; '+(estFacturePassage(p)?'Facture':'Devis')+'</button> ' : '')
       + '<button class="btn-detail" title="Historique complet du vehicule" onclick="event.stopPropagation();ouvrirHistoriqueVehicule(\''+String(p.immat||'').toUpperCase().replace(/'/g,"\\'")+'\')">&#x1F4CB; Historique</button> '
@@ -1462,6 +1467,85 @@ function exporterTableauDevis(cle, action){
     }
   }
 }
+
+// ══ INDICATEURS COMPLEMENTAIRES (23/11/2026) ═════════════════════════════════
+var DEVIS_ATTENTE_ST = ['devis_termine','devis_envoye','modifier_devis'];
+var MAINT_PERIODE = 'mois', MAINT_DEB = null, MAINT_FIN = null;
+function bornesMaintenance(){
+  var n = new Date();
+  if(MAINT_PERIODE==='mois') return [new Date(n.getFullYear(), n.getMonth(), 1).getTime(), new Date(n.getFullYear(), n.getMonth()+1, 0, 23,59,59,999).getTime()];
+  if(MAINT_PERIODE==='trimestre'){ var q = Math.floor(n.getMonth()/3)*3; return [new Date(n.getFullYear(), q, 1).getTime(), new Date(n.getFullYear(), q+3, 0, 23,59,59,999).getTime()]; }
+  if(MAINT_PERIODE==='custom' && MAINT_DEB && MAINT_FIN) return [MAINT_DEB, MAINT_FIN];
+  return [0, Infinity];
+}
+function libellePeriodeMaintenance(){
+  var mois = ['janvier','fevrier','mars','avril','mai','juin','juillet','aout','septembre','octobre','novembre','decembre'], n = new Date();
+  if(MAINT_PERIODE==='mois') return mois[n.getMonth()]+' '+n.getFullYear();
+  if(MAINT_PERIODE==='trimestre') return 'T'+(Math.floor(n.getMonth()/3)+1)+' '+n.getFullYear();
+  if(MAINT_PERIODE==='custom' && MAINT_DEB) return 'du '+fmtD(MAINT_DEB)+' au '+fmtD(MAINT_FIN);
+  return 'depuis le debut';
+}
+function choisirPeriodeMaintenance(p){
+  if(p==='custom'){
+    var d = document.getElementById('maintDeb').value, f = document.getElementById('maintFin').value;
+    if(!d || !f){ alert('Choisissez les deux dates.'); return; }
+    MAINT_DEB = new Date(d+'T00:00:00').getTime(); MAINT_FIN = new Date(f+'T23:59:59').getTime();
+  }
+  MAINT_PERIODE = p; renderDashboard();
+}
+// Depenses de maintenance = dossiers LIVRES (travaux realises), au prix facture, datees de la livraison
+function totalMaintenance(passages){
+  var b = bornesMaintenance(), tot = 0, n = 0;
+  passages.forEach(function(p){
+    if(LIV_ST.indexOf(p.status)<0) return;
+    var d = p.livraison || p.factureDeposeeLe || p.entree || 0;
+    if(d < b[0] || d > b[1]) return;
+    var m = totalDevisPassage(p); if(m>0){ tot += m; n++; }
+  });
+  return {total:tot, nb:n};
+}
+function htmlIndicateursFlotte(passages, groupes, cat){
+  // immobilisation moyenne : passages livres (entree -> livraison), en jours
+  var dur = passages.filter(function(p){ return !p.isDevisCompl && p.entree && p.livraison && p.livraison>=p.entree && LIV_ST.indexOf(p.status)>=0; })
+    .map(function(p){ return (p.livraison-p.entree)/86400000; }).filter(function(j){ return j<365; });
+  var immo = dur.length ? dur.reduce(function(s,j){ return s+j; },0)/dur.length : null;
+  // kilometrage moyen : dernier km connu de chaque vehicule
+  var kms = groupes.filter(function(g){ return g.km; }).map(function(g){ return parseFloat(g.km)||0; });
+  var kmMoy = kms.length ? kms.reduce(function(s,k){ return s+k; },0)/kms.length : null;
+  // factures en attente client : vehicules livres, en attente des documents du client (OR, bon de commande...)
+  var factAttClient = 0, nbFAC = 0, devisAttente = 0, nbDA = 0;
+  cat.livre.forEach(function(g){ var m = montantFamille(g.courant, g.dcs); if(m>0){ factAttClient += m; nbFAC++; } });
+  cat.en_cours.forEach(function(g){
+    if(DEVIS_ATTENTE_ST.indexOf(g.courant.status)>=0){ var m2 = totalDevisPassage(g.courant); if(m2>0){ devisAttente += m2; nbDA++; } }
+    g.dcs.forEach(function(d){ if(DEVIS_ATTENTE_ST.indexOf(d.status)>=0){ var m3 = totalDevisPassage(d); if(m3>0){ devisAttente += m3; nbDA++; } } });
+  });
+  var h = '<div class="kgrid k4" style="margin-top:-8px">';
+  h += kpiHtml('Immobilisation moyenne', immo===null ? '—' : immo.toFixed(1).replace('.',',')+' j');
+  h += kpiHtml('Kilometrage moyen', kmMoy===null ? '—' : fmtF(kmMoy)+' km');
+  h += '<div class="kpi"><div class="kpi-lbl">Factures en attente client</div><div class="kpi-val" style="color:'+(factAttClient?'#534AB7':'#1a1a1a')+'">'+fmtF(factAttClient)+' FCFA</div><div style="font-size:10px;color:#999;margin-top:3px">'+nbFAC+' vehicule'+(nbFAC>1?'s':'')+' livre'+(nbFAC>1?'s':'')+' — documents attendus</div></div>';
+  h += '<div class="kpi"><div class="kpi-lbl">Devis en attente de validation</div><div class="kpi-val" style="color:'+(devisAttente?'#854F0B':'#1a1a1a')+'">'+fmtF(devisAttente)+' FCFA</div><div style="font-size:10px;color:#999;margin-top:3px">'+nbDA+' devis a valider</div></div>';
+  h += '</div>';
+  // total maintenance avec sa propre periode
+  var tm = totalMaintenance(passages);
+  var chip = function(p, lib){ return '<button class="btn-filter'+(MAINT_PERIODE===p?' active':'')+'" style="padding:5px 11px" onclick="choisirPeriodeMaintenance(\''+p+'\')">'+lib+'</button>'; };
+  var dv = function(t){ return t && t!==Infinity ? new Date(t).toISOString().slice(0,10) : ''; };
+  h += '<div class="kpi" style="margin:-8px 0 20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">'
+    + '<div><div class="kpi-lbl">Total maintenance — '+libellePeriodeMaintenance()+'</div><div class="kpi-val" style="color:#3B6D11">'+fmtF(tm.total)+' FCFA</div>'
+    + '<div style="font-size:10px;color:#999;margin-top:3px">'+tm.nb+' intervention'+(tm.nb>1?'s':'')+' livree'+(tm.nb>1?'s':'')+' sur la periode</div></div>'
+    + '<div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
+    + chip('mois','Mois en cours') + chip('trimestre','Trimestre') + chip('tous','Tous')
+    + '<input type="date" class="date-input" id="maintDeb" value="'+(MAINT_PERIODE==='custom'?dv(MAINT_DEB):'')+'" style="padding:5px 8px"><span class="filter-label">a</span>'
+    + '<input type="date" class="date-input" id="maintFin" value="'+(MAINT_PERIODE==='custom'?dv(MAINT_FIN):'')+'" style="padding:5px 8px">'
+    + '<button class="btn-filter'+(MAINT_PERIODE==='custom'?' active':'')+'" style="padding:5px 11px" onclick="choisirPeriodeMaintenance(\'custom\')">OK</button>'
+    + '</div></div>';
+  return h;
+}
+var VUE_HISTORIQUE = false;
+function basculerVueHistorique(){
+  VUE_HISTORIQUE = !VUE_HISTORIQUE;
+  var b = document.getElementById('btnVueHistorique'); if(b) b.innerHTML = VUE_HISTORIQUE ? '&#x1F3E0; Accueil' : '&#x1F4CB; Historique';
+  renderDashboard(); window.scrollTo(0,0);
+}
 function renderTableauxClientDevis(passages){
   var groupes = regrouperClientDevis(passages);
   var cat = {en_cours:[], differe:[], livre:[], termine:[]};
@@ -1469,6 +1553,15 @@ function renderTableauxClientDevis(passages){
   var parEntree = function(a,b){ return (a.courant.entree||0)-(b.courant.entree||0); };
   cat.en_cours.sort(parEntree); cat.differe.sort(parEntree); cat.livre.sort(parEntree);
   var h = '';
+  if(VUE_HISTORIQUE){
+    var tousG = groupes.slice().sort(function(a,b){ return (b.courant.entree||0)-(a.courant.entree||0); });
+    var C_H = {bg:'#DCEBC9', c:'#3B6D11', fond:'#F2F8EA', bord:'#CFE2B8'};
+    DEV_TABLES = {};
+    h += '<div style="margin:4px 0 10px"><button class="btn-filter" onclick="basculerVueHistorique()">&#x2190; Retour a l\'accueil</button></div>';
+    h += '<div style="background:'+C_H.fond+';border:1px solid '+C_H.bord+';border-left:6px solid '+C_H.c+';border-radius:12px;padding:2px 14px 14px;margin:10px 0">'
+      + htmlTableauVehiculesDevis('Historique — tous vos vehicules', tousG, C_H, 'Aucun vehicule.', 'historique') + '</div>';
+    return h;
+  }
   // indicateurs
   var totEnCours = cat.en_cours.reduce(function(s,g){ return s+montantFamille(g.courant,g.dcs); },0);
   var resteTotal = passages.filter(function(p){ return p.status==='facture_deposee'||p.status==='dossier_cloture'; }).reduce(function(s,p){ return s+Math.max(0,totalDevisPassage(p)-(parseFloat(p.montantPaye)||0)); },0);
@@ -1476,8 +1569,11 @@ function renderTableauxClientDevis(passages){
   h += kpiHtml('Vehicules en cours', cat.en_cours.length, '#185FA5');
   h += kpiHtml('Devis differes', cat.differe.length, cat.differe.length?'#854F0B':null);
   h += kpiHtml('Livres — documents attendus', cat.livre.length, cat.livre.length?'#534AB7':null);
-  h += kpiHtml('Reste a payer', fmtF(resteTotal)+' FCFA', resteTotal>0?'#A32D2D':'#3B6D11');
+  // 23/11/2026 : « Total factures en cours » = factures DEPOSEES pas encore soldees (reste a payer)
+  var nbFactDep = passages.filter(function(p){ return (p.status==='facture_deposee'||p.status==='dossier_cloture') && totalDevisPassage(p) > (parseFloat(p.montantPaye)||0) + 0.5; }).length;
+  h += '<div class="kpi"><div class="kpi-lbl">Total factures en cours</div><div class="kpi-val" style="color:'+(resteTotal>0?'#A32D2D':'#3B6D11')+'">'+fmtF(resteTotal)+' FCFA</div><div style="font-size:10px;color:#999;margin-top:3px">'+nbFactDep+' facture'+(nbFactDep>1?'s':'')+' deposee'+(nbFactDep>1?'s':'')+' non soldee'+(nbFactDep>1?'s':'')+'</div></div>';
   h += '</div>';
+  h += htmlIndicateursFlotte(passages, groupes, cat);   // 23/11/2026
   DEV_TABLES = {};
   // 23/11/2026 : chaque tableau dans son propre panneau de couleur
   var panneau = function(c, contenu){ return '<div style="background:'+c.fond+';border:1px solid '+c.bord+';border-left:6px solid '+c.c+';border-radius:12px;padding:2px 14px 14px;margin:22px 0">'+contenu+'</div>'; };
@@ -1490,10 +1586,7 @@ function renderTableauxClientDevis(passages){
   h += panneau(C_DIFF, htmlTableauVehiculesDevis('Devis differes', cat.differe, C_DIFF, 'Aucun devis differe.', 'differe'));
   h += panneau(C_LIVRE, htmlTableauVehiculesDevis('Vehicules livres — en attente de vos documents (ordre de reparation, bon de commande...)', cat.livre, C_LIVRE, 'Aucun vehicule livre en attente de documents.', 'livre'));
   h += panneau(C_FACT, htmlTableauFacturesAttente(passages));
-  if(cat.termine.length){
-    cat.termine.sort(function(a,b){ return (b.courant.entree||0)-(a.courant.entree||0); });
-    h += panneau(C_HIST, htmlTableauVehiculesDevis('Historique — vehicules factures', cat.termine, C_HIST, '', 'termine'));
-  }
+  // 23/11/2026 : l'historique n'est plus sur la page d'accueil -> bouton « Historique » en haut
   return h;
 }
 
