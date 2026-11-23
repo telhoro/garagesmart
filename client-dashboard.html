@@ -48,6 +48,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 table{width:100%;border-collapse:collapse;font-size:12px}
 th{text-align:left;padding:6px 8px;font-size:11px;color:#999;font-weight:400;border-bottom:1px solid #e8e6e1}
 td{padding:8px;border-bottom:1px solid #f0ede8}
+.tab-dev>tbody>tr>td,.tab-dev>thead>tr>th{padding:7px 5px}
+.tab-dev .btn-detail{padding:4px 8px}
 .loading{text-align:center;padding:60px 20px;color:#999}
 .empty{text-align:center;padding:30px;color:#999;font-size:13px}
 .detail-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;padding:20px;z-index:100}
@@ -620,7 +622,7 @@ function renderVehiculeCardDevis(g){
   html += '<div class="vcard-modele"><span class="badge '+statutClasse+'">'+labelStatut(v.status)+'</span> <span class="xs muted">&middot; '+g.nbVisites+' visite'+(g.nbVisites>1?'s':'')+' a l\'atelier</span></div>';
   if(enCours && montantDevisEnCours>0){
     html += '<div class="xs" style="margin-top:4px;font-weight:600;color:#185FA5;display:flex;align-items:center;gap:8px;flex-wrap:wrap">Montant du '+(estFacturePassage(v)?'dossier':'devis')+' en cours : '+Math.round(montantDevisEnCours).toLocaleString('fr-FR')+' FCFA'
-      + (v.doc ? ' <button class="btn-detail" style="font-size:12px;padding:3px 10px" onclick="voirDocument(\''+v.id+'\')">&#x1F4C4; Voir '+(estFacturePassage(v)?'la facture':'le devis')+'</button>' : '') + '</div>';
+      + (aDocument(v) ? ' <button class="btn-detail" style="font-size:12px;padding:3px 10px" onclick="voirDocument(\''+v.id+'\')">&#x1F4C4; Voir '+(estFacturePassage(v)?'la facture':'le devis')+'</button>' : '') + '</div>';
   }
   html += renderInfosVehicule(g);
   html += renderInfosEnCours(v);
@@ -1006,6 +1008,7 @@ var GOS_FMT0 = {maximumFractionDigits: 0};
 function montantChiffrageLigne(cl){ if(cl.differe) return 0; return (parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1)*(1-(parseFloat(cl.remise)||0)/100); }
 function totalDevisPassage(p){ return ((p.chiffrage&&p.chiffrage.lignes)||[]).filter(function(l){ return (l.piece||'').trim() && !l.differe; }).reduce(function(s,l){ return s+montantChiffrageLigne(l); },0); }
 var STATUTS_FACT_PORTAIL = ['vehicule_termine','en_lavage','client_contacte','facture_editee','facture_deposee','dossier_cloture','attente_client'];   // meme liste que GarageOS
+function aDocument(p){ return !!p && p.typeClient!=='forfait' && totalDevisPassage(p) > 0; }
 function estFacturePassage(v){ return STATUTS_FACT_PORTAIL.indexOf(v.status)>=0; }
 function nombreEnLettres(n){
   if(!n || n===0) return 'zéro';
@@ -1135,7 +1138,7 @@ function genererDocumentPassage(v){
     // Titre + Numéro dossier
     +'<div style="text-align:center">'
     +'<div style="border:3px solid #1a1a1a;padding:8px 20px;display:inline-block;margin-bottom:8px">'
-    +'<span style="font-size:24px;font-weight:900;letter-spacing:1px">'+(isFacture?'FACTURE':'DEVIS')+' N° '+numDoc+'</span>'
+    +'<span style="font-size:24px;font-weight:900;letter-spacing:1px">'+(isFacture?'FACTURE':'DEVIS')+(numDoc?' N° '+numDoc:'')+'</span>'
     +'</div>'
     +'<div style="font-size:16px;font-weight:700;margin-top:4px">DOSSIER N°'+(v.id||'').slice(-6).toUpperCase()+'</div>'
     +'</div></div>'
@@ -1290,7 +1293,7 @@ function htmlPiecesPassage(p, titre){
   var h = '<div style="margin:6px 0 10px">';
   h += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;font-weight:700;margin-bottom:6px">'+titre
     + (p.motif ? ' <span style="font-weight:400;color:#666">— '+p.motif+'</span>' : '')
-    + (p.doc && lg.length ? ' <button class="btn-detail" onclick="event.stopPropagation();voirDocument(\''+p.id+'\')">&#x1F4C4; Voir '+(estFacturePassage(p)?'la facture':'le devis')+'</button>' : '') + '</div>';
+    + (aDocument(p) ? ' <button class="btn-detail" onclick="event.stopPropagation();voirDocument(\''+p.id+'\')">&#x1F4C4; Voir '+(estFacturePassage(p)?'la facture':'le devis')+'</button>' : '') + '</div>';
   if(!lg.length) return h + '<div class="xs muted" style="font-size:11px;color:#999">'+(LIV_ST.indexOf(p.status)>=0?'Aucune piece ni prestation enregistree pour ce passage.':'Devis pas encore etabli.')+'</div></div>';
   h += '<table style="background:#fff;border:1px solid #eee"><thead><tr><th>Piece / prestation</th><th style="text-align:center">Qte</th><th style="text-align:right">Prix unit.</th><th style="text-align:right">Remise</th><th style="text-align:right">Montant</th></tr></thead><tbody>';
   lg.forEach(function(l){
@@ -1313,7 +1316,7 @@ function htmlDetailVehiculeDevis(g){
         var p = x.p, m = montantFamille(p, x.dcs), ouv = !!DEV_PREC_OUVERTS[p.id];
         h += '<tr style="cursor:pointer'+(ouv?';background:#FBFAF7':'')+'" onclick="basculerPassagePrecedent(\''+p.id+'\', event)"><td style="white-space:nowrap"><span style="color:#185FA5;display:inline-block;width:12px">'+(ouv?'&#x25BE;':'&#x25B8;')+'</span>'+fmtD(p.entree)+'</td><td>'+fmtD(p.livraison)+'</td><td style="font-size:11px">'+(p.motif||'—')+'</td><td><span class="badge b-gray">'+labelStatut(p.status)+'</span></td>'
           + '<td style="text-align:right">'+(p.km?fmtF(p.km):'—')+'</td><td style="text-align:right;font-weight:600">'+(m?fmtF(m):'—')+'</td>'
-          + '<td>'+(p.doc && m ? '<button class="btn-detail" onclick="event.stopPropagation();voirDocument(\''+p.id+'\')">&#x1F4C4;</button>' : '')+'</td></tr>';
+          + '<td>'+(aDocument(p) ? '<button class="btn-detail" onclick="event.stopPropagation();voirDocument(\''+p.id+'\')">&#x1F4C4;</button>' : '')+'</td></tr>';
         // 23/11/2026 : ce qui a ete fait lors de ce passage (pieces / prestations + devis complementaires)
         if(ouv){
           var det = htmlPiecesPassage(p, 'Travaux realises — passage du '+fmtD(p.entree));
@@ -1335,12 +1338,12 @@ function htmlTableauVehiculesDevis(titre, groupes, couleur, vide, cle){
       return [g.immat||'', ((g.marque||'')+' '+(g.modele||'')).trim(), p.motif||'', labelStatut(p.status), j===null?'':j, Math.round(montantFamille(p, g.dcs)), g.km||'', fmtD(p.entree), g.visites]; }),
     totalLibelle: groupes.length+' vehicule'+(groupes.length>1?'s':'')+(total?' — total '+fmtF(total)+' FCFA':''), colTotal: 5, total: total,
     documents: [].concat.apply([], groupes.map(function(g){ return [g.courant].concat(g.dcs.filter(function(d){ return DC_NON_ACCEPTES.indexOf(d.status)<0; })); }))
-      .filter(function(p){ return p.doc && totalDevisPassage(p) > 0; })};
+      .filter(function(p){ return aDocument(p); })};
   var h = '<div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:'+couleur.c+'">'+titre
     + ' <span class="badge" style="background:'+couleur.bg+';color:'+couleur.c+'">'+groupes.length+' vehicule'+(groupes.length>1?'s':'')+'</span>'
     + (total ? ' <span style="font-size:13px;color:'+couleur.c+'">'+fmtF(total)+' FCFA</span>' : '') + htmlBoutonsTableau(cle, groupes.length) + '</div>';
   if(!groupes.length) return h + '<div class="empty" style="padding:14px">'+vide+'</div>';
-  h += '<div style="overflow-x:auto;background:#fff;border:1px solid #e8e6e1;border-radius:10px"><table><thead><tr>'
+  h += '<div style="overflow-x:auto;background:#fff;border:1px solid #e8e6e1;border-radius:10px"><table class="tab-dev"><thead><tr>'
     + '<th>Vehicule</th><th>Motif</th><th>Statut</th><th style="text-align:right">Immob.</th><th style="text-align:right">Montant</th><th style="text-align:right">Km</th><th>Entree</th><th style="text-align:center">Visites</th><th></th></tr></thead><tbody>';
   groupes.forEach(function(g){
     var p = g.courant, ouvert = !!DEV_OUVERTS[g.cle], m = montantFamille(p, g.dcs);
@@ -1355,7 +1358,8 @@ function htmlTableauVehiculesDevis(titre, groupes, couleur, vide, cle){
       + '<td style="text-align:right;white-space:nowrap">'+(g.km?fmtF(g.km):'—')+'</td>'
       + '<td style="white-space:nowrap">'+fmtD(p.entree)+'</td>'
       + '<td style="text-align:center">'+g.visites+'</td>'
-      + '<td style="white-space:nowrap">'+(p.doc && m ? '<button class="btn-detail" onclick="event.stopPropagation();voirDocument(\''+p.id+'\')">&#x1F4C4; '+(estFacturePassage(p)?'Facture':'Devis')+'</button> ' : '')
+      + '<td style="white-space:nowrap">'+(aDocument(p) ? '<button class="btn-detail" onclick="event.stopPropagation();voirDocument(\''+p.id+'\')">&#x1F4C4; '+(estFacturePassage(p)?'Facture':'Devis')+'</button> ' : '')
+      + '<button class="btn-detail" title="Historique complet du vehicule" onclick="event.stopPropagation();ouvrirHistoriqueVehicule(\''+String(p.immat||'').toUpperCase().replace(/'/g,"\\'")+'\')">&#x1F4CB; Historique</button> '
       + '<button class="btn-detail" id="btn-msg-'+p.id+'" onclick="event.stopPropagation();ouvrirMessagerie(\''+p.id+'\',\''+g.immat+'\')">&#128172;</button></td></tr>';
     if(ouvert) h += '<tr><td colspan="9" style="background:#F7F9FC;padding:4px 10px">'+htmlDetailVehiculeDevis(g)+'</td></tr>';
   });
@@ -1370,7 +1374,7 @@ function htmlTableauFacturesAttente(passages){
     lignes: lignes.map(function(p){ var tot = totalDevisPassage(p), j = joursDepuis(p.factureDeposeeLe);
       return [p.immat||'', ((p.marque||'')+' '+(p.modele||'')).trim(), Math.round(tot), p.numeroFactureExterne||'', p.numeroSecondaire||'', fmtD(p.factureDeposeeLe), j===null?'':j, Math.round(acomptePassage(p))||'', Math.round(Math.max(0, tot-(parseFloat(p.montantPaye)||0)))]; }),
     totalLibelle: lignes.length+' facture'+(lignes.length>1?'s':'')+' — reste a payer '+fmtF(totalReste)+' FCFA', colTotal: 8, total: totalReste,
-    documents: lignes.filter(function(p){ return p.doc; })};
+    documents: lignes.filter(function(p){ return aDocument(p); })};
   var h = '<div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#A32D2D">Factures en attente de reglement'
     + ' <span class="badge b-red">'+lignes.length+' facture'+(lignes.length>1?'s':'')+'</span>'
     + (totalReste ? ' <span style="font-size:13px;color:#A32D2D">Reste a payer : '+fmtF(totalReste)+' FCFA</span>' : '') + htmlBoutonsTableau('factures', lignes.length) + '</div>';
@@ -1387,7 +1391,7 @@ function htmlTableauFacturesAttente(passages){
       + '<td style="text-align:right">'+(j===null?'—':j+' j')+'</td>'
       + '<td style="text-align:right;color:#3B6D11;white-space:nowrap">'+(ac?fmtF(ac):'—')+'</td>'
       + '<td style="text-align:right;font-weight:700;color:#A32D2D;white-space:nowrap">'+fmtF(Math.max(0,tot-paye))+'</td>'
-      + '<td>'+(p.doc ? '<button class="btn-detail" onclick="voirDocument(\''+p.id+'\')">&#x1F4C4;</button>' : '')+'</td></tr>';
+      + '<td>'+(aDocument(p) ? '<button class="btn-detail" onclick="voirDocument(\''+p.id+'\')">&#x1F4C4;</button>' : '')+'</td></tr>';
   });
   return h + '</tbody></table></div>';
 }
@@ -1498,7 +1502,7 @@ function renderTableauxClientDevis(passages){
 function imprimerFacture(passageId){
   var p = mesVehicules.find(function(x){return x.id===passageId;});
   if(!p) return;
-  if(p.chiffrage && p.doc){ voirDocument(passageId); return; }   // 23/11/2026 : meme document que le garage
+  if(aDocument(p)){ voirDocument(passageId); return; }   // 23/11/2026 : meme document que le garage
   var lignes = (p.chiffrage && p.chiffrage.lignes) ? p.chiffrage.lignes.filter(function(cl){return (cl.piece||'').trim();}) : [];
   var total = lignes.reduce(function(s,cl){return s+(parseFloat(cl.prixVente)||0)*(parseInt(cl.qte)||1);},0);
   var dateFacture = p.chiffrage.valideDirLe || p.chiffrage.soumisLe || p.entree;
