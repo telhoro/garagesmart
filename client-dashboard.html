@@ -1336,7 +1336,7 @@ function htmlTableauVehiculesDevis(titre, groupes, couleur, vide, cle){
     totalLibelle: groupes.length+' vehicule'+(groupes.length>1?'s':'')+(total?' — total '+fmtF(total)+' FCFA':''), colTotal: 5, total: total,
     documents: [].concat.apply([], groupes.map(function(g){ return [g.courant].concat(g.dcs.filter(function(d){ return DC_NON_ACCEPTES.indexOf(d.status)<0; })); }))
       .filter(function(p){ return p.doc && totalDevisPassage(p) > 0; })};
-  var h = '<div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+titre
+  var h = '<div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:'+couleur.c+'">'+titre
     + ' <span class="badge" style="background:'+couleur.bg+';color:'+couleur.c+'">'+groupes.length+' vehicule'+(groupes.length>1?'s':'')+'</span>'
     + (total ? ' <span style="font-size:13px;color:'+couleur.c+'">'+fmtF(total)+' FCFA</span>' : '') + htmlBoutonsTableau(cle, groupes.length) + '</div>';
   if(!groupes.length) return h + '<div class="empty" style="padding:14px">'+vide+'</div>';
@@ -1349,7 +1349,7 @@ function htmlTableauVehiculesDevis(titre, groupes, couleur, vide, cle){
       + '<td style="white-space:nowrap"><span style="color:#185FA5;display:inline-block;width:14px">'+(ouvert?'&#x25BE;':'&#x25B8;')+'</span><strong>'+(g.immat||'—')+'</strong> <span style="color:#666;font-size:11px">'+(g.marque||'')+' '+(g.modele||'')+'</span>'
       + (g.dcs.length ? ' <span class="badge b-amber" style="font-size:10px">+'+g.dcs.length+' compl.</span>' : '') + '</td>'
       + '<td style="font-size:11px;max-width:200px">'+(p.motif||'—')+'</td>'
-      + '<td><span class="badge b-blue" style="font-size:10px">'+labelStatut(p.status)+'</span></td>'
+      + '<td><span class="badge b-blue" style="font-size:10px;white-space:nowrap">'+labelStatut(p.status)+'</span></td>'
       + '<td style="text-align:right;white-space:nowrap">'+(j===null?'—':j+' j')+'</td>'
       + '<td style="text-align:right;font-weight:700;white-space:nowrap">'+(m?fmtF(m):'—')+'</td>'
       + '<td style="text-align:right;white-space:nowrap">'+(g.km?fmtF(g.km):'—')+'</td>'
@@ -1371,7 +1371,7 @@ function htmlTableauFacturesAttente(passages){
       return [p.immat||'', ((p.marque||'')+' '+(p.modele||'')).trim(), Math.round(tot), p.numeroFactureExterne||'', p.numeroSecondaire||'', fmtD(p.factureDeposeeLe), j===null?'':j, Math.round(acomptePassage(p))||'', Math.round(Math.max(0, tot-(parseFloat(p.montantPaye)||0)))]; }),
     totalLibelle: lignes.length+' facture'+(lignes.length>1?'s':'')+' — reste a payer '+fmtF(totalReste)+' FCFA', colTotal: 8, total: totalReste,
     documents: lignes.filter(function(p){ return p.doc; })};
-  var h = '<div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">Factures en attente de reglement'
+  var h = '<div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#A32D2D">Factures en attente de reglement'
     + ' <span class="badge b-red">'+lignes.length+' facture'+(lignes.length>1?'s':'')+'</span>'
     + (totalReste ? ' <span style="font-size:13px;color:#A32D2D">Reste a payer : '+fmtF(totalReste)+' FCFA</span>' : '') + htmlBoutonsTableau('factures', lignes.length) + '</div>';
   if(!lignes.length) return h + '<div class="empty" style="padding:14px">Aucune facture en attente de reglement.</div>';
@@ -1471,17 +1471,24 @@ function renderTableauxClientDevis(passages){
   h += '<div class="kgrid k4">';
   h += kpiHtml('Vehicules en cours', cat.en_cours.length, '#185FA5');
   h += kpiHtml('Devis differes', cat.differe.length, cat.differe.length?'#854F0B':null);
-  h += kpiHtml('Livres — documents attendus', cat.livre.length, cat.livre.length?'#854F0B':null);
+  h += kpiHtml('Livres — documents attendus', cat.livre.length, cat.livre.length?'#534AB7':null);
   h += kpiHtml('Reste a payer', fmtF(resteTotal)+' FCFA', resteTotal>0?'#A32D2D':'#3B6D11');
   h += '</div>';
   DEV_TABLES = {};
-  h += htmlTableauVehiculesDevis('Vehicules en cours', cat.en_cours, {bg:'#E6F1FB', c:'#185FA5'}, 'Aucun vehicule en cours a l\'atelier.', 'en_cours');
-  h += htmlTableauVehiculesDevis('Devis differes', cat.differe, {bg:'#FAEEDA', c:'#854F0B'}, 'Aucun devis differe.', 'differe');
-  h += htmlTableauVehiculesDevis('Vehicules livres — en attente de vos documents (ordre de reparation, bon de commande...)', cat.livre, {bg:'#FAEEDA', c:'#854F0B'}, 'Aucun vehicule livre en attente de documents.', 'livre');
-  h += htmlTableauFacturesAttente(passages);
+  // 23/11/2026 : chaque tableau dans son propre panneau de couleur
+  var panneau = function(c, contenu){ return '<div style="background:'+c.fond+';border:1px solid '+c.bord+';border-left:6px solid '+c.c+';border-radius:12px;padding:2px 14px 14px;margin:22px 0">'+contenu+'</div>'; };
+  var C_ENCOURS = {bg:'#D6E7F8', c:'#185FA5', fond:'#EEF5FC', bord:'#BCD6EF'},
+      C_DIFF    = {bg:'#F7E3C2', c:'#854F0B', fond:'#FDF6EA', bord:'#EBD3A8'},
+      C_LIVRE   = {bg:'#E4E0FA', c:'#534AB7', fond:'#F4F2FD', bord:'#D3CDF3'},
+      C_FACT    = {bg:'#F8DADA', c:'#A32D2D', fond:'#FDF1F1', bord:'#EEC4C4'},
+      C_HIST    = {bg:'#DCEBC9', c:'#3B6D11', fond:'#F2F8EA', bord:'#CFE2B8'};
+  h += panneau(C_ENCOURS, htmlTableauVehiculesDevis('Vehicules en cours', cat.en_cours, C_ENCOURS, 'Aucun vehicule en cours a l\'atelier.', 'en_cours'));
+  h += panneau(C_DIFF, htmlTableauVehiculesDevis('Devis differes', cat.differe, C_DIFF, 'Aucun devis differe.', 'differe'));
+  h += panneau(C_LIVRE, htmlTableauVehiculesDevis('Vehicules livres — en attente de vos documents (ordre de reparation, bon de commande...)', cat.livre, C_LIVRE, 'Aucun vehicule livre en attente de documents.', 'livre'));
+  h += panneau(C_FACT, htmlTableauFacturesAttente(passages));
   if(cat.termine.length){
     cat.termine.sort(function(a,b){ return (b.courant.entree||0)-(a.courant.entree||0); });
-    h += htmlTableauVehiculesDevis('Historique — vehicules factures', cat.termine, {bg:'#EAF3DE', c:'#3B6D11'}, '', 'termine');
+    h += panneau(C_HIST, htmlTableauVehiculesDevis('Historique — vehicules factures', cat.termine, C_HIST, '', 'termine'));
   }
   return h;
 }
