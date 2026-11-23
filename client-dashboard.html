@@ -1431,7 +1431,47 @@ function htmlDetailVehiculeDevis(g){
   }
   return h + '</div>';
 }
+
+// ══ TRI DES TABLEAUX (23/11/2026) ════════════════════════════════════════════
+// Clic sur un en-tete : tri du plus grand au plus petit (ou A->Z pour le statut),
+// second clic : sens inverse. Les exports suivent l'ordre affiche.
+var DEV_TRI = {};
+var ORDRE_STATUTS = Object.keys(STATUT_LABELS);
+function trierTableauDevis(cle, col, ev){
+  if(ev) ev.stopPropagation();
+  var t = DEV_TRI[cle];
+  if(t && t.col===col) t.dir = -t.dir;
+  else DEV_TRI[cle] = {col:col, dir: col==='statut' ? 1 : -1};
+  renderDashboard();
+}
+function thTri(cle, col, lib, align){
+  var t = DEV_TRI[cle], actif = t && t.col===col;
+  var fl = actif ? (t.dir<0 ? '&#x25BC;' : '&#x25B2;') : '&#x21C5;';
+  return '<th style="cursor:pointer;user-select:none;white-space:nowrap'+(align?';text-align:'+align:'')+(actif?';color:#185FA5;font-weight:600':'')+'" title="Trier" onclick="trierTableauDevis(\''+cle+'\',\''+col+'\', event)">'
+    + lib+' <span style="font-size:9px;'+(actif?'':'opacity:.45')+'">'+fl+'</span></th>';
+}
+function appliquerTri(cle, liste, valeur){
+  var t = DEV_TRI[cle]; if(!t) return liste;
+  return liste.slice().sort(function(a,b){
+    var x = valeur(a, t.col), y = valeur(b, t.col);
+    if(x===y) return 0;
+    if(x===null || x===undefined || x==='') return 1;
+    if(y===null || y===undefined || y==='') return -1;
+    return (x<y ? -1 : 1) * t.dir;
+  });
+}
 function htmlTableauVehiculesDevis(titre, groupes, couleur, vide, cle){
+  groupes = appliquerTri(cle, groupes, function(g, col){
+    var p = g.courant;
+    if(col==='montant') return montantFamille(p, g.dcs);
+    if(col==='statut') return ORDRE_STATUTS.indexOf(p.status);
+    if(col==='immob') return joursDepuis(p.entree, LIV_ST.indexOf(p.status)>=0 ? p.livraison : null);
+    if(col==='date') return (cle==='livre' ? p.livraison : p.entree) || null;
+    if(col==='km') return g.km ? parseFloat(g.km) : null;
+    if(col==='visites') return g.visites;
+    if(col==='vehicule') return String(g.immat||'');
+    return null;
+  });
   var total = groupes.reduce(function(s,g){ return s+montantFamille(g.courant, g.dcs); },0);
   // 23/11/2026 : donnees du tableau, pour l'impression / Excel / Word et les documents groupes
   var colDate = cle==='livre' ? 'Livraison' : 'Entree';   // 23/11/2026 : vehicules livres -> date de livraison
@@ -1448,7 +1488,8 @@ function htmlTableauVehiculesDevis(titre, groupes, couleur, vide, cle){
     + (total ? ' <span style="font-size:13px;color:'+couleur.c+'">'+fmtF(total)+' FCFA</span>' : '') + htmlBoutonsTableau(cle, groupes.length) + '</div>';
   if(!groupes.length) return h + '<div class="empty" style="padding:14px">'+vide+'</div>';
   h += '<div style="overflow-x:auto;background:#fff;border:1px solid #e8e6e1;border-radius:10px"><table class="tab-dev"><thead><tr>'
-    + '<th>Vehicule</th><th>Motif</th><th>Statut</th><th style="text-align:right">Immob.</th><th style="text-align:right">Montant</th><th>'+colDate+'</th><th style="text-align:right">Km</th><th style="text-align:center">Visites</th><th></th></tr></thead><tbody>';
+    + thTri(cle,'vehicule','Vehicule') + '<th>Motif</th>' + thTri(cle,'statut','Statut') + thTri(cle,'immob','Immob.','right') + thTri(cle,'montant','Montant','right')
+    + thTri(cle,'date',colDate) + thTri(cle,'km','Km','right') + thTri(cle,'visites','Visites','center') + '<th></th></tr></thead><tbody>';
   groupes.forEach(function(g){
     var p = g.courant, ouvert = !!DEV_OUVERTS[g.cle], m = montantFamille(p, g.dcs);
     var j = joursDepuis(p.entree, LIV_ST.indexOf(p.status)>=0 ? p.livraison : null);
@@ -1472,6 +1513,16 @@ function htmlTableauVehiculesDevis(titre, groupes, couleur, vide, cle){
 function htmlTableauFacturesAttente(passages){
   var lignes = passages.filter(function(p){ return (p.status==='facture_deposee' || p.status==='dossier_cloture') && totalDevisPassage(p) > (parseFloat(p.montantPaye)||0) + 0.5; })
     .sort(function(a,b){ return (a.factureDeposeeLe||a.entree||0)-(b.factureDeposeeLe||b.entree||0); });
+  lignes = appliquerTri('factures', lignes, function(p, col){
+    var tot = totalDevisPassage(p);
+    if(col==='montant') return tot;
+    if(col==='reste') return Math.max(0, tot-(parseFloat(p.montantPaye)||0));
+    if(col==='acompte') return acomptePassage(p);
+    if(col==='date') return p.factureDeposeeLe || null;
+    if(col==='jours') return joursDepuis(p.factureDeposeeLe);
+    if(col==='vehicule') return String(p.immat||'');
+    return null;
+  });
   var totalReste = lignes.reduce(function(s,p){ return s+Math.max(0,totalDevisPassage(p)-(parseFloat(p.montantPaye)||0)); },0);
   DEV_TABLES.factures = {titre: 'Factures en attente de reglement',
     colonnes: ['Immatriculation','Vehicule','Montant (FCFA)','N° facture','N° secondaire','Depot','Jours ecoules','Acompte (FCFA)','Reste a payer (FCFA)'],
@@ -1483,8 +1534,9 @@ function htmlTableauFacturesAttente(passages){
     + ' <span class="badge b-red">'+lignes.length+' facture'+(lignes.length>1?'s':'')+'</span>'
     + (totalReste ? ' <span style="font-size:13px;color:#A32D2D">Reste a payer : '+fmtF(totalReste)+' FCFA</span>' : '') + htmlBoutonsTableau('factures', lignes.length) + '</div>';
   if(!lignes.length) return h + '<div class="empty" style="padding:14px">Aucune facture en attente de reglement.</div>';
-  h += '<div style="overflow-x:auto;background:#fff;border:1px solid #e8e6e1;border-radius:10px"><table><thead><tr>'
-    + '<th>Vehicule</th><th style="text-align:right">Montant</th><th>N&deg; facture</th><th>N&deg; secondaire</th><th>Depot</th><th style="text-align:right">Jours ecoules</th><th style="text-align:right">Acompte</th><th style="text-align:right">Reste a payer</th><th></th></tr></thead><tbody>';
+  h += '<div style="overflow-x:auto;background:#fff;border:1px solid #e8e6e1;border-radius:10px"><table class="tab-dev"><thead><tr>'
+    + thTri('factures','vehicule','Vehicule') + thTri('factures','montant','Montant','right') + '<th>N&deg; facture</th><th>N&deg; secondaire</th>'
+    + thTri('factures','date','Depot') + thTri('factures','jours','Jours ecoules','right') + thTri('factures','acompte','Acompte','right') + thTri('factures','reste','Reste a payer','right') + '<th></th></tr></thead><tbody>';
   lignes.forEach(function(p){
     var tot = totalDevisPassage(p), paye = parseFloat(p.montantPaye)||0, ac = acomptePassage(p), j = joursDepuis(p.factureDeposeeLe);
     h += '<tr><td style="white-space:nowrap"><strong>'+(p.immat||'—')+'</strong> <span style="color:#666;font-size:11px">'+(p.marque||'')+' '+(p.modele||'')+'</span>'+(p.isDevisCompl?' <span class="badge b-amber" style="font-size:10px">Compl.</span>':'')+'</td>'
