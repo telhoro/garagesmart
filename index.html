@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-23.31';
+var GOS_VERSION = '2026-11-24.32';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -41032,13 +41032,14 @@ function dossierVisiblePortail(v, c){
   if(!v || !c || !prospectPublie(v)) return false;
   // v.30 : dossier cloture par la Direction sans travaux (cloture forcee / devis abandonne) : rien a montrer au client
   if(v.clotureForcee || v.devisAbandonne) return false;
-  if(nomClientNorm(v.client) !== nomClientNorm(c.clientNom)) return false;
+  // v.32 : « Kaydan (Hors forfait) » / « KAYDAN Hors forfait » rattaches au compte « Kaydan »
+  if(hfNorm(v.client) !== hfNorm(c.clientNom)) return false;
   if(c.departement) return (v.departements || []).indexOf(c.departement) >= 0;
   return true;
 }
 // Diagnostic affiche dans « Acces clients » : ce que le client voit vraiment
 function diagnosticPortailCompte(c){
-  var tous = vehicles.filter(function(v){ return v && prospectPublie(v) && nomClientNorm(v.client)===nomClientNorm(c.clientNom); });
+  var tous = vehicles.filter(function(v){ return v && prospectPublie(v) && hfNorm(v.client)===hfNorm(c.clientNom); });
   var vis = tous.filter(function(v){ return dossierVisiblePortail(v, c); });
   var enCours = vis.filter(function(v){ return LIV_ST.indexOf(v.status) < 0; }).length;
   var horsDep = c.departement ? tous.length - vis.length : 0;
@@ -41053,9 +41054,13 @@ var GOS_PORTAIL = (function(){
   function projeter(v){
     var o = {};
     CHAMPS.forEach(function(k){ if(v[k] !== undefined && v[k] !== null) o[k] = JSON.parse(JSON.stringify(v[k])); });
+    if(estDossierAssurance(v)) o.assurance = true;   // v.32 : pastille « Assurance » sur le portail
     if(v.chiffrage){
       o.chiffrage = {soumisLe: v.chiffrage.soumisLe || null, valideDirLe: v.chiffrage.valideDirLe || null,
-        lignes: (v.chiffrage.lignes || []).map(function(l){ var o2 = {piece: l.piece, qte: l.qte, prixVente: l.prixVente}; if(l.remise) o2.remise = l.remise; if(l.differe) o2.differe = true; return o2; })};
+        lignes: (v.chiffrage.lignes || []).map(function(l){
+          // v.32 : dossier FORFAIT -> aucun prix envoye au portail (couvert par l'abonnement)
+          if(v.typeClient === 'forfait'){ var of = {piece: l.piece, qte: l.qte}; if(l.differe) of.differe = true; return of; }
+          var o2 = {piece: l.piece, qte: l.qte, prixVente: l.prixVente}; if(l.remise) o2.remise = l.remise; if(l.differe) o2.differe = true; return o2; })};
       // v.26 : de quoi refaire sur le portail le MEME devis / facture que « Imprimer » au garage
       if(!chiffrageSurPrixAchat(v)){
         o.doc = {num: genNumeroDoc(v, ['vehicule_termine','en_lavage','client_contacte','facture_editee','facture_deposee','dossier_cloture','attente_client'].indexOf(v.status)>=0 ? 'FACTURE' : 'DEVIS')};

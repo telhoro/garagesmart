@@ -128,7 +128,9 @@ function chargerVehicules(){
     mesVehicules = tous.filter(function(v){
       // 23/11/2026 : la liste est deja filtree par GarageOS pour CE compte ; on ne compare plus
       // le nom lettre par lettre ni le telephone (majuscules, espaces, numero change = page vide)
-      if(String(v.client||'').trim().toLowerCase().replace(/\s+/g,' ') !== String(compteClient.clientNom||'').trim().toLowerCase().replace(/\s+/g,' ')) return false;
+      // 24/11/2026 : « Kaydan (Hors forfait) » = meme client que « Kaydan »
+      var hfn = function(n){ return String(n||'').replace(/[\s\-\u2013_]*\(?\s*hors[\s\-_]*forfait\s*\)?/i,'').replace(/\s+/g,' ').trim().toLowerCase(); };
+      if(hfn(v.client) !== hfn(compteClient.clientNom)) return false;
       if(compteClient.departement) return (v.departements||[]).indexOf(compteClient.departement) >= 0;
       return true;
     });
