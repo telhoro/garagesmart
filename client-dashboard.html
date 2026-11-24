@@ -149,6 +149,24 @@ var STATUT_LABELS = {
 };
 
 function labelStatut(s){ return STATUT_LABELS[s] || (s||'—'); }
+// 24/11/2026 : CLIENT FORFAIT -> 8 etapes simples, chacune de sa couleur
+var ETAPES_FORFAIT = [
+  {l:'Recu',                bg:'#EEEDEA', c:'#5F5E5A', st:['reception','attente_diag']},
+  {l:'Diagnostic en cours', bg:'#FFF1BF', c:'#7A5C00', st:['diag_en_cours','devis_atelier','devis_valide','attente_chiffrage','devis_prep','devis_termine','devis_envoye','accord_client','modifier_devis','attente_fin','valide_fin','attente_appro','pieces_commande','appro_en_cours','pieces_partiel','pieces_livrees','travaux_attente']},
+  {l:'Travaux en cours',    bg:'#D6E7F8', c:'#185FA5', st:['travaux_cours','reprise_demandee']},
+  {l:'Travaux termines',    bg:'#FCE1D2', c:'#A0461A', st:['travaux_termines']},
+  {l:'Test en cours',       bg:'#E4E0FA', c:'#534AB7', st:['en_test','attente_valid_chef']},
+  {l:'Vehicule termine',    bg:'#F9DCEA', c:'#993556', st:['vehicule_termine','client_contacte','attente_client','en_cours_livraison','facture_emettre','facture_emise']},
+  {l:'Au lavage',           bg:'#D3EEF7', c:'#0B6A8C', st:['en_lavage']},
+  {l:'Livre',               bg:'#DCEBC9', c:'#3B6D11', st:['livre','facture_deposee','dossier_cloture']}
+];
+function etapeForfait(s){ for(var i=0;i<ETAPES_FORFAIT.length;i++){ if(ETAPES_FORFAIT[i].st.indexOf(s)>=0) return ETAPES_FORFAIT[i]; } return null; }
+function labelPassage(p){ var e = p && p.typeClient==='forfait' ? etapeForfait(p.status) : null; return e ? e.l : labelStatut(p && p.status); }
+function badgeStatutPassage(p, classeDefaut){
+  var e = p && p.typeClient==='forfait' ? etapeForfait(p.status) : null;
+  if(e) return '<span class="badge" style="font-size:10px;white-space:nowrap;background:'+e.bg+';color:'+e.c+'">'+e.l+'</span>';
+  return '<span class="badge '+classeDefaut+'" style="font-size:10px;white-space:nowrap">'+labelStatut(p.status)+'</span>';
+}
 // Compte le nombre de jours OUVRABLES (lundi a vendredi, samedi/dimanche
 // exclus) entre deux timestamps — utilise pour le delai d'immobilisation,
 // afin de ne pas compter les week-ends comme du temps d'atelier "perdu".
@@ -889,7 +907,7 @@ function genRapportVehiculeHtml(v){
   h += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px"><div>';
   h += '<div style="font-size:16px;font-weight:700">'+(v.immat||'')+' — '+(v.marque||'')+' '+(v.modele||'')
     + (estF ? ' <span style="font-size:11px;font-weight:600;background:#EEEDFE;color:#534AB7;border-radius:10px;padding:2px 8px">Forfait</span>' : '')
-    + (LIV_ST.indexOf(v.status)<0 ? ' <span style="font-size:11px;font-weight:600;background:#E6F1FB;color:#185FA5;border-radius:10px;padding:2px 8px">'+labelStatut(v.status)+'</span>' : '') + '</div>';
+    + (LIV_ST.indexOf(v.status)<0 ? ' <span style="font-size:11px;font-weight:600;background:#E6F1FB;color:#185FA5;border-radius:10px;padding:2px 8px">'+labelPassage(v)+'</span>' : '') + '</div>';
   h += '<div style="font-size:12px;color:#666;margin-top:2px">Client : '+(v.client||'')+(v.tel?' | '+v.tel:'')+'</div>';
   if(v.numeroFactureExterne || v.numeroSecondaire) h += '<div style="font-size:12px;color:#666">'+(v.numeroFactureExterne?'N° facture : '+v.numeroFactureExterne:'')+(v.numeroSecondaire?(v.numeroFactureExterne?' | ':'')+'N° secondaire : '+v.numeroSecondaire:'')+'</div>';
   h += '</div><div style="text-align:right;font-size:12px;color:#666">';
@@ -1447,7 +1465,7 @@ function htmlDetailVehiculeDevis(g){
       h += '<table style="margin-top:8px;background:#fff;border:1px solid #eee"><thead><tr><th>Entree</th><th>Sortie</th><th>Motif</th><th>Statut</th><th style="text-align:right">Km</th><th style="text-align:right">Montant</th><th></th></tr></thead><tbody>';
       g.precedents.forEach(function(x){
         var p = x.p, m = montantFamille(p, x.dcs), ouv = !!DEV_PREC_OUVERTS[p.id];
-        h += '<tr style="cursor:pointer'+(ouv?';background:#FBFAF7':'')+'" onclick="basculerPassagePrecedent(\''+p.id+'\', event)"><td style="white-space:nowrap"><span style="color:#185FA5;display:inline-block;width:12px">'+(ouv?'&#x25BE;':'&#x25B8;')+'</span>'+fmtD(p.entree)+'</td><td>'+fmtD(p.livraison)+'</td><td style="font-size:11px">'+(p.motif||'—')+'</td><td><span class="badge b-gray">'+labelStatut(p.status)+'</span></td>'
+        h += '<tr style="cursor:pointer'+(ouv?';background:#FBFAF7':'')+'" onclick="basculerPassagePrecedent(\''+p.id+'\', event)"><td style="white-space:nowrap"><span style="color:#185FA5;display:inline-block;width:12px">'+(ouv?'&#x25BE;':'&#x25B8;')+'</span>'+fmtD(p.entree)+'</td><td>'+fmtD(p.livraison)+'</td><td style="font-size:11px">'+(p.motif||'—')+'</td><td>'+badgeStatutPassage(p, 'b-gray')+'</td>'
           + '<td style="text-align:right">'+(p.km?fmtF(p.km):'—')+'</td><td style="text-align:right;font-weight:600">'+(p.typeClient==='forfait'?'<span style="font-weight:400;font-size:11px;color:#534AB7">Forfait</span>':(m?fmtF(m):'—'))+'</td>'
           + '<td>'+(aDocument(p) ? '<button class="btn-detail" onclick="event.stopPropagation();voirDocument(\''+p.id+'\')">&#x1F4C4;</button>' : '')+'</td></tr>';
         // 23/11/2026 : ce qui a ete fait lors de ce passage (pieces / prestations + devis complementaires)
@@ -1511,7 +1529,7 @@ function htmlTableauVehiculesDevis(titre, groupes, couleur, vide, cle, avantTabl
   DEV_TABLES[cle] = {titre: titre,
     colonnes: ['Immatriculation','Vehicule','Motif','Statut','Immobilisation (j)','Montant (FCFA)',colDate,'Km','Visites'],
     lignes: groupes.map(function(g){ var p = g.courant, j = joursDepuis(p.entree, LIV_ST.indexOf(p.status)>=0 ? p.livraison : null);
-      return [g.immat||'', ((g.marque||'')+' '+(g.modele||'')).trim()+(MODE_FORFAIT && p.typeClient!=='forfait' ? ' (hors forfait)' : ''), p.motif||'', labelStatut(p.status), j===null?'':j, p.typeClient==='forfait' ? 'Forfait' : Math.round(montantFamille(p, g.dcs)), fmtD(dateLigne(p)), g.km||'', g.visites]; }),
+      return [g.immat||'', ((g.marque||'')+' '+(g.modele||'')).trim()+(MODE_FORFAIT && p.typeClient!=='forfait' ? ' (hors forfait)' : ''), p.motif||'', labelPassage(p), j===null?'':j, p.typeClient==='forfait' ? 'Forfait' : Math.round(montantFamille(p, g.dcs)), fmtD(dateLigne(p)), g.km||'', g.visites]; }),
     totalLibelle: groupes.length+' vehicule'+(groupes.length>1?'s':'')+(total?' — total '+fmtF(total)+' FCFA'+(MODE_FORFAIT?' hors forfait':''):''), colTotal: 5, total: total,
     documents: [].concat.apply([], groupes.map(function(g){ return [g.courant].concat(g.dcs.filter(function(d){ return DC_NON_ACCEPTES.indexOf(d.status)<0; })); }))
       .filter(function(p){ return aDocument(p); })};
@@ -1530,7 +1548,7 @@ function htmlTableauVehiculesDevis(titre, groupes, couleur, vide, cle, avantTabl
       + '<td style="white-space:nowrap"><span style="color:#185FA5;display:inline-block;width:14px">'+(ouvert?'&#x25BE;':'&#x25B8;')+'</span><strong>'+(g.immat||'—')+'</strong> <span style="color:#666;font-size:11px">'+(g.marque||'')+' '+(g.modele||'')+'</span>'
       + (g.dcs.length ? ' <span class="badge b-amber" style="font-size:10px">+'+g.dcs.length+' compl.</span>' : '') + pastilleForfait(p) + '</td>'
       + '<td style="font-size:11px;max-width:200px">'+(p.motif||'—')+'</td>'
-      + '<td><span class="badge '+(LIV_ST.indexOf(p.status)>=0?'b-green':(DEV_DIFFERES.indexOf(p.status)>=0?'b-amber':'b-blue'))+'" style="font-size:10px;white-space:nowrap">'+labelStatut(p.status)+'</span></td>'
+      + '<td>'+badgeStatutPassage(p, LIV_ST.indexOf(p.status)>=0?'b-green':(DEV_DIFFERES.indexOf(p.status)>=0?'b-amber':'b-blue'))+'</td>'
       + '<td style="text-align:right;white-space:nowrap">'+(j===null?'—':j+' j')+'</td>'
       + '<td style="text-align:right;font-weight:700;white-space:nowrap">'+(p.typeClient==='forfait'?'<span style="font-weight:400;font-size:11px;color:#534AB7">Forfait</span>':(m?fmtF(m):'—'))+'</td>'
       + '<td style="white-space:nowrap">'+fmtD(dateLigne(p))+'</td>'
@@ -1851,14 +1869,23 @@ function renderTableauxClientForfait(passages){
   h += '<div class="kpi"><div class="kpi-lbl">Retours atelier</div><div class="kpi-val" style="color:'+(nbRet?'#A32D2D':'#3B6D11')+'">'+nbRet+'</div>'
     + '<div style="font-size:10px;color:#999;margin-top:3px">'+(principaux.length ? Math.round(nbRet*100/principaux.length)+' % des '+principaux.length+' passages' : 'aucun passage')+'</div></div>';
   h += '</div>';
-  // ── nombre d'interventions sur la periode choisie (passages entres a l'atelier)
+  // ── nombre d'interventions sur la periode : tout passage TRAITE pendant la periode, c'est-a-dire
+  // entre a l'atelier avant la fin de la periode et pas encore livre au debut de la periode.
+  // Les vehicules livres de la periode en font donc toujours partie (24/11/2026).
   var bI = bornesPerF('interv');
-  var dansI = principaux.filter(function(p){ return p.entree && p.entree>=bI[0] && p.entree<=bI[1]; });
+  var dateLiv = function(p){ return LIV_ST.indexOf(p.status)>=0 ? (p.livraison || p.entree || 0) : null; };
+  var dansI = principaux.filter(function(p){
+    if(!p.entree || p.entree > bI[1]) return false;
+    var dl = dateLiv(p); return dl===null || dl >= bI[0];
+  });
   var nbIF = dansI.filter(function(p){ return p.typeClient==='forfait'; }).length, nbIH = dansI.length-nbIF;
-  var nbITerm = dansI.filter(function(p){ return LIV_ST.indexOf(p.status)>=0; }).length;
+  var nbINouv = dansI.filter(function(p){ return p.entree>=bI[0]; }).length;
+  var nbILiv = dansI.filter(function(p){ var dl = dateLiv(p); return dl!==null && dl<=bI[1]; }).length;
+  var nbIEnc = dansI.length - nbILiv;
   h += '<div class="kpi" style="margin:-8px 0 14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">'
     + '<div><div class="kpi-lbl">Nombre d\'interventions — '+libellePerF('interv')+'</div><div class="kpi-val" style="color:#185FA5">'+dansI.length+'</div>'
-    + '<div style="font-size:10px;color:#999;margin-top:3px">'+nbIF+' forfait &middot; '+nbIH+' hors forfait &middot; '+nbITerm+' terminee'+(nbITerm>1?'s':'')+'</div></div>'
+    + '<div style="font-size:10px;color:#999;margin-top:3px">'+nbILiv+' livree'+(nbILiv>1?'s':'')+' &middot; '+nbIEnc+' en cours &middot; dont '+nbINouv+' entree'+(nbINouv>1?'s':'')+' sur la periode'
+    + (nbIH ? ' &middot; '+nbIF+' forfait / '+nbIH+' hors forfait' : '')+'</div></div>'
     + '<div style="margin-left:auto">'+htmlChipsPerF('interv')+'</div></div>';
   // ── indicateurs hors forfait (factures en plus de l'abonnement)
   if(aHF){
