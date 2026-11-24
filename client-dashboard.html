@@ -991,7 +991,7 @@ function imprimerHistorique(immat){
   var g = regrouperParImmatriculation(mesVehicules).find(function(x){return x.immat===immat;});
   if(!g) return;
   // 23/11/2026 : apercu interne, logo Smart, toutes les factures regroupees
-  fermerDetail();
+  // 24/11/2026 : l'apercu s'ouvre PAR-DESSUS la fenetre en cours, qui reste ouverte
   return afficherDansApercu('Historique — '+g.immat, documentHistorique([g]));
   var estForfait = g.typeClient==='forfait';
 
@@ -1753,7 +1753,6 @@ function rapportVehicules(immats, titre){
   var gs = regrouperParImmatriculation(mesVehicules).filter(function(g){ return liste.indexOf(cle(g.immat))>=0; });
   gs.sort(function(a,b){ return liste.indexOf(cle(a.immat)) - liste.indexOf(cle(b.immat)); });
   if(!gs.length){ alert('Aucun vehicule dans ce tableau.'); return; }
-  fermerDetail();
   afficherDansApercu(titre || ('Rapport — '+gs[0].immat), documentHistorique(gs));
 }
 function rapportVehicule(immat){ rapportVehicules([immat], 'Rapport — '+immat); }
@@ -2100,7 +2099,7 @@ function ouvrirListeCtEcheance(){
     html += '<div class="empty">Aucune date de controle technique enregistree pour vos vehicules.</div>';
   } else {
     html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'
-      + '<button class="btn-detail" onclick="fermerDetail();exporterTableauDevis(\'ct\',\'print\')">&#x1F5A8; Imprimer / PDF</button>'
+      + '<button class="btn-detail" onclick="exporterTableauDevis(\'ct\',\'print\')">&#x1F5A8; Imprimer / PDF</button>'
       + '<button class="btn-detail" onclick="exporterTableauDevis(\'ct\',\'excel\')">&#x1F4CA; Excel</button>'
       + '<button class="btn-detail" onclick="exporterTableauDevis(\'ct\',\'word\')">&#x1F4DD; Word</button></div>';
     html += '<table><thead><tr><th>Vehicule</th><th>Echeance</th><th>Situation</th><th style="text-align:right">Jours</th><th></th></tr></thead><tbody>';
