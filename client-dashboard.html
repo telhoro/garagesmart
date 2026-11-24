@@ -1372,6 +1372,7 @@ function creerFenetreDocument(){
     ov.innerHTML = '<div style="background:#fff;border-radius:12px;width:100%;max-width:900px;height:94vh;display:flex;flex-direction:column;overflow:hidden">'
       + '<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #eee"><strong id="docTitre" style="flex:1;font-size:15px"></strong>'
       + '<button class="btn-detail" onclick="imprimerDocumentOuvert()">&#x1F5A8; Imprimer / PDF</button>'
+      + '<button class="btn-detail" onclick="exporterDocumentOuvertWord()">&#x1F4DD; Word</button>'
       + '<button class="btn-detail" onclick="fermerDocument()">Fermer</button></div>'
       + '<div style="flex:1;overflow:auto;background:#e9e7e2;padding:12px"><iframe id="docFrame" style="display:block;margin:0 auto;width:210mm;max-width:100%;height:297mm;border:0;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.15)"></iframe></div></div>';
     ov.addEventListener('click', function(e){ if(e.target===ov) fermerDocument(); });
@@ -1439,7 +1440,8 @@ function htmlPiecesPassage(p, titre){
   var h = '<div style="margin:6px 0 10px">';
   h += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;font-weight:700;margin-bottom:6px">'+titre
     + (p.motif ? ' <span style="font-weight:400;color:#666">— '+p.motif+'</span>' : '')
-    + (aDocument(p) ? ' <button class="btn-detail" onclick="event.stopPropagation();voirDocument(\''+p.id+'\')">&#x1F4C4; Voir '+(estFacturePassage(p)?'la facture':'le devis')+'</button>' : '') + '</div>';
+    + (aDocument(p) ? ' <button class="btn-detail" onclick="event.stopPropagation();voirDocument(\''+p.id+'\')">&#x1F4C4; Voir '+(estFacturePassage(p)?'la facture':'le devis')+'</button>' : '')
+    + (aBonLivraison(p) ? ' <button class="btn-detail" onclick="event.stopPropagation();voirBonLivraison(\''+p.id+'\')">&#x1F4E6; Bon de livraison</button>' : '') + '</div>';
   if(!lg.length) return h + '<div class="xs muted" style="font-size:11px;color:#999">'+(LIV_ST.indexOf(p.status)>=0?'Aucune piece ni prestation enregistree pour ce passage.':(p.typeClient==='forfait'?'Travaux pas encore definis.':'Devis pas encore etabli.'))+'</div></div>';
   if(p.typeClient==='forfait'){   // 24/11/2026 : forfait -> pieces et quantites seulement
     h += '<table style="background:#fff;border:1px solid #eee"><thead><tr><th>Piece / prestation</th><th style="text-align:center">Qte</th></tr></thead><tbody>';
@@ -1467,7 +1469,8 @@ function htmlDetailVehiculeDevis(g){
         var p = x.p, m = montantFamille(p, x.dcs), ouv = !!DEV_PREC_OUVERTS[p.id];
         h += '<tr style="cursor:pointer'+(ouv?';background:#FBFAF7':'')+'" onclick="basculerPassagePrecedent(\''+p.id+'\', event)"><td style="white-space:nowrap"><span style="color:#185FA5;display:inline-block;width:12px">'+(ouv?'&#x25BE;':'&#x25B8;')+'</span>'+fmtD(p.entree)+'</td><td>'+fmtD(p.livraison)+'</td><td style="font-size:11px">'+(p.motif||'—')+'</td><td>'+badgeStatutPassage(p, 'b-gray')+'</td>'
           + '<td style="text-align:right">'+(p.km?fmtF(p.km):'—')+'</td><td style="text-align:right;font-weight:600">'+(p.typeClient==='forfait'?'<span style="font-weight:400;font-size:11px;color:#534AB7">Forfait</span>':(m?fmtF(m):'—'))+'</td>'
-          + '<td>'+(aDocument(p) ? '<button class="btn-detail" onclick="event.stopPropagation();voirDocument(\''+p.id+'\')">&#x1F4C4;</button>' : '')+'</td></tr>';
+          + '<td>'+(aDocument(p) ? '<button class="btn-detail" onclick="event.stopPropagation();voirDocument(\''+p.id+'\')">&#x1F4C4;</button>' : '')
+          + (aBonLivraison(p) ? '<button class="btn-detail" title="Bon de livraison" onclick="event.stopPropagation();voirBonLivraison(\''+p.id+'\')">&#x1F4E6;</button>' : '')+'</td></tr>';
         // 23/11/2026 : ce qui a ete fait lors de ce passage (pieces / prestations + devis complementaires)
         if(ouv){
           var det = htmlPiecesPassage(p, 'Travaux realises — passage du '+fmtD(p.entree));
@@ -1532,7 +1535,9 @@ function htmlTableauVehiculesDevis(titre, groupes, couleur, vide, cle, avantTabl
       return [g.immat||'', ((g.marque||'')+' '+(g.modele||'')).trim()+(MODE_FORFAIT && p.typeClient!=='forfait' ? ' (hors forfait)' : ''), p.motif||'', labelPassage(p), j===null?'':j, p.typeClient==='forfait' ? 'Forfait' : Math.round(montantFamille(p, g.dcs)), fmtD(dateLigne(p)), g.km||'', g.visites]; }),
     totalLibelle: groupes.length+' vehicule'+(groupes.length>1?'s':'')+(total?' — total '+fmtF(total)+' FCFA'+(MODE_FORFAIT?' hors forfait':''):''), colTotal: 5, total: total,
     documents: [].concat.apply([], groupes.map(function(g){ return [g.courant].concat(g.dcs.filter(function(d){ return DC_NON_ACCEPTES.indexOf(d.status)<0; })); }))
-      .filter(function(p){ return aDocument(p); })};
+      .filter(function(p){ return aDocument(p); }),
+    immats: groupes.map(function(g){ return g.immat; }),
+    bons: groupes.map(function(g){ return g.courant; }).filter(aBonLivraison)};
   var h = '<div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:'+couleur.c+'">'+titre
     + ' <span class="badge" style="background:'+couleur.bg+';color:'+couleur.c+'">'+groupes.length+' vehicule'+(groupes.length>1?'s':'')+'</span>'
     + (total ? ' <span style="font-size:13px;color:'+couleur.c+'">'+fmtF(total)+' FCFA'+(MODE_FORFAIT?' <span style="font-size:11px;font-weight:400">hors forfait</span>':'')+'</span>' : '') + htmlBoutonsTableau(cle, groupes.length) + '</div>'
@@ -1555,6 +1560,8 @@ function htmlTableauVehiculesDevis(titre, groupes, couleur, vide, cle, avantTabl
       + '<td style="text-align:right;white-space:nowrap">'+(g.km?fmtF(g.km):'—')+'</td>'
       + '<td style="text-align:center">'+g.visites+'</td>'
       + '<td style="white-space:nowrap">'+(aDocument(p) ? '<button class="btn-detail" onclick="event.stopPropagation();voirDocument(\''+p.id+'\')">&#x1F4C4; '+(estFacturePassage(p)?'Facture':'Devis')+'</button> ' : '')
+      + (aBonLivraison(p) ? '<button class="btn-detail" title="Bon de livraison" onclick="event.stopPropagation();voirBonLivraison(\''+p.id+'\')">&#x1F4E6; Bon de livraison</button> ' : '')
+      + (MODE_FORFAIT ? '<button class="btn-detail" title="Rapport complet du vehicule (tous les passages)" onclick="event.stopPropagation();rapportVehicule(\''+String(p.immat||'').toUpperCase().replace(/'/g,"\\'")+'\')">&#x1F4CA; Rapport</button> ' : '')
       + '<button class="btn-detail" title="Historique complet du vehicule" onclick="event.stopPropagation();ouvrirHistoriqueVehicule(\''+String(p.immat||'').toUpperCase().replace(/'/g,"\\'")+'\')">&#x1F4CB; Historique</button> '
       + '<button class="btn-detail" id="btn-msg-'+p.id+'" onclick="event.stopPropagation();ouvrirMessagerie(\''+p.id+'\',\''+g.immat+'\')">&#128172;</button></td></tr>';
     if(ouvert) h += '<tr><td colspan="9" style="background:#F7F9FC;padding:4px 10px">'+htmlDetailVehiculeDevis(g)+'</td></tr>';
@@ -1580,7 +1587,7 @@ function htmlTableauFacturesAttente(passages){
     lignes: lignes.map(function(p){ var tot = totalDevisPassage(p), j = joursDepuis(p.factureDeposeeLe);
       return [p.immat||'', ((p.marque||'')+' '+(p.modele||'')).trim(), Math.round(tot), p.numeroFactureExterne||'', p.numeroSecondaire||'', fmtD(p.factureDeposeeLe), j===null?'':j, Math.round(acomptePassage(p))||'', Math.round(Math.max(0, tot-(parseFloat(p.montantPaye)||0)))]; }),
     totalLibelle: lignes.length+' facture'+(lignes.length>1?'s':'')+' — reste a payer '+fmtF(totalReste)+' FCFA', colTotal: 8, total: totalReste,
-    documents: lignes.filter(function(p){ return aDocument(p); })};
+    documents: lignes.filter(function(p){ return aDocument(p); }), immats: lignes.map(function(p){ return p.immat; }), bons: []};
   var h = '<div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#A32D2D">Factures en attente de reglement'
     + ' <span class="badge b-red">'+lignes.length+' facture'+(lignes.length>1?'s':'')+'</span>'
     + (totalReste ? ' <span style="font-size:13px;color:#A32D2D">Reste a payer : '+fmtF(totalReste)+' FCFA</span>' : '') + htmlBoutonsTableau('factures', lignes.length) + '</div>';
@@ -1608,6 +1615,16 @@ var DEV_TABLES = {};
 function htmlBoutonsTableau(cle, n){
   if(!n) return '';
   var b = function(lib, act, tip){ return '<button class="btn-detail" title="'+tip+'" onclick="exporterTableauDevis(\''+cle+'\',\''+act+'\')">'+lib+'</button>'; };
+  var t = DEV_TABLES[cle] || {};
+  if(MODE_FORFAIT){   // 24/11/2026 : client forfait -> rapport + bons de livraison
+    return '<span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;font-weight:400">'
+      + b('&#x1F4CA; Rapport','rapport','Rapport complet de tous les vehicules du tableau (tous les passages)')
+      + ((t.bons||[]).length ? b('&#x1F4E6; Bons de livraison','bl','Tous les bons de livraison du tableau, une page par vehicule') : '')
+      + ((t.documents||[]).length ? b('&#x1F4C4; Devis / factures hors forfait','docs','Devis ou factures hors forfait du tableau') : '')
+      + b('&#x1F5A8; Imprimer / PDF','print','Imprimer le tableau ou l\'enregistrer en PDF')
+      + b('&#x1F4CA; Excel','excel','Telecharger le tableau en Excel')
+      + b('&#x1F4DD; Word','word','Telecharger le tableau en Word') + '</span>';
+  }
   return '<span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;font-weight:400">'
     + b('&#x1F4C4; Tous les devis / factures','docs','Tous les devis ou factures du tableau dans un seul document, une page par vehicule')
     + b('&#x1F5A8; Imprimer / PDF','print','Imprimer le tableau ou l\'enregistrer en PDF')
@@ -1653,6 +1670,11 @@ function exporterTableauDevis(cle, action){
     var html = t.documents.map(function(p){ return '<div class="saut">'+genererDocumentPassage(p).html+'</div>'; }).join('');
     return afficherDansApercu(t.titre.split(' — ')[0]+' — '+t.documents.length+' document'+(t.documents.length>1?'s':''), html);
   }
+  if(action==='rapport') return rapportVehicules(t.immats || [], 'Rapport — '+t.titre.split(' — ')[0]);
+  if(action==='bl'){
+    if(!(t.bons||[]).length){ alert('Aucun bon de livraison dans ce tableau.'); return; }
+    return afficherDansApercu('Bons de livraison — '+t.titre.split(' — ')[0]+' ('+t.bons.length+')', t.bons.map(function(p){ return '<div class="saut">'+genererBonLivraison(p)+'</div>'; }).join(''));
+  }
   if(action==='print') return afficherDansApercu(t.titre.split(' — ')[0], htmlListeTableau(t));
   if(action==='word'){
     var doc = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"><style>@page{size:A4 landscape;margin:1.5cm}</style></head><body>'+htmlListeTableau(t)+'</body></html>';
@@ -1668,6 +1690,70 @@ function exporterTableauDevis(cle, action){
       telecharger(nom+'.csv', rows.map(function(r){ return r.map(function(x){ return '"'+String(x==null?'':x).replace(/"/g,'""')+'"'; }).join(';'); }).join('\r\n'), 'text/csv;charset=utf-8');
     }
   }
+}
+
+
+// ══ BON DE LIVRAISON ET RAPPORTS (24/11/2026) ════════════════════════════════
+// Dossier forfait livre : bon de livraison (meme mise en page que GarageOS, sans
+// le nom du technicien) a la place du devis / de la facture.
+function aBonLivraison(p){ return !!p && p.typeClient==='forfait' && LIV_ST.indexOf(p.status)>=0; }
+function numeroBonLivraison(p){
+  if(p.bl && p.bl.num) return p.bl.num;
+  return 'FAC'+new Date().getFullYear().toString().slice(-2)+'-'+String(p.id||'').slice(-6).toUpperCase();
+}
+function genererBonLivraison(p){
+  var lg = ((p.chiffrage&&p.chiffrage.lignes)||[]).filter(function(l){ return (l.piece||'').trim() && !l.differe; });
+  var travaux = lg.length ? lg.map(function(l){ return '<div style="margin-bottom:3px">- '+escapeHtml(l.piece)+'</div>'; }).join('') : '<div style="color:#888">Aucun travail enregistre.</div>';
+  var dL = p.livraison ? new Date(p.livraison) : null, dE = p.entree ? new Date(p.entree) : null;
+  var dateL = dL ? dL.toLocaleDateString('fr-FR') : '—', heureL = dL ? dL.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}) : '';
+  var dateE = dE ? dE.toLocaleDateString('fr-FR') : '';
+  var heureE = (dE && (dE.getHours()+dE.getMinutes()>0)) ? dE.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}) : '';
+  var mec = p.mec ? new Date(p.mec).toLocaleDateString('fr-FR') : '';
+  var lt = function(lib, val, extra){ return '<tr><td style="border:none;padding:2px 16px 2px 0;color:#555;font-size:14px;white-space:nowrap">'+lib+'</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px"'+(extra?'':' colspan="3"')+'>'+val+'</td>'+(extra||'')+'</tr>'; };
+  var heure = function(h){ return h ? '<td style="border:none;padding:2px 0 2px 16px;color:#555;font-size:14px">Heure :</td><td style="border:none;padding:2px 0;font-weight:700;font-size:14px">'+h+'</td>' : '<td colspan="2" style="border:none"></td>'; };
+  return '<div class="bl-page" style="font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;font-size:14px;min-height:265mm;padding:8mm 10mm;display:flex;flex-direction:column;box-sizing:border-box"><div style="flex:1">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px"><img src="'+LOGO_BASE64+'" style="height:65px" alt="Smart Services">'
+    + '<div style="text-align:center;flex:1"><div style="border:2px solid #1a1a1a;border-radius:10px;padding:8px 20px;display:inline-block"><span style="font-size:24px;font-weight:900;letter-spacing:1px">BON DE LIVRAISON</span></div>'
+    + '<div style="font-size:15px;font-weight:700;margin-top:6px">N° '+numeroBonLivraison(p)+'</div></div><div style="width:65px"></div></div>'
+    + '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px"><div><div style="font-size:14px;font-weight:700;margin-bottom:3px">CLIENT</div>'
+    + '<div style="border-bottom:1.5px solid #888;padding-bottom:4px;margin-bottom:6px;width:180px"></div><div style="font-size:16px;font-weight:700">'+escapeHtml(compteClient.clientNom||p.client||'')+'</div></div>'
+    + '<div style="border:3px solid #A32D2D;color:#A32D2D;border-radius:6px;padding:8px 24px;font-size:26px;font-weight:900;letter-spacing:2px;transform:rotate(-3deg)">LIVRÉ</div></div>'
+    + '<div style="text-align:right;font-size:14px;font-weight:700;margin-bottom:16px">Édité le '+new Date().toLocaleDateString('fr-FR')+'</div>'
+    + '<div style="display:flex;justify-content:space-between;margin-bottom:24px"><div><div style="font-size:14px;font-weight:700;margin-bottom:3px">VEHICULE</div>'
+    + '<div style="border-bottom:1.5px solid #888;padding-bottom:4px;margin-bottom:8px;width:200px"></div><table style="border:none;border-collapse:collapse">'
+    + lt('Immatriculation :', escapeHtml(p.immat||'')) + lt('Marque :', escapeHtml(p.marque||'')) + lt('Modèle :', escapeHtml(p.modele||''))
+    + lt('Kilométrage (Km) :', p.km ? fmtF(p.km) : 'N/A') + lt('Mise en circulation :', mec) + '</table></div>'
+    + '<div><table style="border:none;border-collapse:collapse">'
+    + lt('Date d\'entrée :', dateE||'—', heure(heureE)) + lt('Date de livraison :', dateL, heure(heureL))
+    + lt('N° série :', escapeHtml(p.vin||'')) + lt('Énergie :', escapeHtml(String(p.carburant||'').toUpperCase())) + '</table></div></div>'
+    + '<div style="font-size:15px;margin-bottom:26px;line-height:1.5">Le garage SMART a livré le véhicule <strong>'+escapeHtml(p.marque||'')+'</strong> immatriculé <strong>'+escapeHtml(p.immat||'')+'</strong>'
+    + (dateE ? ', entré au garage le <strong>'+dateE+'</strong>'+(heureE?' à <strong>'+heureE+'</strong>':'')+',' : '')+' le <strong>'+dateL+'</strong> dans ses locaux après avoir effectué ces travaux.</div>'
+    + '<div style="border:1.5px solid #1a1a1a;border-radius:6px;padding:8px 14px;text-align:center;font-weight:700;font-size:15px;margin-bottom:12px">TRAVAUX RÉALISÉS</div>'
+    + '<div style="font-size:14px;margin-bottom:60px">'+travaux+'</div>'
+    + '<div style="display:flex;justify-content:space-between"><div style="font-size:16px;font-weight:700;text-decoration:underline">CLIENT</div><div style="font-size:16px;font-weight:700;text-decoration:underline">LE GARAGE SMART</div></div>'
+    + '</div><div class="pied-smart" style="border-top:2px solid #1a1a1a;padding-top:8px;text-align:center;font-size:12px;color:#555;margin-top:20px">CI -ABJ-2007-A6390 — 2345 ABJ 01 — 27 22 43 63 55 — 07 07 73 90 73</div></div>';
+}
+function voirBonLivraison(passageId){
+  var p = mesVehicules.find(function(x){ return x.id===passageId; }); if(!aBonLivraison(p)) return;
+  afficherDansApercu('Bon de livraison — '+(p.immat||''), genererBonLivraison(p));
+}
+// Rapport complet d'un ou plusieurs vehicules (tous les passages, comme « Clients et vehicules » au garage)
+function rapportVehicules(immats, titre){
+  var cle = function(s){ return String(s||'').toUpperCase().replace(/[\s-]/g,''); }, liste = immats.map(cle);
+  var gs = regrouperParImmatriculation(mesVehicules).filter(function(g){ return liste.indexOf(cle(g.immat))>=0; });
+  gs.sort(function(a,b){ return liste.indexOf(cle(a.immat)) - liste.indexOf(cle(b.immat)); });
+  if(!gs.length){ alert('Aucun vehicule dans ce tableau.'); return; }
+  fermerDetail();
+  afficherDansApercu(titre || ('Rapport — '+gs[0].immat), documentHistorique(gs));
+}
+function rapportVehicule(immat){ rapportVehicules([immat], 'Rapport — '+immat); }
+// Export Word de ce qui est affiche dans l'apercu (bon de livraison, rapport, document)
+function exporterDocumentOuvertWord(){
+  var f = document.getElementById('docFrame'); if(!f) return;
+  var d = f.contentDocument || f.contentWindow.document;
+  var titre = (document.getElementById('docTitre').textContent || 'Document').replace(/[^A-Za-z0-9\u00C0-\u017F -]+/g,' ').trim().replace(/\s+/g,'_');
+  var doc = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"><style>@page{size:A4;margin:1.5cm}</style></head><body>'+d.body.innerHTML+'</body></html>';
+  telecharger(titre+'.doc', doc, 'application/msword');
 }
 
 // ══ INDICATEURS COMPLEMENTAIRES (23/11/2026) ═════════════════════════════════

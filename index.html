@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-24.33';
+var GOS_VERSION = '2026-11-24.34';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -41088,6 +41088,9 @@ var GOS_PORTAIL = (function(){
     CHAMPS.forEach(function(k){ if(v[k] !== undefined && v[k] !== null) o[k] = JSON.parse(JSON.stringify(v[k])); });
     if(estDossierAssurance(v)) o.assurance = true;   // v.32 : pastille « Assurance » sur le portail
     var lr = dateLivraisonReelle(v); if(lr) o.livreLe = lr;   // v.33 : date REELLE de livraison
+    // v.34 : bon de livraison sur le portail (meme numero et memes informations qu'au garage)
+    // (le nom du technicien n'est JAMAIS envoye au portail : demande Direction 24/11/2026)
+    if(v.typeClient === 'forfait' && LIV_ST.indexOf(v.status) >= 0) o.bl = {num: genNumeroDoc(v, 'FACTURE')};
     if(v.chiffrage){
       o.chiffrage = {soumisLe: v.chiffrage.soumisLe || null, valideDirLe: v.chiffrage.valideDirLe || null,
         lignes: (v.chiffrage.lignes || []).map(function(l){
