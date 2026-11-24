@@ -236,6 +236,8 @@ function chargerVehicules(){
       // le nom lettre par lettre ni le telephone (majuscules, espaces, numero change = page vide)
       // 24/11/2026 : « Kaydan (Hors forfait) » / « KAYDAN Hors forfait » = meme client que « Kaydan »
       if(hfNormPortail(v.client) !== hfNormPortail(compteClient.clientNom)) return false;
+      // 24/11/2026 : date REELLE de livraison (le champ « livraison » peut etre la date prevue)
+      if(v.livreLe && LIV_ST.indexOf(v.status)>=0) v.livraison = v.livreLe;
       if(compteClient.departement){
         return (v.departements||[]).indexOf(compteClient.departement) >= 0;
       }

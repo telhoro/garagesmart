@@ -148,7 +148,7 @@ tr:hover td{background:#faf9f7}
 <script>
 // VERSION (04/11/2026) : affichee dans le menu et inscrite dans chaque operation / conflit,
 // pour savoir quelle version du code tourne sur chaque poste.
-var GOS_VERSION = '2026-11-24.32';
+var GOS_VERSION = '2026-11-24.33';
 // NOUVELLE VERSION (09/11/2026) : toutes les 10 min (et au retour sur l'onglet), demande au serveur
 // l'empreinte (ETag / Last-Modified) de la page, sans la telecharger (requete HEAD). Si elle change,
 // un bandeau propose de recharger. Rien ne se recharge tout seul : aucune saisie en cours n'est perdue.
@@ -5356,6 +5356,7 @@ function appliquerCorrectionStatut(){
       if(['facture_deposee','dossier_cloture','livre'].indexOf(nouveauStatut)>=0){
         v.archiveDate = Date.now();
         v.livraison = Date.now();
+        noterLivreLe(v);   // v.33
         creerTravauxAPrevoir(v);
       }
       if(nouveauStatut === 'facture_deposee' && !v.factureDeposeeLe) v.factureDeposeeLe = Date.now();   // C-09 v9 : symetrie
@@ -6378,6 +6379,17 @@ function renderPage(){
 
 // Enregistre les jalons de temps selon le nouveau statut (source unique de verite)
 // Appele partout ou le statut change, pas seulement dans advance()
+// v.33 : DATE REELLE DE LIVRAISON, posee une seule fois (le champ « livraison » sert aussi de date
+// PREVUE saisie par le chef d'atelier et n'etait pas mis a jour par le bouton « Livrer »).
+function noterLivreLe(v){ if(v && !v.livreLe) v.livreLe = Date.now(); }
+// Meilleure estimation pour les dossiers livres avant v.33 (sans livreLe)
+function dateLivraisonReelle(v){
+  if(!v || LIV_ST.indexOf(v.status) < 0) return null;
+  if(v.livreLe) return v.livreLe;
+  var ok = function(t){ return t && (!v.entree || t >= v.entree) ? t : null; };
+  if(v.status === 'livre' && ok(v.stepStart)) return v.stepStart;   // bouton « Livrer » : stepStart = heure de livraison
+  return ok(v.archiveDate) || ok(v.livraison) || ok(v.stepStart) || null;
+}
 function marquerJalonsTemps(v, nouveauStatut){
   if(!v || !nouveauStatut) return;
   // ── DIAGNOSTIC ──
@@ -6655,6 +6667,7 @@ function advance(id){
       if(next==='facture_deposee' || next==='dossier_cloture' || next==='livre'){
         v.archiveDate = Date.now();
         v.livraison = Date.now();
+        noterLivreLe(v);   // v.33
         // Reporter automatiquement les pieces non validees en "travaux a prevoir"
         creerTravauxAPrevoir(v);
       }
@@ -6730,6 +6743,7 @@ function appliquerRetourStatut(v, aEffacer, auteur){
     ajouterCommentaireSysteme(v, '&#x21A9; Retour en arriere : date de livraison annulee.', auteur || 'Direction');
     v.livraison = null;
     v.archiveDate = null;
+    v.livreLe = null;   // v.33
   }
 }
 
@@ -6753,6 +6767,7 @@ function setStatus(id,st){
       if(['facture_deposee','dossier_cloture','livre'].indexOf(st)>=0){
         v.archiveDate = Date.now();
         v.livraison = Date.now();
+        noterLivreLe(v);   // v.33
         creerTravauxAPrevoir(v);
       }
       // C-09 v9 : symetrie avec advance(). Sans cela, un passage a
@@ -7123,6 +7138,23 @@ function livraisonStep(btn){
   if(!v) return;
   v.status = next;
   v.stepStart = Date.now();
+  // v.33 : memes effets que advance() — le bouton « Livrer » n'enregistrait pas la date
+  // reelle de livraison (le portail client et les rapports retombaient sur la date PREVUE)
+  if(next === 'livre'){
+    v.archiveDate = Date.now();
+    v.livraison = Date.now();
+    noterLivreLe(v);
+    creerTravauxAPrevoir(v);
+    if(v.typeClient === 'forfait' && !estDossierAssurance(v)){   // forfait : cloture directe, comme advance()
+      v.status = 'dossier_cloture';
+      marquerJalonsTemps(v, 'dossier_cloture');
+    }
+  }
+  if(next === 'facture_deposee'){
+    noterLivreLe(v);
+    v.archiveDate = Date.now();
+    if(!v.factureDeposeeLe) v.factureDeposeeLe = Date.now();
+  }
   saveV(); renderPage();
 }
 
@@ -41055,6 +41087,7 @@ var GOS_PORTAIL = (function(){
     var o = {};
     CHAMPS.forEach(function(k){ if(v[k] !== undefined && v[k] !== null) o[k] = JSON.parse(JSON.stringify(v[k])); });
     if(estDossierAssurance(v)) o.assurance = true;   // v.32 : pastille « Assurance » sur le portail
+    var lr = dateLivraisonReelle(v); if(lr) o.livreLe = lr;   // v.33 : date REELLE de livraison
     if(v.chiffrage){
       o.chiffrage = {soumisLe: v.chiffrage.soumisLe || null, valideDirLe: v.chiffrage.valideDirLe || null,
         lignes: (v.chiffrage.lignes || []).map(function(l){
