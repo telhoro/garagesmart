@@ -949,13 +949,13 @@ function genRapportVehiculeHtml(v){
   return h + '</div>';
 }
 // Rapport d'un vehicule : tous ses passages, du plus recent au plus ancien, devis complementaires sous leur dossier
-function htmlRapportVehicule(g){
+function htmlRapportVehicule(g, sansEntete){
   var tous = g.passages;
   var principaux = tous.filter(function(v){ return !v.isDevisCompl || !tous.some(function(x){ return x.id===v.parentId; }); })
     .sort(function(a,b){ return (b.entree||0)-(a.entree||0); });
   var estF = g.typeClient==='forfait';
   var total = estF ? 0 : tous.reduce(function(s,p){ return s+totalDevisPassage(p); },0);
-  var h = rapportEnteteSmart('RAPPORT VÉHICULE');
+  var h = sansEntete ? '' : rapportEnteteSmart('RAPPORT VÉHICULE');   // 24/11/2026 : en-tete + logo seulement en premiere page
   h += '<div style="text-align:center;margin-bottom:16px">';
   h += '<div style="font-size:14px;font-weight:600">'+(g.immat||'')+' — '+(g.marque||'')+' '+(g.modele||'')+' — '+(compteClient.clientNom||'')+'</div>';
   h += '<div style="font-size:12px;color:#666">Généré le '+new Date().toLocaleDateString('fr-FR')+' — '+principaux.length+' passage'+(principaux.length>1?'s':'')+'</div></div>';
@@ -973,9 +973,17 @@ function htmlRapportVehicule(g){
   return h;
 }
 function documentHistorique(groupes){
-  var h = '<div style="font-family:Arial,sans-serif;color:#1a1a1a;padding:6mm 8mm">';
-  groupes.forEach(function(g){ h += '<div class="saut">'+htmlRapportVehicule(g)+rapportPiedSmart()+'</div>'; });
-  return h + '</div>';
+  // 24/11/2026 : logo / en-tete UNIQUEMENT sur la premiere page ; le pied de page Smart (et le
+  // numero de page) se repete en bas de CHAQUE page imprimee, via les marges de la page.
+  var PIED = 'CI -ABJ-2007-A6390 — 2345 ABJ 01 — 27 22 43 63 55 — 07 07 73 90 73';
+  var h = '<style>@page{size:A4;margin:10mm 10mm 20mm;'
+    + '@bottom-center{content:"'+PIED+'";border-top:2px solid #1a1a1a;vertical-align:top;padding-top:2mm;margin-top:3mm;font-family:Arial,Helvetica,sans-serif;font-size:9pt;color:#555;white-space:nowrap}'
+    + '@bottom-right{content:counter(page) " / " counter(pages);border-top:2px solid #1a1a1a;vertical-align:top;text-align:right;padding-top:2mm;margin-top:3mm;font-family:Arial,Helvetica,sans-serif;font-size:9pt;color:#555}'
+    + '@bottom-left{content:"";border-top:2px solid #1a1a1a;vertical-align:top;margin-top:3mm}}'
+    + '@media print{.pied-ecran{display:none!important}}</style>';
+  h += '<div style="font-family:Arial,sans-serif;color:#1a1a1a;padding:6mm 8mm">';
+  groupes.forEach(function(g, i){ h += '<div class="saut">'+htmlRapportVehicule(g, i>0)+'</div>'; });
+  return h + '<div class="pied-ecran">'+rapportPiedSmart()+'</div></div>';
 }
 function imprimerHistorique(immat){
   var g = regrouperParImmatriculation(mesVehicules).find(function(x){return x.immat===immat;});
